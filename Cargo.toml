@@ -93,6 +93,11 @@ glob = "0.3"  # Path pattern matching
 bytes = "1"  # Efficient byte handling
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Command Palette Fuzzy Search (i[4] decision: nucleo over skim-rs)
+# ─────────────────────────────────────────────────────────────────────────────
+nucleo = "0.5"  # 6-7x faster than skim, used by Helix editor
+
+# ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
 clap = { version = "4", features = ["derive"] }
@@ -100,6 +105,8 @@ clap = { version = "4", features = ["derive"] }
 [dev-dependencies]
 pretty_assertions = "1"
 tempfile = "3"
+rstest = "0.23"      # Parametrized tests (i[4] decision)
+serial_test = "3"    # Serialize async tests (i[4] decision)
 
 [features]
 default = []
