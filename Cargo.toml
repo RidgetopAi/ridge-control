@@ -1,0 +1,125 @@
+[package]
+name = "ridge-control"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["RidgetopAI"]
+description = "Terminal-based command center with PTY emulator, LLM integration, and process monitoring"
+license = "MIT"
+repository = "https://github.com/RidgetopAi/ridge-control"
+keywords = ["tui", "terminal", "llm", "ratatui"]
+categories = ["command-line-interface", "development-tools"]
+
+[dependencies]
+# ─────────────────────────────────────────────────────────────────────────────
+# Core TUI Framework
+# ─────────────────────────────────────────────────────────────────────────────
+ratatui = "0.29"
+crossterm = { version = "0.28", features = ["event-stream"] }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Async Runtime & Channels
+# ─────────────────────────────────────────────────────────────────────────────
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "process", "io-util", "signal"] }
+futures = "0.3"
+crossbeam-channel = "0.5"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PTY Terminal Emulation (i[2] decision: pty-process over portable-pty)
+# ─────────────────────────────────────────────────────────────────────────────
+pty-process = "0.4"
+vte = "0.15"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Network & Streaming
+# ─────────────────────────────────────────────────────────────────────────────
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+eventsource-stream = "0.2"  # SSE parsing
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Serialization & Configuration
+# ─────────────────────────────────────────────────────────────────────────────
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+directories = "6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Config Hot-Reload (i[3] decision: dual-mode gitui-style)
+# ─────────────────────────────────────────────────────────────────────────────
+notify = "8"
+notify-debouncer-mini = "0.5"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Process Monitoring (i[3] decision: procfs for lightweight, sysinfo for features)
+# Using procfs as primary, with sysinfo as optional feature for completeness
+# ─────────────────────────────────────────────────────────────────────────────
+procfs = "0.17"
+libc = "0.2"  # For kill syscall
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Secure Key Storage (i[2] decision: hybrid keyring + encrypted fallback)
+# ─────────────────────────────────────────────────────────────────────────────
+keyring = "3"  # Wrapper over keyring-core with Linux backends
+chacha20poly1305 = "0.10"  # Fallback encryption
+argon2 = "0.5"  # Key derivation
+zeroize = { version = "1.8", features = ["derive"] }
+rpassword = "7"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Error Handling (i[3] decision: thiserror for library, anyhow for app)
+# ─────────────────────────────────────────────────────────────────────────────
+thiserror = "2"
+anyhow = "1"
+color-eyre = "0.6"  # Enhanced backtraces and panic handling
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Logging & Tracing
+# ─────────────────────────────────────────────────────────────────────────────
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"  # File logging
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Utilities
+# ─────────────────────────────────────────────────────────────────────────────
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+rand = "0.9"
+fastrand = "2"  # Lightweight RNG for jitter
+arboard = "3"  # Clipboard support
+glob = "0.3"  # Path pattern matching
+bytes = "1"  # Efficient byte handling
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CLI
+# ─────────────────────────────────────────────────────────────────────────────
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+pretty_assertions = "1"
+tempfile = "3"
+
+[features]
+default = []
+# Enable sysinfo for richer system metrics (higher overhead)
+sysinfo-backend = ["dep:sysinfo"]
+
+[dependencies.sysinfo]
+version = "0.33"
+optional = true
+
+[profile.release]
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev]
+# Faster dev builds
+opt-level = 0
+
+[profile.dev.package."*"]
+# Optimize dependencies in dev for reasonable performance
+opt-level = 2
