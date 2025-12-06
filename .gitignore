@@ -4,13 +4,15 @@
 *.env
 
 # Markdown files (use Mandrel for documentation)
-# Exceptions: Core project files are tracked
+# Exceptions: Core project files and docs/ directory are tracked
 *.md
 !README.md
 !CONTRACT.md
 !AGENTS.md
 !THE-MONITOR.md
 !RIDGE-CONTROL-MASTER.md
+!docs/
+!docs/*.md
 
 # Rust build artifacts
 /target/
