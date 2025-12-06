@@ -5,10 +5,8 @@ use std::os::fd::{AsRawFd, RawFd};
 use std::process::Child;
 
 use pty_process::blocking::{Command, Pty};
-use tokio::sync::mpsc;
 
 use crate::error::{Result, RidgeError};
-use crate::event::PtyEvent;
 
 pub struct PtyHandle {
     pty: Pty,
@@ -66,36 +64,4 @@ impl Drop for PtyHandle {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
-}
-
-pub fn spawn_pty_reader(
-    mut pty: PtyHandle,
-    tx: mpsc::UnboundedSender<PtyEvent>,
-) -> std::thread::JoinHandle<PtyHandle> {
-    std::thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            if let Some(code) = pty.try_wait() {
-                let _ = tx.send(PtyEvent::Exited(code));
-                break;
-            }
-
-            match pty.try_read(&mut buf) {
-                Ok(0) => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Ok(n) => {
-                    let _ = tx.send(PtyEvent::Output(buf[..n].to_vec()));
-                }
-                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
-                }
-                Err(e) => {
-                    let _ = tx.send(PtyEvent::Error(e));
-                    break;
-                }
-            }
-        }
-        pty
-    })
 }

@@ -26,5 +26,8 @@ pub enum Action {
     ScrollToTop,
     ScrollToBottom,
 
+    Copy,
+    Paste,
+
     None,
 }

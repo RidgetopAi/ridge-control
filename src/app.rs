@@ -1,8 +1,10 @@
 use std::io::{self, Stdout};
+use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
+use arboard::Clipboard;
 use crossterm::{
-    event::{self, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -31,15 +33,17 @@ pub struct App {
     terminal_widget: TerminalWidget,
     process_monitor: PlaceholderWidget,
     menu: PlaceholderWidget,
-    pty: Option<PtyHandle>,
     pty_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    pty_resize_tx: Option<std_mpsc::Sender<(u16, u16)>>,
+    clipboard: Option<Clipboard>,
 }
 
 impl App {
     pub fn new() -> Result<Self> {
         enable_raw_mode().map_err(|e| RidgeError::Terminal(e.to_string()))?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen).map_err(|e| RidgeError::Terminal(e.to_string()))?;
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+            .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).map_err(|e| RidgeError::Terminal(e.to_string()))?;
@@ -47,6 +51,8 @@ impl App {
         let size = terminal.size().map_err(|e| RidgeError::Terminal(e.to_string()))?;
         let area = Rect::new(0, 0, size.width, size.height);
         let (term_cols, term_rows) = Self::calculate_terminal_size(area);
+
+        let clipboard = Clipboard::new().ok();
 
         Ok(Self {
             terminal,
@@ -56,8 +62,9 @@ impl App {
             terminal_widget: TerminalWidget::new(term_cols, term_rows),
             process_monitor: PlaceholderWidget::process_monitor(),
             menu: PlaceholderWidget::menu(),
-            pty: None,
             pty_tx: None,
+            pty_resize_tx: None,
+            clipboard,
         })
     }
 
@@ -68,7 +75,7 @@ impl App {
     }
 
     pub fn spawn_pty(&mut self) -> Result<mpsc::UnboundedReceiver<PtyEvent>> {
-        let pty = PtyHandle::spawn()?;
+        let mut pty = PtyHandle::spawn()?;
 
         let size = self.terminal.size().map_err(|e| RidgeError::Terminal(e.to_string()))?;
         let area = Rect::new(0, 0, size.width, size.height);
@@ -77,20 +84,25 @@ impl App {
 
         let (tx, rx) = mpsc::unbounded_channel();
 
-        let (write_tx, mut write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let (write_tx, write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         self.pty_tx = Some(write_tx);
 
-        self.pty = Some(pty);
+        let (resize_tx, resize_rx) = std_mpsc::channel::<(u16, u16)>();
+        self.pty_resize_tx = Some(resize_tx);
 
-        let pty = self.pty.take().unwrap();
         std::thread::spawn(move || {
             let mut pty = pty;
             let mut buf = [0u8; 4096];
-            
+            let mut write_rx = write_rx;
+
             loop {
                 if let Some(code) = pty.try_wait() {
                     let _ = tx.send(PtyEvent::Exited(code));
                     break;
+                }
+
+                while let Ok((cols, rows)) = resize_rx.try_recv() {
+                    let _ = pty.resize(cols, rows);
                 }
 
                 while let Ok(data) = write_rx.try_recv() {
@@ -158,7 +170,7 @@ impl App {
 
     fn draw(&mut self) -> Result<()> {
         let focus = self.focus.clone();
-        
+
         self.terminal
             .draw(|frame| {
                 let size = frame.area();
@@ -188,6 +200,13 @@ impl App {
                     right_chunks[1],
                     focus.is_focused(FocusArea::Menu),
                 );
+
+                let inner = {
+                    let block = ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL);
+                    block.inner(main_chunks[0])
+                };
+                self.terminal_widget.set_inner_area(inner);
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
@@ -197,6 +216,7 @@ impl App {
     fn handle_event(&mut self, event: CrosstermEvent) -> Option<Action> {
         match event {
             CrosstermEvent::Key(key) => self.handle_key(key),
+            CrosstermEvent::Mouse(mouse) => self.handle_mouse(mouse),
             CrosstermEvent::Resize(cols, rows) => {
                 let (term_cols, term_rows) = Self::calculate_terminal_size(Rect::new(0, 0, cols, rows));
                 Some(Action::PtyResize {
@@ -214,7 +234,18 @@ impl App {
                 if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Some(Action::EnterNormalMode);
                 }
-                
+
+                if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
+                    return Some(Action::Paste);
+                }
+
+                if key.code == KeyCode::Char('c')
+                    && key.modifiers.contains(KeyModifiers::CONTROL)
+                    && self.terminal_widget.has_selection()
+                {
+                    return Some(Action::Copy);
+                }
+
                 let bytes = key_to_bytes(key);
                 if !bytes.is_empty() {
                     return Some(Action::PtyInput(bytes));
@@ -235,8 +266,93 @@ impl App {
                         None
                     }
                 }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::ScrollUp(1))
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::ScrollDown(1))
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::PageUp | KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::ScrollPageUp)
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::ScrollPageDown)
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char('g') => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::ScrollToTop)
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char('G') => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::ScrollToBottom)
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char('y') => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::Copy)
+                    } else {
+                        None
+                    }
+                }
+                KeyCode::Char('p') => {
+                    if self.focus.current() == FocusArea::Terminal {
+                        Some(Action::Paste)
+                    } else {
+                        None
+                    }
+                }
                 _ => None,
             },
+        }
+    }
+
+    fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) |
+            MouseEventKind::Drag(MouseButton::Left) |
+            MouseEventKind::Up(MouseButton::Left) => {
+                if self.focus.current() == FocusArea::Terminal {
+                    self.terminal_widget.handle_event(&CrosstermEvent::Mouse(mouse))
+                } else {
+                    None
+                }
+            }
+            MouseEventKind::ScrollUp => {
+                if self.focus.current() == FocusArea::Terminal {
+                    Some(Action::ScrollUp(3))
+                } else {
+                    None
+                }
+            }
+            MouseEventKind::ScrollDown => {
+                if self.focus.current() == FocusArea::Terminal {
+                    Some(Action::ScrollDown(3))
+                } else {
+                    None
+                }
+            }
+            _ => None,
         }
     }
 
@@ -248,6 +364,7 @@ impl App {
             Action::EnterPtyMode => {
                 self.input_mode = InputMode::PtyRaw;
                 self.focus.focus(FocusArea::Terminal);
+                self.terminal_widget.scroll_to_bottom();
             }
             Action::EnterNormalMode => {
                 self.input_mode = InputMode::Normal;
@@ -271,6 +388,44 @@ impl App {
             }
             Action::PtyResize { cols, rows } => {
                 self.terminal_widget.update(&Action::PtyResize { cols, rows });
+                if let Some(ref tx) = self.pty_resize_tx {
+                    let _ = tx.send((cols, rows));
+                }
+            }
+            Action::ScrollUp(n) => {
+                self.terminal_widget.update(&Action::ScrollUp(n));
+            }
+            Action::ScrollDown(n) => {
+                self.terminal_widget.update(&Action::ScrollDown(n));
+            }
+            Action::ScrollPageUp => {
+                self.terminal_widget.update(&Action::ScrollPageUp);
+            }
+            Action::ScrollPageDown => {
+                self.terminal_widget.update(&Action::ScrollPageDown);
+            }
+            Action::ScrollToTop => {
+                self.terminal_widget.update(&Action::ScrollToTop);
+            }
+            Action::ScrollToBottom => {
+                self.terminal_widget.update(&Action::ScrollToBottom);
+            }
+            Action::Copy => {
+                if let Some(text) = self.terminal_widget.get_selected_text() {
+                    if let Some(ref mut clipboard) = self.clipboard {
+                        let _ = clipboard.set_text(text);
+                    }
+                }
+                self.terminal_widget.clear_selection();
+            }
+            Action::Paste => {
+                if let Some(ref mut clipboard) = self.clipboard {
+                    if let Ok(text) = clipboard.get_text() {
+                        if let Some(ref tx) = self.pty_tx {
+                            let _ = tx.send(text.into_bytes());
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -281,13 +436,13 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
     }
 }
 
 fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    
+
     match key.code {
         KeyCode::Char(c) => {
             if ctrl && c.is_ascii_alphabetic() {
