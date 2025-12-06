@@ -4,7 +4,27 @@ A terminal-based command center built in Rust using Ratatui. Combines a full PTY
 
 ## Status
 
-**Pre-Development** - Architecture planning in progress via multi-instance AI experiment.
+**Planning Phase** - Instance i[0] complete. Architecture proposals documented in Mandrel.
+
+### Instance Progress
+
+| Instance | Phase | Focus | Status |
+|----------|-------|-------|--------|
+| i[0] | Planning | Research & Architecture Proposals | ✅ Complete |
+| i[1] | Planning | Architecture Validation & Component Design | ⏳ Next |
+| i[2-9] | Planning | TBD | 🔲 Pending |
+| i[10]+ | Building | Implementation | 🔲 Pending |
+
+### Architecture Decision
+
+**Recommended: Component-Local State with Message Bus Bridge**
+
+Three approaches evaluated:
+1. **Unified Message Bus** - Simple, proven (GitUI-style)
+2. **Actor Model** - Isolated, scalable (Zellij-inspired)  
+3. **Component-Local State** - Ratatui-native, recommended ✓
+
+See Mandrel contexts for detailed analysis.
 
 ## Features (Planned)
 
