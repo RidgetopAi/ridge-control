@@ -1,0 +1,42 @@
+# Environment and secrets
+.env
+.env.*
+*.env
+
+# Markdown files (use Mandrel for documentation)
+# Exceptions: Core project files are tracked
+*.md
+!README.md
+!CONTRACT.md
+!AGENTS.md
+!THE-MONITOR.md
+
+# Rust build artifacts
+/target/
+**/*.rs.bk
+Cargo.lock
+
+# IDE and editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug
+*.log
+*.pdb
+
+# Test coverage
+*.gcno
+*.gcda
+tarpaulin-report.html
+
+# Temporary files
+tmp/
+temp/
+*.tmp
