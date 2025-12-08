@@ -576,7 +576,24 @@ impl App {
                     FocusArea::Menu => {
                         self.menu.handle_event(&CrosstermEvent::Key(key))
                     }
+                    // Overlay areas - not currently in focus ring
+                    FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
                 }
+            }
+            // Insert and CommandPalette modes to be implemented in future instances
+            InputMode::Insert { .. } => {
+                // TODO: i[16]+ - Handle text input for filters/search
+                if key.code == KeyCode::Esc {
+                    return Some(Action::EnterNormalMode);
+                }
+                None
+            }
+            InputMode::CommandPalette => {
+                // TODO: i[16] - Nucleo fuzzy search integration
+                if key.code == KeyCode::Esc {
+                    return Some(Action::EnterNormalMode);
+                }
+                None
             }
         }
     }
@@ -601,6 +618,8 @@ impl App {
             FocusArea::Menu => {
                 self.menu.handle_event(&CrosstermEvent::Mouse(mouse))
             }
+            // Overlay areas - not in primary mouse handling
+            FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
         }
     }
 

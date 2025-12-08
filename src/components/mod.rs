@@ -10,12 +10,15 @@ use ratatui::{layout::Rect, Frame};
 
 use crate::action::Action;
 
-pub use confirm_dialog::ConfirmDialog;
-
+/// Component trait for standardized lifecycle per RIDGE-CONTROL-MASTER.md
+/// Pattern: handle_event() → update() → render()
 pub trait Component {
+    /// Handle crossterm events, return Action if event was consumed
     fn handle_event(&mut self, event: &Event) -> Option<Action>;
 
+    /// Update component state based on dispatched Action
     fn update(&mut self, action: &Action);
 
+    /// Render the component to the frame
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool);
 }

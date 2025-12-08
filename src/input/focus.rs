@@ -1,12 +1,21 @@
+/// Focus areas per RIDGE-CONTROL-MASTER.md Section 1.4
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FocusArea {
+    /// Left 2/3 - Terminal emulator
     #[default]
     Terminal,
+    /// Top-right - Process monitor
     ProcessMonitor,
+    /// Bottom-right - Menu/stream list
     Menu,
+    /// When a stream is actively being viewed (overlay)
+    StreamViewer,
+    /// When config panel is open
+    ConfigPanel,
 }
 
 impl FocusArea {
+    /// Focus ring for Tab cycling (excludes overlay areas)
     pub const RING: &'static [FocusArea] = &[
         FocusArea::Terminal,
         FocusArea::ProcessMonitor,
