@@ -22,10 +22,6 @@ impl PlaceholderWidget {
         }
     }
 
-    pub fn process_monitor() -> Self {
-        Self::new("Process Monitor", "Coming in i[12]...")
-    }
-
     pub fn menu() -> Self {
         Self::new("Menu", "Coming in i[13]...")
     }

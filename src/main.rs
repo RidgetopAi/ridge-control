@@ -5,6 +5,7 @@ mod error;
 mod event;
 mod input;
 mod pty;
+mod streams;
 
 use color_eyre::eyre::Result;
 

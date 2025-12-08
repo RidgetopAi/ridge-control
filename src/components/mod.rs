@@ -1,5 +1,7 @@
+pub mod menu;
 pub mod placeholder;
 pub mod process_monitor;
+pub mod stream_viewer;
 pub mod terminal;
 
 use crossterm::event::Event;

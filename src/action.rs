@@ -44,6 +44,17 @@ pub enum Action {
     Copy,
     Paste,
 
+    // Menu actions
+    MenuSelectNext,
+    MenuSelectPrev,
+
+    // Stream actions
+    StreamConnect(usize),
+    StreamDisconnect(usize),
+    StreamToggle(usize),
+    StreamRefresh,
+    StreamData(String, String),
+
     // Process Monitor actions
     ProcessRefresh,
     ProcessSelectNext,

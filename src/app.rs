@@ -1,6 +1,6 @@
 use std::io::{self, Stdout};
 use std::sync::mpsc as std_mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 use crossterm::{
@@ -16,7 +16,7 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 use crate::action::Action;
-use crate::components::placeholder::PlaceholderWidget;
+use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::terminal::TerminalWidget;
 use crate::components::Component;
@@ -25,6 +25,9 @@ use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
 use crate::input::mode::InputMode;
 use crate::pty::PtyHandle;
+use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
+
+const TICK_INTERVAL_MS: u64 = 500;
 
 pub struct App {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -33,10 +36,12 @@ pub struct App {
     focus: FocusManager,
     terminal_widget: TerminalWidget,
     process_monitor: ProcessMonitor,
-    menu: PlaceholderWidget,
+    menu: Menu,
+    stream_manager: StreamManager,
     pty_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pty_resize_tx: Option<std_mpsc::Sender<(u16, u16)>>,
     clipboard: Option<Clipboard>,
+    last_tick: Instant,
 }
 
 impl App {
@@ -55,6 +60,13 @@ impl App {
 
         let clipboard = Clipboard::new().ok();
 
+        let streams_config = StreamsConfig::load();
+        let mut stream_manager = StreamManager::new();
+        stream_manager.load_streams(&streams_config);
+
+        let mut menu = Menu::new();
+        menu.set_stream_count(stream_manager.clients().len());
+
         Ok(Self {
             terminal,
             should_quit: false,
@@ -62,10 +74,12 @@ impl App {
             focus: FocusManager::new(),
             terminal_widget: TerminalWidget::new(term_cols, term_rows),
             process_monitor: ProcessMonitor::new(),
-            menu: PlaceholderWidget::menu(),
+            menu,
+            stream_manager,
             pty_tx: None,
             pty_resize_tx: None,
             clipboard,
+            last_tick: Instant::now(),
         })
     }
 
@@ -76,7 +90,7 @@ impl App {
     }
 
     pub fn spawn_pty(&mut self) -> Result<mpsc::UnboundedReceiver<PtyEvent>> {
-        let mut pty = PtyHandle::spawn()?;
+        let pty = PtyHandle::spawn()?;
 
         let size = self.terminal.size().map_err(|e| RidgeError::Terminal(e.to_string()))?;
         let area = Rect::new(0, 0, size.width, size.height);
@@ -132,6 +146,8 @@ impl App {
     }
 
     pub fn run(&mut self, mut pty_rx: mpsc::UnboundedReceiver<PtyEvent>) -> Result<()> {
+        let mut stream_rx = self.stream_manager.take_event_rx();
+        
         loop {
             self.draw()?;
 
@@ -147,6 +163,17 @@ impl App {
                         self.should_quit = true;
                     }
                 }
+            }
+
+            if let Some(ref mut rx) = stream_rx {
+                while let Ok(stream_event) = rx.try_recv() {
+                    self.handle_stream_event(stream_event);
+                }
+            }
+
+            if self.last_tick.elapsed() >= Duration::from_millis(TICK_INTERVAL_MS) {
+                self.dispatch(Action::Tick)?;
+                self.last_tick = Instant::now();
             }
 
             if self.should_quit {
@@ -169,8 +196,39 @@ impl App {
         Ok(())
     }
 
+    fn handle_stream_event(&mut self, event: StreamEvent) {
+        match event {
+            StreamEvent::Connected(id) => {
+                if let Some(client) = self.stream_manager.get_client_mut(&id) {
+                    client.set_state(ConnectionState::Connected);
+                }
+            }
+            StreamEvent::Disconnected(id, _reason) => {
+                if let Some(client) = self.stream_manager.get_client_mut(&id) {
+                    client.set_state(ConnectionState::Disconnected);
+                }
+            }
+            StreamEvent::Data(id, data) => {
+                if let Some(client) = self.stream_manager.get_client_mut(&id) {
+                    client.push_data(data);
+                }
+            }
+            StreamEvent::Error(id, _msg) => {
+                if let Some(client) = self.stream_manager.get_client_mut(&id) {
+                    client.set_state(ConnectionState::Failed);
+                }
+            }
+            StreamEvent::StateChanged(id, state) => {
+                if let Some(client) = self.stream_manager.get_client_mut(&id) {
+                    client.set_state(state);
+                }
+            }
+        }
+    }
+
     fn draw(&mut self) -> Result<()> {
         let focus = self.focus.clone();
+        let streams: Vec<_> = self.stream_manager.clients().to_vec();
 
         self.terminal
             .draw(|frame| {
@@ -196,10 +254,11 @@ impl App {
                     right_chunks[0],
                     focus.is_focused(FocusArea::ProcessMonitor),
                 );
-                self.menu.render(
+                self.menu.render_with_streams(
                     frame,
                     right_chunks[1],
                     focus.is_focused(FocusArea::Menu),
+                    &streams,
                 );
 
                 let term_inner = {
@@ -215,6 +274,13 @@ impl App {
                     block.inner(right_chunks[0])
                 };
                 self.process_monitor.set_inner_area(proc_inner);
+
+                let menu_inner = {
+                    let block = ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL);
+                    block.inner(right_chunks[1])
+                };
+                self.menu.set_inner_area(menu_inner);
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
@@ -293,7 +359,9 @@ impl App {
                     FocusArea::ProcessMonitor => {
                         self.process_monitor.handle_event(&CrosstermEvent::Key(key))
                     }
-                    FocusArea::Menu => None,
+                    FocusArea::Menu => {
+                        self.menu.handle_event(&CrosstermEvent::Key(key))
+                    }
                 }
             }
         }
@@ -316,7 +384,9 @@ impl App {
                 self.process_monitor
                     .handle_event(&CrosstermEvent::Mouse(mouse))
             }
-            FocusArea::Menu => None,
+            FocusArea::Menu => {
+                self.menu.handle_event(&CrosstermEvent::Mouse(mouse))
+            }
         }
     }
 
@@ -390,6 +460,40 @@ impl App {
                         }
                     }
                 }
+            }
+            Action::MenuSelectNext => {
+                self.menu.update(&Action::MenuSelectNext);
+            }
+            Action::MenuSelectPrev => {
+                self.menu.update(&Action::MenuSelectPrev);
+            }
+            Action::StreamConnect(idx) => {
+                if let Some(client) = self.stream_manager.clients().get(idx) {
+                    let id = client.id().to_string();
+                    self.stream_manager.connect(&id);
+                }
+            }
+            Action::StreamDisconnect(idx) => {
+                if let Some(client) = self.stream_manager.clients().get(idx) {
+                    let id = client.id().to_string();
+                    self.stream_manager.disconnect(&id);
+                }
+            }
+            Action::StreamToggle(idx) => {
+                let id_and_state = self.stream_manager.clients().get(idx).map(|c| {
+                    (c.id().to_string(), c.state())
+                });
+                if let Some((id, state)) = id_and_state {
+                    match state {
+                        ConnectionState::Connected => self.stream_manager.disconnect(&id),
+                        _ => self.stream_manager.connect(&id),
+                    }
+                }
+            }
+            Action::StreamRefresh => {
+                let config = StreamsConfig::load();
+                self.stream_manager.load_streams(&config);
+                self.menu.set_stream_count(self.stream_manager.clients().len());
             }
             Action::ProcessRefresh
             | Action::ProcessSelectNext
