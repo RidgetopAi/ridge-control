@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::action::Action;
 use crate::components::placeholder::PlaceholderWidget;
+use crate::components::process_monitor::ProcessMonitor;
 use crate::components::terminal::TerminalWidget;
 use crate::components::Component;
 use crate::error::{Result, RidgeError};
@@ -31,7 +32,7 @@ pub struct App {
     input_mode: InputMode,
     focus: FocusManager,
     terminal_widget: TerminalWidget,
-    process_monitor: PlaceholderWidget,
+    process_monitor: ProcessMonitor,
     menu: PlaceholderWidget,
     pty_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pty_resize_tx: Option<std_mpsc::Sender<(u16, u16)>>,
@@ -60,7 +61,7 @@ impl App {
             input_mode: InputMode::Normal,
             focus: FocusManager::new(),
             terminal_widget: TerminalWidget::new(term_cols, term_rows),
-            process_monitor: PlaceholderWidget::process_monitor(),
+            process_monitor: ProcessMonitor::new(),
             menu: PlaceholderWidget::menu(),
             pty_tx: None,
             pty_resize_tx: None,
@@ -201,12 +202,19 @@ impl App {
                     focus.is_focused(FocusArea::Menu),
                 );
 
-                let inner = {
+                let term_inner = {
                     let block = ratatui::widgets::Block::default()
                         .borders(ratatui::widgets::Borders::ALL);
                     block.inner(main_chunks[0])
                 };
-                self.terminal_widget.set_inner_area(inner);
+                self.terminal_widget.set_inner_area(term_inner);
+
+                let proc_inner = {
+                    let block = ratatui::widgets::Block::default()
+                        .borders(ratatui::widgets::Borders::ALL);
+                    block.inner(right_chunks[0])
+                };
+                self.process_monitor.set_inner_area(proc_inner);
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
@@ -252,107 +260,63 @@ impl App {
                 }
                 None
             }
-            InputMode::Normal => match key.code {
-                KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    Some(Action::Quit)
-                }
-                KeyCode::Char('q') => Some(Action::Quit),
-                KeyCode::Tab => Some(Action::FocusNext),
-                KeyCode::BackTab => Some(Action::FocusPrev),
-                KeyCode::Enter => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::EnterPtyMode)
-                    } else {
-                        None
+            InputMode::Normal => {
+                match key.code {
+                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Some(Action::Quit);
                     }
+                    KeyCode::Char('q') => return Some(Action::Quit),
+                    KeyCode::Tab => return Some(Action::FocusNext),
+                    KeyCode::BackTab => return Some(Action::FocusPrev),
+                    _ => {}
                 }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::ScrollUp(1))
-                    } else {
-                        None
+
+                match self.focus.current() {
+                    FocusArea::Terminal => match key.code {
+                        KeyCode::Enter => Some(Action::EnterPtyMode),
+                        KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp(1)),
+                        KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown(1)),
+                        KeyCode::PageUp => Some(Action::ScrollPageUp),
+                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            Some(Action::ScrollPageUp)
+                        }
+                        KeyCode::PageDown => Some(Action::ScrollPageDown),
+                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                            Some(Action::ScrollPageDown)
+                        }
+                        KeyCode::Char('g') => Some(Action::ScrollToTop),
+                        KeyCode::Char('G') => Some(Action::ScrollToBottom),
+                        KeyCode::Char('y') => Some(Action::Copy),
+                        KeyCode::Char('p') => Some(Action::Paste),
+                        _ => None,
+                    },
+                    FocusArea::ProcessMonitor => {
+                        self.process_monitor.handle_event(&CrosstermEvent::Key(key))
                     }
+                    FocusArea::Menu => None,
                 }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::ScrollDown(1))
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::PageUp | KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::ScrollPageUp)
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::ScrollPageDown)
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char('g') => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::ScrollToTop)
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char('G') => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::ScrollToBottom)
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char('y') => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::Copy)
-                    } else {
-                        None
-                    }
-                }
-                KeyCode::Char('p') => {
-                    if self.focus.current() == FocusArea::Terminal {
-                        Some(Action::Paste)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            },
+            }
         }
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
-        match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) |
-            MouseEventKind::Drag(MouseButton::Left) |
-            MouseEventKind::Up(MouseButton::Left) => {
-                if self.focus.current() == FocusArea::Terminal {
-                    self.terminal_widget.handle_event(&CrosstermEvent::Mouse(mouse))
-                } else {
-                    None
+        match self.focus.current() {
+            FocusArea::Terminal => match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left)
+                | MouseEventKind::Up(MouseButton::Left) => {
+                    self.terminal_widget
+                        .handle_event(&CrosstermEvent::Mouse(mouse))
                 }
+                MouseEventKind::ScrollUp => Some(Action::ScrollUp(3)),
+                MouseEventKind::ScrollDown => Some(Action::ScrollDown(3)),
+                _ => None,
+            },
+            FocusArea::ProcessMonitor => {
+                self.process_monitor
+                    .handle_event(&CrosstermEvent::Mouse(mouse))
             }
-            MouseEventKind::ScrollUp => {
-                if self.focus.current() == FocusArea::Terminal {
-                    Some(Action::ScrollUp(3))
-                } else {
-                    None
-                }
-            }
-            MouseEventKind::ScrollDown => {
-                if self.focus.current() == FocusArea::Terminal {
-                    Some(Action::ScrollDown(3))
-                } else {
-                    None
-                }
-            }
-            _ => None,
+            FocusArea::Menu => None,
         }
     }
 
@@ -426,6 +390,21 @@ impl App {
                         }
                     }
                 }
+            }
+            Action::ProcessRefresh
+            | Action::ProcessSelectNext
+            | Action::ProcessSelectPrev
+            | Action::ProcessKillRequest(_)
+            | Action::ProcessKillConfirm(_)
+            | Action::ProcessKillCancel
+            | Action::ProcessSetFilter(_)
+            | Action::ProcessClearFilter
+            | Action::ProcessSetSort(_)
+            | Action::ProcessToggleSortOrder => {
+                self.process_monitor.update(&action);
+            }
+            Action::Tick => {
+                self.process_monitor.update(&Action::Tick);
             }
             _ => {}
         }

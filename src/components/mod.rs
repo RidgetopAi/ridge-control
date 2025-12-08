@@ -1,4 +1,5 @@
 pub mod placeholder;
+pub mod process_monitor;
 pub mod terminal;
 
 use crossterm::event::Event;

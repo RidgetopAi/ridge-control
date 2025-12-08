@@ -1,5 +1,20 @@
 use crate::input::focus::FocusArea;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortColumn {
+    Pid,
+    Name,
+    Cpu,
+    Memory,
+    State,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Action {
     Quit,
@@ -28,6 +43,18 @@ pub enum Action {
 
     Copy,
     Paste,
+
+    // Process Monitor actions
+    ProcessRefresh,
+    ProcessSelectNext,
+    ProcessSelectPrev,
+    ProcessKillRequest(i32),
+    ProcessKillConfirm(i32),
+    ProcessKillCancel,
+    ProcessSetFilter(String),
+    ProcessClearFilter,
+    ProcessSetSort(SortColumn),
+    ProcessToggleSortOrder,
 
     None,
 }
