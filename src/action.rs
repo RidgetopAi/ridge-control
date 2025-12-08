@@ -1,4 +1,5 @@
 use crate::input::focus::FocusArea;
+use crate::llm::{LLMError, StreamChunk};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
@@ -15,7 +16,7 @@ pub enum SortOrder {
     Descending,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum Action {
     Quit,
     ForceQuit,
@@ -66,6 +67,16 @@ pub enum Action {
     ProcessClearFilter,
     ProcessSetSort(SortColumn),
     ProcessToggleSortOrder,
+
+    // LLM actions
+    LlmSendMessage(String),
+    LlmStreamChunk(StreamChunk),
+    LlmStreamComplete,
+    LlmStreamError(LLMError),
+    LlmCancel,
+    LlmSelectModel(String),
+    LlmSelectProvider(String),
+    LlmClearConversation,
 
     None,
 }

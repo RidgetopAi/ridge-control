@@ -20,8 +20,10 @@ crossterm = { version = "0.28", features = ["event-stream"] }
 # ─────────────────────────────────────────────────────────────────────────────
 # Async Runtime & Channels
 # ─────────────────────────────────────────────────────────────────────────────
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "process", "io-util", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "net", "process", "io-util", "signal", "macros"] }
+tokio-stream = "0.1"
 futures = "0.3"
+async-trait = "0.1"
 crossbeam-channel = "0.5"
 
 # ─────────────────────────────────────────────────────────────────────────────

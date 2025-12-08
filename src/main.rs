@@ -4,6 +4,7 @@ mod components;
 mod error;
 mod event;
 mod input;
+mod llm;
 mod pty;
 mod streams;
 

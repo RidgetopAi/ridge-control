@@ -24,6 +24,7 @@ use crate::error::{Result, RidgeError};
 use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
 use crate::input::mode::InputMode;
+use crate::llm::{LLMManager, LLMEvent, StreamChunk, StreamDelta};
 use crate::pty::PtyHandle;
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
 
@@ -38,6 +39,8 @@ pub struct App {
     process_monitor: ProcessMonitor,
     menu: Menu,
     stream_manager: StreamManager,
+    llm_manager: LLMManager,
+    llm_response_buffer: String,
     pty_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
     pty_resize_tx: Option<std_mpsc::Sender<(u16, u16)>>,
     clipboard: Option<Clipboard>,
@@ -67,6 +70,8 @@ impl App {
         let mut menu = Menu::new();
         menu.set_stream_count(stream_manager.clients().len());
 
+        let llm_manager = LLMManager::new();
+
         Ok(Self {
             terminal,
             should_quit: false,
@@ -76,11 +81,17 @@ impl App {
             process_monitor: ProcessMonitor::new(),
             menu,
             stream_manager,
+            llm_manager,
+            llm_response_buffer: String::new(),
             pty_tx: None,
             pty_resize_tx: None,
             clipboard,
             last_tick: Instant::now(),
         })
+    }
+
+    pub fn configure_llm(&mut self, api_key: impl Into<String>) {
+        self.llm_manager.register_anthropic(api_key);
     }
 
     fn calculate_terminal_size(area: Rect) -> (usize, usize) {
@@ -147,6 +158,7 @@ impl App {
 
     pub fn run(&mut self, mut pty_rx: mpsc::UnboundedReceiver<PtyEvent>) -> Result<()> {
         let mut stream_rx = self.stream_manager.take_event_rx();
+        let mut llm_rx = self.llm_manager.take_event_rx();
         
         loop {
             self.draw()?;
@@ -168,6 +180,12 @@ impl App {
             if let Some(ref mut rx) = stream_rx {
                 while let Ok(stream_event) = rx.try_recv() {
                     self.handle_stream_event(stream_event);
+                }
+            }
+
+            if let Some(ref mut rx) = llm_rx {
+                while let Ok(llm_event) = rx.try_recv() {
+                    self.handle_llm_event(llm_event);
                 }
             }
 
@@ -194,6 +212,42 @@ impl App {
         }
 
         Ok(())
+    }
+
+    fn handle_llm_event(&mut self, event: LLMEvent) {
+        match event {
+            LLMEvent::Chunk(chunk) => {
+                match chunk {
+                    StreamChunk::Delta(delta) => {
+                        match delta {
+                            StreamDelta::Text(text) => {
+                                self.llm_response_buffer.push_str(&text);
+                            }
+                            StreamDelta::Thinking(text) => {
+                                self.llm_response_buffer.push_str(&text);
+                            }
+                            _ => {}
+                        }
+                    }
+                    StreamChunk::Stop { .. } => {
+                        if !self.llm_response_buffer.is_empty() {
+                            self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+                            self.llm_response_buffer.clear();
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            LLMEvent::Complete => {
+                if !self.llm_response_buffer.is_empty() {
+                    self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+                    self.llm_response_buffer.clear();
+                }
+            }
+            LLMEvent::Error(_err) => {
+                self.llm_response_buffer.clear();
+            }
+        }
     }
 
     fn handle_stream_event(&mut self, event: StreamEvent) {
@@ -510,9 +564,35 @@ impl App {
             Action::Tick => {
                 self.process_monitor.update(&Action::Tick);
             }
+            Action::LlmSendMessage(msg) => {
+                self.llm_manager.send_message(msg, None);
+            }
+            Action::LlmCancel => {
+                self.llm_manager.cancel();
+            }
+            Action::LlmSelectModel(model) => {
+                self.llm_manager.set_model(&model);
+            }
+            Action::LlmSelectProvider(provider) => {
+                self.llm_manager.set_provider(&provider);
+            }
+            Action::LlmClearConversation => {
+                self.llm_manager.clear_conversation();
+            }
+            Action::LlmStreamChunk(_) | Action::LlmStreamComplete | Action::LlmStreamError(_) => {
+                // These are handled by handle_llm_event, not dispatched directly
+            }
             _ => {}
         }
         Ok(())
+    }
+
+    pub fn llm_manager(&self) -> &LLMManager {
+        &self.llm_manager
+    }
+
+    pub fn llm_response_buffer(&self) -> &str {
+        &self.llm_response_buffer
     }
 }
 
