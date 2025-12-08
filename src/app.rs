@@ -1,4 +1,5 @@
 use std::io::{self, Stdout};
+use std::path::PathBuf;
 use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,7 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 use crate::action::Action;
+use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::terminal::TerminalWidget;
@@ -24,7 +26,10 @@ use crate::error::{Result, RidgeError};
 use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
 use crate::input::mode::InputMode;
-use crate::llm::{LLMManager, LLMEvent, StreamChunk, StreamDelta};
+use crate::llm::{
+    LLMManager, LLMEvent, StreamChunk, StreamDelta, StopReason,
+    ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolUse,
+};
 use crate::pty::PtyHandle;
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
 
@@ -45,6 +50,16 @@ pub struct App {
     pty_resize_tx: Option<std_mpsc::Sender<(u16, u16)>>,
     clipboard: Option<Clipboard>,
     last_tick: Instant,
+    // Tool execution
+    tool_executor: ToolExecutor,
+    confirm_dialog: ConfirmDialog,
+    pending_tool: Option<PendingToolUse>,
+    // Tracking tool use during streaming
+    current_tool_id: Option<String>,
+    current_tool_name: Option<String>,
+    current_tool_input: String,
+    // Tool execution result receiver
+    tool_result_rx: Option<mpsc::UnboundedReceiver<std::result::Result<crate::llm::ToolResult, crate::llm::ToolError>>>,
 }
 
 impl App {
@@ -71,6 +86,12 @@ impl App {
         menu.set_stream_count(stream_manager.clients().len());
 
         let llm_manager = LLMManager::new();
+        
+        // Get working directory for tool executor
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+        });
+        let tool_executor = ToolExecutor::new(working_dir);
 
         Ok(Self {
             terminal,
@@ -87,6 +108,13 @@ impl App {
             pty_resize_tx: None,
             clipboard,
             last_tick: Instant::now(),
+            tool_executor,
+            confirm_dialog: ConfirmDialog::new(),
+            pending_tool: None,
+            current_tool_id: None,
+            current_tool_name: None,
+            current_tool_input: String::new(),
+            tool_result_rx: None,
         })
     }
 
@@ -188,6 +216,36 @@ impl App {
                     self.handle_llm_event(llm_event);
                 }
             }
+            
+            // Poll tool execution results - collect first, then dispatch to avoid borrow issues
+            let tool_results: Vec<_> = if let Some(ref mut rx) = self.tool_result_rx {
+                let mut results = Vec::new();
+                while let Ok(result) = rx.try_recv() {
+                    results.push(result);
+                }
+                results
+            } else {
+                Vec::new()
+            };
+            
+            for result in tool_results {
+                match result {
+                    Ok(tool_result) => {
+                        self.dispatch(Action::ToolResult(tool_result))?;
+                    }
+                    Err(e) => {
+                        // Create an error result
+                        if let Some(pending) = &self.pending_tool {
+                            let error_result = crate::llm::ToolResult {
+                                tool_use_id: pending.tool.id.clone(),
+                                content: crate::llm::ToolResultContent::Text(e.to_string()),
+                                is_error: true,
+                            };
+                            self.dispatch(Action::ToolResult(error_result))?;
+                        }
+                    }
+                }
+            }
 
             if self.last_tick.elapsed() >= Duration::from_millis(TICK_INTERVAL_MS) {
                 self.dispatch(Action::Tick)?;
@@ -226,13 +284,35 @@ impl App {
                             StreamDelta::Thinking(text) => {
                                 self.llm_response_buffer.push_str(&text);
                             }
-                            _ => {}
+                            StreamDelta::ToolInput { id, name, input_json } => {
+                                // Track tool use being built up
+                                if self.current_tool_id.is_none() || self.current_tool_id.as_ref() != Some(&id) {
+                                    self.current_tool_id = Some(id);
+                                    self.current_tool_name = name;
+                                    self.current_tool_input.clear();
+                                }
+                                self.current_tool_input.push_str(&input_json);
+                            }
                         }
                     }
-                    StreamChunk::Stop { .. } => {
-                        if !self.llm_response_buffer.is_empty() {
-                            self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-                            self.llm_response_buffer.clear();
+                    StreamChunk::BlockStop { .. } => {
+                        // When a tool use block stops, we have the complete tool use
+                        if let (Some(id), Some(name)) = (self.current_tool_id.take(), self.current_tool_name.take()) {
+                            let input: serde_json::Value = serde_json::from_str(&self.current_tool_input)
+                                .unwrap_or(serde_json::Value::Null);
+                            self.current_tool_input.clear();
+                            
+                            let tool_use = ToolUse { id, name, input };
+                            self.handle_tool_use_request(tool_use);
+                        }
+                    }
+                    StreamChunk::Stop { reason, .. } => {
+                        // If stop reason is ToolUse, the tool was already handled in BlockStop
+                        if reason != StopReason::ToolUse {
+                            if !self.llm_response_buffer.is_empty() {
+                                self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+                                self.llm_response_buffer.clear();
+                            }
                         }
                     }
                     _ => {}
@@ -246,8 +326,78 @@ impl App {
             }
             LLMEvent::Error(_err) => {
                 self.llm_response_buffer.clear();
+                self.current_tool_id = None;
+                self.current_tool_name = None;
+                self.current_tool_input.clear();
+            }
+            LLMEvent::ToolUseDetected(tool_use) => {
+                self.handle_tool_use_request(tool_use);
             }
         }
+    }
+    
+    fn handle_tool_use_request(&mut self, tool_use: ToolUse) {
+        // Check if the tool can be executed
+        let check = self.tool_executor.can_execute(&tool_use, false);
+        
+        match check {
+            ToolExecutionCheck::Allowed => {
+                // No confirmation needed, execute directly
+                let pending = PendingToolUse::new(tool_use, check);
+                self.execute_tool(pending);
+            }
+            ToolExecutionCheck::RequiresConfirmation => {
+                // Show confirmation dialog
+                let pending = PendingToolUse::new(tool_use, check);
+                self.pending_tool = Some(pending.clone());
+                self.confirm_dialog.show(pending);
+                self.input_mode = InputMode::Confirm {
+                    title: "Tool Execution".to_string(),
+                    message: "Confirm tool use?".to_string(),
+                };
+            }
+            ToolExecutionCheck::RequiresDangerousMode
+            | ToolExecutionCheck::PathNotAllowed
+            | ToolExecutionCheck::UnknownTool => {
+                // Show dialog explaining why it can't run
+                let pending = PendingToolUse::new(tool_use, check);
+                self.pending_tool = Some(pending.clone());
+                self.confirm_dialog.show(pending);
+                self.input_mode = InputMode::Confirm {
+                    title: "Tool Blocked".to_string(),
+                    message: "Tool cannot execute".to_string(),
+                };
+            }
+        }
+    }
+    
+    fn execute_tool(&mut self, pending: PendingToolUse) {
+        // Add the tool use to the conversation
+        self.llm_manager.add_tool_use(pending.tool.clone());
+        
+        // Execute the tool asynchronously
+        let tool = pending.tool.clone();
+        let working_dir = std::env::current_dir().unwrap_or_else(|_| {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+        });
+        
+        // We need to create a new executor for the async task
+        let dangerous_mode = self.tool_executor.registry().is_dangerous_mode();
+        
+        // Spawn the tool execution
+        let (result_tx, result_rx) = mpsc::unbounded_channel();
+        self.tool_result_rx = Some(result_rx);
+        
+        tokio::spawn(async move {
+            let mut executor = ToolExecutor::new(working_dir);
+            executor.set_dangerous_mode(dangerous_mode);
+            
+            let result = executor.execute(&tool).await;
+            let _ = result_tx.send(result);
+        });
+        
+        // Store the pending tool for reference
+        self.pending_tool = Some(pending);
     }
 
     fn handle_stream_event(&mut self, event: StreamEvent) {
@@ -283,6 +433,7 @@ impl App {
     fn draw(&mut self) -> Result<()> {
         let focus = self.focus.clone();
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
+        let show_confirm = self.confirm_dialog.is_visible();
 
         self.terminal
             .draw(|frame| {
@@ -335,6 +486,11 @@ impl App {
                     block.inner(right_chunks[1])
                 };
                 self.menu.set_inner_area(menu_inner);
+                
+                // Render confirmation dialog as overlay if visible
+                if show_confirm {
+                    self.confirm_dialog.render(frame, size);
+                }
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
@@ -357,7 +513,11 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
-        match self.input_mode {
+        match &self.input_mode {
+            InputMode::Confirm { .. } => {
+                // Handle confirmation dialog input
+                self.confirm_dialog.handle_event(&CrosstermEvent::Key(key))
+            }
             InputMode::PtyRaw => {
                 if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Some(Action::EnterNormalMode);
@@ -582,6 +742,57 @@ impl App {
             Action::LlmStreamChunk(_) | Action::LlmStreamComplete | Action::LlmStreamError(_) => {
                 // These are handled by handle_llm_event, not dispatched directly
             }
+            
+            // Tool execution actions
+            Action::ToolUseReceived(pending) => {
+                self.handle_tool_use_request(pending.tool.clone());
+            }
+            Action::ToolConfirm => {
+                // User confirmed tool execution
+                self.confirm_dialog.dismiss();
+                self.input_mode = InputMode::Normal;
+                
+                if let Some(pending) = self.pending_tool.take() {
+                    // Update check to Allowed since user confirmed
+                    let confirmed_pending = PendingToolUse::new(
+                        pending.tool,
+                        ToolExecutionCheck::Allowed
+                    );
+                    self.execute_tool(confirmed_pending);
+                }
+            }
+            Action::ToolReject => {
+                // User rejected tool execution
+                self.confirm_dialog.dismiss();
+                self.input_mode = InputMode::Normal;
+                
+                if let Some(pending) = self.pending_tool.take() {
+                    // Send an error result back to the LLM
+                    let error_result = crate::llm::ToolResult {
+                        tool_use_id: pending.tool.id.clone(),
+                        content: crate::llm::ToolResultContent::Text(
+                            "User rejected tool execution".to_string()
+                        ),
+                        is_error: true,
+                    };
+                    self.llm_manager.add_tool_use(pending.tool);
+                    self.llm_manager.add_tool_result(error_result);
+                    // Continue conversation with the rejection
+                    self.llm_manager.continue_after_tool(None);
+                }
+            }
+            Action::ToolResult(result) => {
+                // Tool execution completed, send result back to LLM
+                self.llm_manager.add_tool_result(result);
+                self.pending_tool = None;
+                // Continue the conversation
+                self.llm_manager.continue_after_tool(None);
+            }
+            Action::ToolToggleDangerousMode => {
+                let current = self.tool_executor.registry().is_dangerous_mode();
+                self.tool_executor.set_dangerous_mode(!current);
+            }
+            
             _ => {}
         }
         Ok(())

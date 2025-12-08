@@ -1,5 +1,5 @@
 use crate::input::focus::FocusArea;
-use crate::llm::{LLMError, StreamChunk};
+use crate::llm::{LLMError, StreamChunk, PendingToolUse, ToolResult};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
@@ -77,6 +77,18 @@ pub enum Action {
     LlmSelectModel(String),
     LlmSelectProvider(String),
     LlmClearConversation,
+    
+    // Tool execution actions
+    /// LLM requested a tool use, needs confirmation
+    ToolUseReceived(PendingToolUse),
+    /// User confirmed tool execution
+    ToolConfirm,
+    /// User rejected tool execution  
+    ToolReject,
+    /// Tool execution completed
+    ToolResult(ToolResult),
+    /// Toggle dangerous mode for tool execution
+    ToolToggleDangerousMode,
 
     None,
 }

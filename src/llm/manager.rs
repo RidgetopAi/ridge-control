@@ -5,7 +5,7 @@ use tokio::sync::mpsc;
 
 use super::anthropic::AnthropicProvider;
 use super::provider::{Provider, ProviderRegistry};
-use super::types::{LLMError, LLMRequest, Message, StreamChunk};
+use super::types::{LLMError, LLMRequest, Message, StreamChunk, ToolUse, ContentBlock, ToolResult};
 
 /// Event from the LLM subsystem
 #[derive(Debug, Clone)]
@@ -13,6 +13,8 @@ pub enum LLMEvent {
     Chunk(StreamChunk),
     Complete,
     Error(LLMError),
+    /// Tool use detected, needs handling
+    ToolUseDetected(ToolUse),
 }
 
 /// Manages LLM providers and handles streaming requests
@@ -91,6 +93,92 @@ impl LLMManager {
 
     pub fn add_assistant_message(&mut self, text: String) {
         self.conversation.push(Message::assistant(text));
+    }
+    
+    /// Add a tool use from the assistant to the conversation
+    pub fn add_tool_use(&mut self, tool_use: ToolUse) {
+        // If the last message is from the assistant, add the tool use to it
+        if let Some(last) = self.conversation.last_mut() {
+            if matches!(last.role, super::types::Role::Assistant) {
+                last.content.push(ContentBlock::ToolUse(tool_use));
+                return;
+            }
+        }
+        // Otherwise create a new assistant message with the tool use
+        self.conversation.push(Message {
+            role: super::types::Role::Assistant,
+            content: vec![ContentBlock::ToolUse(tool_use)],
+        });
+    }
+    
+    /// Add a tool result from the user to the conversation
+    pub fn add_tool_result(&mut self, result: ToolResult) {
+        // Tool results are added as user messages
+        self.conversation.push(Message {
+            role: super::types::Role::User,
+            content: vec![ContentBlock::ToolResult(result)],
+        });
+    }
+    
+    /// Continue the conversation after a tool result (re-send to get LLM response)
+    pub fn continue_after_tool(&mut self, system_prompt: Option<String>) {
+        let provider = match self.registry.get(&self.current_provider) {
+            Some(p) => p,
+            None => {
+                let _ = self.event_tx.send(LLMEvent::Error(LLMError::ProviderError {
+                    status: 0,
+                    message: "No provider configured".to_string(),
+                }));
+                return;
+            }
+        };
+
+        let request = LLMRequest {
+            model: self.current_model.clone(),
+            system: system_prompt,
+            messages: self.conversation.clone(),
+            stream: true,
+            ..Default::default()
+        };
+
+        let event_tx = self.event_tx.clone();
+        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+        self.cancel_tx = Some(cancel_tx);
+
+        tokio::spawn(async move {
+            match provider.stream(request).await {
+                Ok(mut stream) => {
+                    loop {
+                        tokio::select! {
+                            chunk = stream.next() => {
+                                match chunk {
+                                    Some(Ok(c)) => {
+                                        if event_tx.send(LLMEvent::Chunk(c)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Some(Err(e)) => {
+                                        let _ = event_tx.send(LLMEvent::Error(e));
+                                        break;
+                                    }
+                                    None => {
+                                        let _ = event_tx.send(LLMEvent::Complete);
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = cancel_rx.recv() => {
+                                let _ = event_tx.send(LLMEvent::Error(LLMError::StreamInterrupted));
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = event_tx.send(LLMEvent::Error(e));
+                }
+            }
+        });
     }
 
     pub fn is_configured(&self) -> bool {

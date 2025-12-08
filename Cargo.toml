@@ -86,6 +86,7 @@ tracing-appender = "0.2"  # File logging
 # ─────────────────────────────────────────────────────────────────────────────
 # Utilities
 # ─────────────────────────────────────────────────────────────────────────────
+dirs = "5"  # Home directory lookup for tool execution
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 rand = "0.9"

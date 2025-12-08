@@ -1,3 +1,4 @@
+pub mod confirm_dialog;
 pub mod menu;
 pub mod placeholder;
 pub mod process_monitor;
@@ -8,6 +9,8 @@ use crossterm::event::Event;
 use ratatui::{layout::Rect, Frame};
 
 use crate::action::Action;
+
+pub use confirm_dialog::ConfirmDialog;
 
 pub trait Component {
     fn handle_event(&mut self, event: &Event) -> Option<Action>;
