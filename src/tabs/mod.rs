@@ -7,12 +7,22 @@
 //! - Additional tabs: User-configurable
 //! - Tab creation, closing, renaming
 //! - Keyboard navigation between tabs
+//!
+//! TRC-005: Each tab has its own isolated PTY session
 
+mod pty_session;
 mod tab_bar;
 
+pub use pty_session::PtySession;
 pub use tab_bar::{TabBar, TabBarStyle};
 
+use std::collections::HashMap;
 use std::time::Instant;
+
+use tokio::sync::mpsc;
+
+use crate::error::Result;
+use crate::event::PtyEvent;
 
 /// Unique identifier for a tab
 pub type TabId = u32;
@@ -79,7 +89,7 @@ impl Tab {
 }
 
 /// Manages all tabs and tracks the active tab
-#[derive(Debug)]
+/// Each tab has its own isolated PTY session (TRC-005)
 pub struct TabManager {
     /// All tabs in order
     tabs: Vec<Tab>,
@@ -87,6 +97,22 @@ pub struct TabManager {
     active_index: usize,
     /// Counter for generating unique tab IDs
     next_id: TabId,
+    /// PTY sessions indexed by tab ID
+    pty_sessions: HashMap<TabId, PtySession>,
+    /// Terminal size for new PTY sessions
+    terminal_size: (u16, u16),
+}
+
+impl std::fmt::Debug for TabManager {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TabManager")
+            .field("tabs", &self.tabs)
+            .field("active_index", &self.active_index)
+            .field("next_id", &self.next_id)
+            .field("pty_sessions_count", &self.pty_sessions.len())
+            .field("terminal_size", &self.terminal_size)
+            .finish()
+    }
 }
 
 impl Default for TabManager {
@@ -102,7 +128,90 @@ impl TabManager {
             tabs: vec![Tab::main()],
             active_index: 0,
             next_id: 1, // 0 is reserved for main tab
+            pty_sessions: HashMap::new(),
+            terminal_size: (80, 24), // Default, will be set properly on first resize
         }
+    }
+
+    /// Set the terminal size for PTY sessions
+    pub fn set_terminal_size(&mut self, cols: u16, rows: u16) {
+        self.terminal_size = (cols, rows);
+        // Resize all existing PTY sessions
+        for session in self.pty_sessions.values_mut() {
+            session.resize(cols, rows);
+        }
+    }
+
+    /// Spawn PTY for a tab if not already spawned
+    /// Returns a receiver for PTY events from this tab
+    pub fn spawn_pty_for_tab(&mut self, tab_id: TabId) -> Result<Option<mpsc::UnboundedReceiver<(TabId, PtyEvent)>>> {
+        // Check if session already exists and is alive
+        if let Some(session) = self.pty_sessions.get(&tab_id) {
+            if session.is_alive() {
+                return Ok(None); // Already spawned
+            }
+        }
+
+        let (cols, rows) = self.terminal_size;
+        let mut session = PtySession::new(tab_id, cols as usize, rows as usize);
+        let rx = session.spawn(cols, rows)?;
+        self.pty_sessions.insert(tab_id, session);
+        Ok(Some(rx))
+    }
+
+    /// Spawn PTY for the active tab
+    pub fn spawn_pty_for_active(&mut self) -> Result<Option<mpsc::UnboundedReceiver<(TabId, PtyEvent)>>> {
+        let tab_id = self.active_tab().id();
+        self.spawn_pty_for_tab(tab_id)
+    }
+
+    /// Get PTY session for a tab
+    pub fn get_pty_session(&self, tab_id: TabId) -> Option<&PtySession> {
+        self.pty_sessions.get(&tab_id)
+    }
+
+    /// Get mutable PTY session for a tab
+    pub fn get_pty_session_mut(&mut self, tab_id: TabId) -> Option<&mut PtySession> {
+        self.pty_sessions.get_mut(&tab_id)
+    }
+
+    /// Get PTY session for the active tab
+    pub fn active_pty_session(&self) -> Option<&PtySession> {
+        let tab_id = self.active_tab().id();
+        self.pty_sessions.get(&tab_id)
+    }
+
+    /// Get mutable PTY session for the active tab
+    pub fn active_pty_session_mut(&mut self) -> Option<&mut PtySession> {
+        let tab_id = self.active_tab().id();
+        self.pty_sessions.get_mut(&tab_id)
+    }
+
+    /// Write input to the active tab's PTY
+    pub fn write_to_active_pty(&self, data: Vec<u8>) {
+        let tab_id = self.active_tab().id();
+        if let Some(session) = self.pty_sessions.get(&tab_id) {
+            session.write(data);
+        }
+    }
+
+    /// Process PTY output for a specific tab
+    pub fn process_pty_output(&mut self, tab_id: TabId, data: &[u8]) {
+        if let Some(session) = self.pty_sessions.get_mut(&tab_id) {
+            session.process_output(data);
+        }
+    }
+
+    /// Mark a PTY session as dead
+    pub fn mark_pty_dead(&mut self, tab_id: TabId) {
+        if let Some(session) = self.pty_sessions.get_mut(&tab_id) {
+            session.mark_dead();
+        }
+    }
+
+    /// Remove PTY session for a tab (called when tab is closed)
+    fn remove_pty_session(&mut self, tab_id: TabId) {
+        self.pty_sessions.remove(&tab_id);
     }
 
     /// Get all tabs
@@ -151,6 +260,7 @@ impl TabManager {
 
     /// Close a tab by ID
     /// Returns true if tab was closed, false if not found or is main tab
+    /// Also cleans up the associated PTY session (TRC-005)
     pub fn close_tab(&mut self, id: TabId) -> bool {
         // Find the tab
         let Some(idx) = self.tabs.iter().position(|t| t.id == id) else {
@@ -162,8 +272,9 @@ impl TabManager {
             return false;
         }
 
-        // Remove the tab
+        // Remove the tab and its PTY session
         self.tabs.remove(idx);
+        self.remove_pty_session(id);
 
         // Adjust active index
         if self.active_index >= self.tabs.len() {

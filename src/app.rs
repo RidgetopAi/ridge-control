@@ -1,6 +1,5 @@
 use std::io::{self, Stdout};
 use std::path::PathBuf;
-use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
@@ -23,7 +22,6 @@ use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::stream_viewer::StreamViewer;
-use crate::components::terminal::TerminalWidget;
 use crate::components::Component;
 use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode};
 use crate::error::{Result, RidgeError};
@@ -34,9 +32,8 @@ use crate::llm::{
     LLMManager, LLMEvent, StreamChunk, StreamDelta, StopReason,
     ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolUse,
 };
-use crate::pty::PtyHandle;
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
-use crate::tabs::{TabManager, TabBar, TabBarStyle};
+use crate::tabs::{TabId, TabManager, TabBar, TabBarStyle};
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -45,14 +42,11 @@ pub struct App {
     should_quit: bool,
     input_mode: InputMode,
     focus: FocusManager,
-    terminal_widget: TerminalWidget,
     process_monitor: ProcessMonitor,
     menu: Menu,
     stream_manager: StreamManager,
     llm_manager: LLMManager,
     llm_response_buffer: String,
-    pty_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
-    pty_resize_tx: Option<std_mpsc::Sender<(u16, u16)>>,
     clipboard: Option<Clipboard>,
     last_tick: Instant,
     // Tool execution
@@ -70,8 +64,10 @@ pub struct App {
     // Configuration system
     config_manager: ConfigManager,
     config_watcher: Option<ConfigWatcherMode>,
-    // Tab system
+    // Tab system with per-tab PTY sessions (TRC-005)
     tab_manager: TabManager,
+    // PTY event receivers from all tabs, keyed by TabId
+    pty_receivers: Vec<mpsc::UnboundedReceiver<(TabId, PtyEvent)>>,
     // LLM conversation display
     conversation_viewer: ConversationViewer,
     show_conversation: bool,
@@ -135,20 +131,21 @@ impl App {
         } else {
             None
         };
+        
+        // Initialize TabManager with terminal size (TRC-005)
+        let mut tab_manager = TabManager::new();
+        tab_manager.set_terminal_size(term_cols as u16, term_rows as u16);
 
         Ok(Self {
             terminal,
             should_quit: false,
             input_mode: InputMode::Normal,
             focus: FocusManager::new(),
-            terminal_widget: TerminalWidget::new(term_cols, term_rows),
             process_monitor: ProcessMonitor::new(),
             menu,
             stream_manager,
             llm_manager,
             llm_response_buffer: String::new(),
-            pty_tx: None,
-            pty_resize_tx: None,
             clipboard,
             last_tick: Instant::now(),
             tool_executor,
@@ -161,7 +158,8 @@ impl App {
             tool_result_rx: None,
             config_manager,
             config_watcher,
-            tab_manager: TabManager::new(),
+            tab_manager,
+            pty_receivers: Vec::new(),
             conversation_viewer: ConversationViewer::new(),
             show_conversation: false,
             stream_viewer: StreamViewer::new(),
@@ -180,82 +178,72 @@ impl App {
         (terminal_width as usize, terminal_height as usize)
     }
 
-    pub fn spawn_pty(&mut self) -> Result<mpsc::UnboundedReceiver<PtyEvent>> {
-        let pty = PtyHandle::spawn()?;
+    /// Spawn PTY for the main tab (TRC-005)
+    /// This is called once at startup for backward compatibility
+    pub fn spawn_pty(&mut self) -> Result<()> {
+        // Spawn PTY for the main tab (tab 0)
+        let main_tab_id = self.tab_manager.active_tab().id();
+        if let Some(rx) = self.tab_manager.spawn_pty_for_tab(main_tab_id)? {
+            self.pty_receivers.push(rx);
+        }
+        Ok(())
+    }
 
-        let size = self.terminal.size().map_err(|e| RidgeError::Terminal(e.to_string()))?;
-        let area = Rect::new(0, 0, size.width, size.height);
-        let (cols, rows) = Self::calculate_terminal_size(area);
-        pty.resize(cols as u16, rows as u16)?;
+    /// Spawn PTY for a new tab (TRC-005)
+    fn spawn_pty_for_tab(&mut self, tab_id: TabId) -> Result<()> {
+        if let Some(rx) = self.tab_manager.spawn_pty_for_tab(tab_id)? {
+            self.pty_receivers.push(rx);
+        }
+        Ok(())
+    }
 
-        let (tx, rx) = mpsc::unbounded_channel();
-
-        let (write_tx, write_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        self.pty_tx = Some(write_tx);
-
-        let (resize_tx, resize_rx) = std_mpsc::channel::<(u16, u16)>();
-        self.pty_resize_tx = Some(resize_tx);
-
-        std::thread::spawn(move || {
-            let mut pty = pty;
-            let mut buf = [0u8; 4096];
-            let mut write_rx = write_rx;
-
-            loop {
-                if let Some(code) = pty.try_wait() {
-                    let _ = tx.send(PtyEvent::Exited(code));
-                    break;
-                }
-
-                while let Ok((cols, rows)) = resize_rx.try_recv() {
-                    let _ = pty.resize(cols, rows);
-                }
-
-                while let Ok(data) = write_rx.try_recv() {
-                    let _ = pty.write(&data);
-                }
-
-                match pty.try_read(&mut buf) {
-                    Ok(0) => {
-                        std::thread::sleep(Duration::from_millis(10));
+    /// Poll all PTY event receivers (TRC-005)
+    fn poll_pty_events(&mut self) {
+        // Collect events first to avoid borrow issues
+        let mut events: Vec<(TabId, PtyEvent)> = Vec::new();
+        
+        for rx in &mut self.pty_receivers {
+            while let Ok(event) = rx.try_recv() {
+                events.push(event);
+            }
+        }
+        
+        // Process collected events
+        for (tab_id, event) in events {
+            match event {
+                PtyEvent::Output(data) => {
+                    self.tab_manager.process_pty_output(tab_id, &data);
+                    // Mark tab as having activity if not active
+                    if tab_id != self.tab_manager.active_tab().id() {
+                        self.tab_manager.set_tab_activity(tab_id, true);
                     }
-                    Ok(n) => {
-                        let _ = tx.send(PtyEvent::Output(buf[..n].to_vec()));
+                }
+                PtyEvent::Exited(_code) => {
+                    self.tab_manager.mark_pty_dead(tab_id);
+                    // If main tab (id 0) dies, quit the app
+                    if tab_id == 0 {
+                        self.should_quit = true;
                     }
-                    Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(Duration::from_millis(10));
-                    }
-                    Err(e) => {
-                        let _ = tx.send(PtyEvent::Error(e));
-                        break;
+                }
+                PtyEvent::Error(_) => {
+                    self.tab_manager.mark_pty_dead(tab_id);
+                    if tab_id == 0 {
+                        self.should_quit = true;
                     }
                 }
             }
-        });
-
-        Ok(rx)
+        }
     }
 
-    pub fn run(&mut self, mut pty_rx: mpsc::UnboundedReceiver<PtyEvent>) -> Result<()> {
+    pub fn run(&mut self) -> Result<()> {
         let mut stream_rx = self.stream_manager.take_event_rx();
         let mut llm_rx = self.llm_manager.take_event_rx();
         
         loop {
             self.draw()?;
 
-            while let Ok(pty_event) = pty_rx.try_recv() {
-                match pty_event {
-                    PtyEvent::Output(data) => {
-                        self.terminal_widget.update(&Action::PtyOutput(data));
-                    }
-                    PtyEvent::Exited(_code) => {
-                        self.should_quit = true;
-                    }
-                    PtyEvent::Error(_) => {
-                        self.should_quit = true;
-                    }
-                }
-            }
+            // Poll PTY events from all tabs (TRC-005)
+            self.poll_pty_events();
 
             if let Some(ref mut rx) = stream_rx {
                 while let Ok(stream_event) = rx.try_recv() {
@@ -512,6 +500,9 @@ impl App {
         let theme = self.config_manager.theme().clone();
         let messages = self.llm_manager.conversation().to_vec();
         let streaming_buffer = self.llm_response_buffer.clone();
+        
+        // Get active tab's PTY session for rendering (TRC-005)
+        let active_tab_id = self.tab_manager.active_tab().id();
 
         self.terminal
             .draw(|frame| {
@@ -547,18 +538,21 @@ impl App {
                     .split(main_chunks[1]);
 
                 // Left area: split between terminal and conversation if conversation is visible
+                // Use active tab's terminal widget (TRC-005)
                 if show_conversation {
                     let left_chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
                         .split(main_chunks[0]);
 
-                    self.terminal_widget.render(
-                        frame,
-                        left_chunks[0],
-                        focus.is_focused(FocusArea::Terminal),
-                        &theme,
-                    );
+                    if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
+                        session.terminal().render(
+                            frame,
+                            left_chunks[0],
+                            focus.is_focused(FocusArea::Terminal),
+                            &theme,
+                        );
+                    }
 
                     self.conversation_viewer.render_conversation(
                         frame,
@@ -574,7 +568,9 @@ impl App {
                             .borders(ratatui::widgets::Borders::ALL);
                         block.inner(left_chunks[0])
                     };
-                    self.terminal_widget.set_inner_area(term_inner);
+                    if let Some(session) = self.tab_manager.get_pty_session_mut(active_tab_id) {
+                        session.terminal_mut().set_inner_area(term_inner);
+                    }
 
                     let conv_inner = {
                         let block = ratatui::widgets::Block::default()
@@ -583,19 +579,23 @@ impl App {
                     };
                     self.conversation_viewer.set_inner_area(conv_inner);
                 } else {
-                    self.terminal_widget.render(
-                        frame,
-                        main_chunks[0],
-                        focus.is_focused(FocusArea::Terminal),
-                        &theme,
-                    );
+                    if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
+                        session.terminal().render(
+                            frame,
+                            main_chunks[0],
+                            focus.is_focused(FocusArea::Terminal),
+                            &theme,
+                        );
+                    }
 
                     let term_inner = {
                         let block = ratatui::widgets::Block::default()
                             .borders(ratatui::widgets::Borders::ALL);
                         block.inner(main_chunks[0])
                     };
-                    self.terminal_widget.set_inner_area(term_inner);
+                    if let Some(session) = self.tab_manager.get_pty_session_mut(active_tab_id) {
+                        session.terminal_mut().set_inner_area(term_inner);
+                    }
                 }
 
                 self.process_monitor.render(
@@ -689,12 +689,17 @@ impl App {
                     return Some(action);
                 }
                 
-                // Copy with selection (special handling)
+                // Copy with selection (special handling) - use active tab's terminal (TRC-005)
                 if key.code == KeyCode::Char('c')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
-                    && self.terminal_widget.has_selection()
                 {
-                    return Some(Action::Copy);
+                    let has_selection = self.tab_manager
+                        .active_pty_session()
+                        .map(|s| s.terminal().has_selection())
+                        .unwrap_or(false);
+                    if has_selection {
+                        return Some(Action::Copy);
+                    }
                 }
 
                 // Pass through to PTY
@@ -758,8 +763,13 @@ impl App {
                 MouseEventKind::Down(MouseButton::Left)
                 | MouseEventKind::Drag(MouseButton::Left)
                 | MouseEventKind::Up(MouseButton::Left) => {
-                    self.terminal_widget
-                        .handle_event(&CrosstermEvent::Mouse(mouse))
+                    // Use active tab's terminal widget (TRC-005)
+                    if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                        session.terminal_mut()
+                            .handle_event(&CrosstermEvent::Mouse(mouse))
+                    } else {
+                        None
+                    }
                 }
                 MouseEventKind::ScrollUp => Some(Action::ScrollUp(3)),
                 MouseEventKind::ScrollDown => Some(Action::ScrollDown(3)),
@@ -785,7 +795,10 @@ impl App {
             Action::EnterPtyMode => {
                 self.input_mode = InputMode::PtyRaw;
                 self.focus.focus(FocusArea::Terminal);
-                self.terminal_widget.scroll_to_bottom();
+                // Scroll active tab's terminal to bottom (TRC-005)
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().scroll_to_bottom();
+                }
             }
             Action::EnterNormalMode => {
                 self.input_mode = InputMode::Normal;
@@ -812,51 +825,64 @@ impl App {
                 self.focus.focus(area);
             }
             Action::PtyInput(data) => {
-                if let Some(ref tx) = self.pty_tx {
-                    let _ = tx.send(data);
-                }
+                // Write to active tab's PTY (TRC-005)
+                self.tab_manager.write_to_active_pty(data);
             }
-            Action::PtyOutput(data) => {
-                self.terminal_widget.update(&Action::PtyOutput(data));
+            Action::PtyOutput(_data) => {
+                // PTY output is now handled by poll_pty_events (TRC-005)
+                // This action is kept for backward compatibility but not used directly
             }
             Action::PtyResize { cols, rows } => {
-                self.terminal_widget.update(&Action::PtyResize { cols, rows });
-                if let Some(ref tx) = self.pty_resize_tx {
-                    let _ = tx.send((cols, rows));
-                }
+                // Resize all PTY sessions (TRC-005)
+                self.tab_manager.set_terminal_size(cols, rows);
             }
             Action::ScrollUp(n) => {
-                self.terminal_widget.update(&Action::ScrollUp(n));
+                // Scroll active tab's terminal (TRC-005)
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().update(&Action::ScrollUp(n));
+                }
             }
             Action::ScrollDown(n) => {
-                self.terminal_widget.update(&Action::ScrollDown(n));
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().update(&Action::ScrollDown(n));
+                }
             }
             Action::ScrollPageUp => {
-                self.terminal_widget.update(&Action::ScrollPageUp);
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().update(&Action::ScrollPageUp);
+                }
             }
             Action::ScrollPageDown => {
-                self.terminal_widget.update(&Action::ScrollPageDown);
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().update(&Action::ScrollPageDown);
+                }
             }
             Action::ScrollToTop => {
-                self.terminal_widget.update(&Action::ScrollToTop);
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().update(&Action::ScrollToTop);
+                }
             }
             Action::ScrollToBottom => {
-                self.terminal_widget.update(&Action::ScrollToBottom);
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    session.terminal_mut().update(&Action::ScrollToBottom);
+                }
             }
             Action::Copy => {
-                if let Some(text) = self.terminal_widget.get_selected_text() {
-                    if let Some(ref mut clipboard) = self.clipboard {
-                        let _ = clipboard.set_text(text);
+                // Copy from active tab's terminal (TRC-005)
+                if let Some(session) = self.tab_manager.active_pty_session_mut() {
+                    if let Some(text) = session.terminal().get_selected_text() {
+                        if let Some(ref mut clipboard) = self.clipboard {
+                            let _ = clipboard.set_text(text);
+                        }
                     }
+                    session.terminal_mut().clear_selection();
                 }
-                self.terminal_widget.clear_selection();
             }
             Action::Paste => {
+                // Paste to active tab's PTY (TRC-005)
                 if let Some(ref mut clipboard) = self.clipboard {
                     if let Ok(text) = clipboard.get_text() {
-                        if let Some(ref tx) = self.pty_tx {
-                            let _ = tx.send(text.into_bytes());
-                        }
+                        self.tab_manager.write_to_active_pty(text.into_bytes());
                     }
                 }
             }
@@ -1055,27 +1081,37 @@ impl App {
                 self.conversation_viewer.scroll_to_bottom();
             }
 
-            // Tab actions
+            // Tab actions (TRC-005: Per-tab PTY isolation)
             Action::TabCreate => {
-                self.tab_manager.create_tab_default();
+                let new_tab_id = self.tab_manager.create_tab_default();
+                // Spawn PTY for the new tab
+                if let Err(e) = self.spawn_pty_for_tab(new_tab_id) {
+                    tracing::error!("Failed to spawn PTY for new tab {}: {}", new_tab_id, e);
+                }
             }
             Action::TabClose => {
                 self.tab_manager.close_active_tab();
+                // PTY cleanup is handled by TabManager::close_tab
             }
             Action::TabCloseIndex(idx) => {
                 if let Some(tab) = self.tab_manager.tabs().get(idx) {
                     let id = tab.id();
                     self.tab_manager.close_tab(id);
+                    // PTY cleanup is handled by TabManager::close_tab
                 }
             }
             Action::TabNext => {
                 self.tab_manager.next_tab();
+                // Clear activity indicator when switching to a tab
+                self.tab_manager.clear_active_activity();
             }
             Action::TabPrev => {
                 self.tab_manager.prev_tab();
+                self.tab_manager.clear_active_activity();
             }
             Action::TabSelect(idx) => {
                 self.tab_manager.select(idx);
+                self.tab_manager.clear_active_activity();
             }
             Action::TabRename(name) => {
                 self.tab_manager.rename_active_tab(name);

@@ -16,8 +16,9 @@ fn main() -> Result<()> {
     color_eyre::install()?;
 
     let mut app = app::App::new()?;
-    let pty_rx = app.spawn_pty()?;
-    app.run(pty_rx)?;
+    // TRC-005: spawn_pty now spawns PTY for the main tab
+    app.spawn_pty()?;
+    app.run()?;
 
     Ok(())
 }
