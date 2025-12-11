@@ -295,6 +295,23 @@ impl Default for KeybindingsConfig {
             "p".to_string(),
             ActionBinding { action: "paste".to_string(), args: vec![] },
         );
+        // Tab management
+        normal.bindings.insert(
+            "C-t".to_string(),
+            ActionBinding { action: "tab_create".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-w".to_string(),
+            ActionBinding { action: "tab_close".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-tab".to_string(),
+            ActionBinding { action: "tab_next".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-S-tab".to_string(),
+            ActionBinding { action: "tab_prev".to_string(), args: vec![] },
+        );
         
         let mut pty_raw = ModeBindings::default();
         pty_raw.bindings.insert(
@@ -396,6 +413,19 @@ impl KeybindingsConfig {
             "llm_cancel" => Some(Action::LlmCancel),
             "llm_clear_conversation" => Some(Action::LlmClearConversation),
             "tool_toggle_dangerous_mode" => Some(Action::ToolToggleDangerousMode),
+            "tab_create" => Some(Action::TabCreate),
+            "tab_close" => Some(Action::TabClose),
+            "tab_next" => Some(Action::TabNext),
+            "tab_prev" => Some(Action::TabPrev),
+            "tab_select" => {
+                let idx = args.first().and_then(|s| s.parse().ok()).unwrap_or(0);
+                Some(Action::TabSelect(idx))
+            }
+            "tab_rename" => {
+                let name = args.first().cloned().unwrap_or_default();
+                Some(Action::TabRename(name))
+            }
+            "config_reload" => Some(Action::ConfigReload),
             _ => None,
         }
     }

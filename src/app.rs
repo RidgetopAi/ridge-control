@@ -591,22 +591,18 @@ impl App {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
         match &self.input_mode {
             InputMode::Confirm { .. } => {
-                // Handle confirmation dialog input
                 self.confirm_dialog.handle_event(&CrosstermEvent::Key(key))
             }
             InputMode::CommandPalette => {
-                // Handle command palette input - delegate to component
                 self.command_palette.handle_event(&CrosstermEvent::Key(key))
             }
             InputMode::PtyRaw => {
-                if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return Some(Action::EnterNormalMode);
+                // First check configurable keybindings
+                if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
+                    return Some(action);
                 }
-
-                if key.code == KeyCode::Char('v') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return Some(Action::Paste);
-                }
-
+                
+                // Copy with selection (special handling)
                 if key.code == KeyCode::Char('c')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
                     && self.terminal_widget.has_selection()
@@ -614,6 +610,7 @@ impl App {
                     return Some(Action::Copy);
                 }
 
+                // Pass through to PTY
                 let bytes = key_to_bytes(key);
                 if !bytes.is_empty() {
                     return Some(Action::PtyInput(bytes));
@@ -621,70 +618,34 @@ impl App {
                 None
             }
             InputMode::Normal => {
-                match key.code {
-                    KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Some(Action::Quit);
-                    }
-                    KeyCode::Char('q') => return Some(Action::Quit),
-                    KeyCode::Tab if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Some(Action::TabNext);
-                    }
-                    KeyCode::BackTab if key.modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                        return Some(Action::TabPrev);
-                    }
-                    KeyCode::Tab => return Some(Action::FocusNext),
-                    KeyCode::BackTab => return Some(Action::FocusPrev),
-                    // ':' opens command palette (Helix/Vim style)
-                    KeyCode::Char(':') => return Some(Action::OpenCommandPalette),
-                    // Ctrl+T creates new tab
-                    KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Some(Action::TabCreate);
-                    }
-                    // Ctrl+W closes active tab
-                    KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                        return Some(Action::TabClose);
-                    }
-                    // Alt+1 through Alt+9 for direct tab selection
-                    KeyCode::Char(c @ '1'..='9') if key.modifiers.contains(KeyModifiers::ALT) => {
+                // First check configurable keybindings for global actions
+                if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
+                    return Some(action);
+                }
+                
+                // Alt+1 through Alt+9 for direct tab selection (hardcoded for convenience)
+                if let KeyCode::Char(c @ '1'..='9') = key.code {
+                    if key.modifiers.contains(KeyModifiers::ALT) {
                         let idx = (c as usize) - ('1' as usize);
                         return Some(Action::TabSelect(idx));
                     }
-                    _ => {}
                 }
 
+                // Focus-specific key handling
                 match self.focus.current() {
-                    FocusArea::Terminal => match key.code {
-                        KeyCode::Enter => Some(Action::EnterPtyMode),
-                        KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp(1)),
-                        KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown(1)),
-                        KeyCode::PageUp => Some(Action::ScrollPageUp),
-                        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            Some(Action::ScrollPageUp)
-                        }
-                        KeyCode::PageDown => Some(Action::ScrollPageDown),
-                        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                            Some(Action::ScrollPageDown)
-                        }
-                        KeyCode::Char('g') => Some(Action::ScrollToTop),
-                        KeyCode::Char('G') => Some(Action::ScrollToBottom),
-                        KeyCode::Char('y') => Some(Action::Copy),
-                        KeyCode::Char('p') => Some(Action::Paste),
-                        _ => None,
-                    },
+                    FocusArea::Terminal => None,
                     FocusArea::ProcessMonitor => {
                         self.process_monitor.handle_event(&CrosstermEvent::Key(key))
                     }
                     FocusArea::Menu => {
                         self.menu.handle_event(&CrosstermEvent::Key(key))
                     }
-                    // Overlay areas - not currently in focus ring
                     FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
                 }
             }
-            // Insert mode for text input in filters/search
             InputMode::Insert { .. } => {
-                if key.code == KeyCode::Esc {
-                    return Some(Action::EnterNormalMode);
+                if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
+                    return Some(action);
                 }
                 None
             }
