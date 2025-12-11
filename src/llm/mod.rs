@@ -4,6 +4,7 @@ pub mod anthropic;
 pub mod openai;
 pub mod gemini;
 pub mod grok;
+pub mod groq;
 pub mod manager;
 pub mod tools;
 
