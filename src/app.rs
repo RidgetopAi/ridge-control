@@ -102,7 +102,11 @@ impl App {
         stream_manager.load_streams(&streams_config);
 
         let mut menu = Menu::new();
-        menu.set_stream_count(stream_manager.clients().len());
+        let stream_count = stream_manager.clients().len();
+        menu.set_stream_count(stream_count);
+        
+        // Initialize selected_stream_index to 0 if streams exist
+        let initial_stream_index = if stream_count > 0 { Some(0) } else { None };
 
         let llm_manager = LLMManager::new();
         
@@ -162,7 +166,7 @@ impl App {
             show_conversation: false,
             stream_viewer: StreamViewer::new(),
             show_stream_viewer: false,
-            selected_stream_index: None,
+            selected_stream_index: initial_stream_index,
         })
     }
 
@@ -858,9 +862,19 @@ impl App {
             }
             Action::MenuSelectNext => {
                 self.menu.update(&Action::MenuSelectNext);
+                // Sync selected_stream_index with menu selection
+                let idx = self.menu.selected_index();
+                self.selected_stream_index = Some(idx);
             }
             Action::MenuSelectPrev => {
                 self.menu.update(&Action::MenuSelectPrev);
+                // Sync selected_stream_index with menu selection
+                let idx = self.menu.selected_index();
+                self.selected_stream_index = Some(idx);
+            }
+            Action::MenuSelected(idx) => {
+                // Direct selection update (e.g., from mouse click)
+                self.selected_stream_index = Some(idx);
             }
             Action::StreamConnect(idx) => {
                 if let Some(client) = self.stream_manager.clients().get(idx) {
@@ -888,7 +902,14 @@ impl App {
             Action::StreamRefresh => {
                 let config = StreamsConfig::load();
                 self.stream_manager.load_streams(&config);
-                self.menu.set_stream_count(self.stream_manager.clients().len());
+                let count = self.stream_manager.clients().len();
+                self.menu.set_stream_count(count);
+                // Reset selected_stream_index if out of bounds or no streams
+                if count == 0 {
+                    self.selected_stream_index = None;
+                } else if self.selected_stream_index.map_or(true, |idx| idx >= count) {
+                    self.selected_stream_index = Some(0);
+                }
             }
             Action::StreamViewerShow(idx) => {
                 self.selected_stream_index = Some(idx);

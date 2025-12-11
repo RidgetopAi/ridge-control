@@ -52,6 +52,8 @@ pub enum Action {
     // Menu actions
     MenuSelectNext,
     MenuSelectPrev,
+    /// Notify that menu selection changed to specific index
+    MenuSelected(usize),
 
     // Stream actions
     StreamConnect(usize),

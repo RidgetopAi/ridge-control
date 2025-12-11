@@ -82,8 +82,10 @@ impl Menu {
             MouseEventKind::Down(MouseButton::Left) => {
                 if relative_y < self.stream_count {
                     self.selected = relative_y;
+                    Some(Action::MenuSelected(relative_y))
+                } else {
+                    None
                 }
-                None
             }
             MouseEventKind::ScrollUp => Some(Action::MenuSelectPrev),
             MouseEventKind::ScrollDown => Some(Action::MenuSelectNext),
