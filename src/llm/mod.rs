@@ -1,6 +1,7 @@
 pub mod types;
 pub mod provider;
 pub mod anthropic;
+pub mod openai;
 pub mod manager;
 pub mod tools;
 
