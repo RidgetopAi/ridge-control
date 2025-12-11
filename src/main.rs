@@ -1,6 +1,7 @@
 mod action;
 mod app;
 mod components;
+mod config;
 mod error;
 mod event;
 mod input;

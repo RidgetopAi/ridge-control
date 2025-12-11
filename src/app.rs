@@ -23,6 +23,7 @@ use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::terminal::TerminalWidget;
 use crate::components::Component;
+use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode};
 use crate::error::{Result, RidgeError};
 use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
@@ -63,6 +64,9 @@ pub struct App {
     current_tool_input: String,
     // Tool execution result receiver
     tool_result_rx: Option<mpsc::UnboundedReceiver<std::result::Result<crate::llm::ToolResult, crate::llm::ToolError>>>,
+    // Configuration system
+    config_manager: ConfigManager,
+    config_watcher: Option<ConfigWatcherMode>,
 }
 
 impl App {
@@ -95,6 +99,26 @@ impl App {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
         });
         let tool_executor = ToolExecutor::new(working_dir);
+        
+        // Initialize configuration system
+        let config_manager = ConfigManager::new()?;
+        
+        // Set up config watcher if enabled
+        let config_watcher = if config_manager.app_config().general.watch_config {
+            let debounce_ms = config_manager.app_config().general.config_watch_debounce_ms;
+            match ConfigWatcherMode::notify(config_manager.config_dir(), debounce_ms) {
+                Ok(watcher) => Some(watcher),
+                Err(e) => {
+                    tracing::warn!("Failed to set up notify watcher, falling back to tick-based: {}", e);
+                    Some(ConfigWatcherMode::tick(
+                        config_manager.config_dir().to_path_buf(),
+                        5000,
+                    ))
+                }
+            }
+        } else {
+            None
+        };
 
         Ok(Self {
             terminal,
@@ -119,6 +143,8 @@ impl App {
             current_tool_name: None,
             current_tool_input: String::new(),
             tool_result_rx: None,
+            config_manager,
+            config_watcher,
         })
     }
 
@@ -254,6 +280,24 @@ impl App {
             if self.last_tick.elapsed() >= Duration::from_millis(TICK_INTERVAL_MS) {
                 self.dispatch(Action::Tick)?;
                 self.last_tick = Instant::now();
+            }
+            
+            // Poll config watcher for file changes
+            let config_events: Vec<_> = if let Some(ref mut watcher) = self.config_watcher {
+                watcher.poll_events()
+            } else {
+                Vec::new()
+            };
+            
+            for event in config_events {
+                match event {
+                    ConfigEvent::Changed(path) => {
+                        self.dispatch(Action::ConfigChanged(path))?;
+                    }
+                    ConfigEvent::Error(msg) => {
+                        tracing::warn!("Config watcher error: {}", msg);
+                    }
+                }
             }
 
             if self.should_quit {
@@ -831,6 +875,19 @@ impl App {
                 self.tool_executor.set_dangerous_mode(!current);
             }
             
+            // Config actions
+            Action::ConfigChanged(path) => {
+                tracing::info!("Config file changed: {}", path.display());
+                self.config_manager.reload_file(&path);
+            }
+            Action::ConfigReload => {
+                tracing::info!("Reloading all configuration files");
+                self.config_manager.reload_all();
+            }
+            Action::ConfigApplyTheme => {
+                tracing::debug!("Theme changes applied");
+            }
+            
             _ => {}
         }
         Ok(())
@@ -842,6 +899,10 @@ impl App {
 
     pub fn llm_response_buffer(&self) -> &str {
         &self.llm_response_buffer
+    }
+    
+    pub fn config(&self) -> &ConfigManager {
+        &self.config_manager
     }
 }
 

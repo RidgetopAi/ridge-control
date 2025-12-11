@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::input::focus::FocusArea;
 use crate::llm::{LLMError, StreamChunk, PendingToolUse, ToolResult};
 
@@ -91,6 +93,14 @@ pub enum Action {
     ToolResult(ToolResult),
     /// Toggle dangerous mode for tool execution
     ToolToggleDangerousMode,
+
+    // Config actions
+    /// Configuration file changed (hot-reload trigger)
+    ConfigChanged(PathBuf),
+    /// Reload all configuration files
+    ConfigReload,
+    /// Apply theme changes
+    ConfigApplyTheme,
 
     None,
 }
