@@ -34,6 +34,7 @@ use crate::llm::{
 };
 use crate::pty::PtyHandle;
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
+use crate::tabs::{TabManager, TabBar};
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -67,6 +68,8 @@ pub struct App {
     // Configuration system
     config_manager: ConfigManager,
     config_watcher: Option<ConfigWatcherMode>,
+    // Tab system
+    tab_manager: TabManager,
 }
 
 impl App {
@@ -145,6 +148,7 @@ impl App {
             tool_result_rx: None,
             config_manager,
             config_watcher,
+            tab_manager: TabManager::new(),
         })
     }
 
@@ -483,15 +487,34 @@ impl App {
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
+        let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
 
         self.terminal
             .draw(|frame| {
                 let size = frame.area();
 
+                // Split: optional tab bar at top, then main content
+                let (tab_bar_area, content_area) = if show_tabs {
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Length(1), Constraint::Min(0)])
+                        .split(size);
+                    (chunks[0], chunks[1])
+                } else {
+                    // No tab bar - use full area
+                    (Rect::default(), size)
+                };
+
+                // Render tab bar if visible
+                if show_tabs {
+                    let tab_bar = TabBar::from_manager(&self.tab_manager);
+                    frame.render_widget(tab_bar, tab_bar_area);
+                }
+
                 let main_chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
-                    .split(size);
+                    .split(content_area);
 
                 let right_chunks = Layout::default()
                     .direction(Direction::Vertical)
@@ -603,10 +626,29 @@ impl App {
                         return Some(Action::Quit);
                     }
                     KeyCode::Char('q') => return Some(Action::Quit),
+                    KeyCode::Tab if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Some(Action::TabNext);
+                    }
+                    KeyCode::BackTab if key.modifiers.contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+                        return Some(Action::TabPrev);
+                    }
                     KeyCode::Tab => return Some(Action::FocusNext),
                     KeyCode::BackTab => return Some(Action::FocusPrev),
                     // ':' opens command palette (Helix/Vim style)
                     KeyCode::Char(':') => return Some(Action::OpenCommandPalette),
+                    // Ctrl+T creates new tab
+                    KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Some(Action::TabCreate);
+                    }
+                    // Ctrl+W closes active tab
+                    KeyCode::Char('w') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        return Some(Action::TabClose);
+                    }
+                    // Alt+1 through Alt+9 for direct tab selection
+                    KeyCode::Char(c @ '1'..='9') if key.modifiers.contains(KeyModifiers::ALT) => {
+                        let idx = (c as usize) - ('1' as usize);
+                        return Some(Action::TabSelect(idx));
+                    }
                     _ => {}
                 }
 
@@ -886,6 +928,35 @@ impl App {
             }
             Action::ConfigApplyTheme => {
                 tracing::debug!("Theme changes applied");
+            }
+            
+            // Tab actions
+            Action::TabCreate => {
+                self.tab_manager.create_tab_default();
+            }
+            Action::TabClose => {
+                self.tab_manager.close_active_tab();
+            }
+            Action::TabCloseIndex(idx) => {
+                if let Some(tab) = self.tab_manager.tabs().get(idx) {
+                    let id = tab.id();
+                    self.tab_manager.close_tab(id);
+                }
+            }
+            Action::TabNext => {
+                self.tab_manager.next_tab();
+            }
+            Action::TabPrev => {
+                self.tab_manager.prev_tab();
+            }
+            Action::TabSelect(idx) => {
+                self.tab_manager.select(idx);
+            }
+            Action::TabRename(name) => {
+                self.tab_manager.rename_active_tab(name);
+            }
+            Action::TabMove { from, to } => {
+                self.tab_manager.move_tab(from, to);
             }
             
             _ => {}

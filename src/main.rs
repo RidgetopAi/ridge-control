@@ -8,6 +8,7 @@ mod input;
 mod llm;
 mod pty;
 mod streams;
+mod tabs;
 
 use color_eyre::eyre::Result;
 

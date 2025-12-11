@@ -102,5 +102,23 @@ pub enum Action {
     /// Apply theme changes
     ConfigApplyTheme,
 
+    // Tab actions
+    /// Create a new tab
+    TabCreate,
+    /// Close the active tab (if not main)
+    TabClose,
+    /// Close a specific tab by index
+    TabCloseIndex(usize),
+    /// Switch to next tab
+    TabNext,
+    /// Switch to previous tab
+    TabPrev,
+    /// Switch to tab by index (0-based)
+    TabSelect(usize),
+    /// Rename the active tab
+    TabRename(String),
+    /// Move tab from one position to another
+    TabMove { from: usize, to: usize },
+
     None,
 }
