@@ -17,6 +17,7 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 use crate::action::Action;
+use crate::components::command_palette::CommandPalette;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
@@ -54,6 +55,8 @@ pub struct App {
     tool_executor: ToolExecutor,
     confirm_dialog: ConfirmDialog,
     pending_tool: Option<PendingToolUse>,
+    // Command palette
+    command_palette: CommandPalette,
     // Tracking tool use during streaming
     current_tool_id: Option<String>,
     current_tool_name: Option<String>,
@@ -111,6 +114,7 @@ impl App {
             tool_executor,
             confirm_dialog: ConfirmDialog::new(),
             pending_tool: None,
+            command_palette: CommandPalette::new(),
             current_tool_id: None,
             current_tool_name: None,
             current_tool_input: String::new(),
@@ -434,6 +438,7 @@ impl App {
         let focus = self.focus.clone();
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
         let show_confirm = self.confirm_dialog.is_visible();
+        let show_palette = self.command_palette.is_visible();
 
         self.terminal
             .draw(|frame| {
@@ -487,9 +492,13 @@ impl App {
                 };
                 self.menu.set_inner_area(menu_inner);
                 
-                // Render confirmation dialog as overlay if visible
+                // Render overlays (in order of z-index)
                 if show_confirm {
                     self.confirm_dialog.render(frame, size);
+                }
+                
+                if show_palette {
+                    self.command_palette.render(frame, size);
                 }
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
@@ -517,6 +526,10 @@ impl App {
             InputMode::Confirm { .. } => {
                 // Handle confirmation dialog input
                 self.confirm_dialog.handle_event(&CrosstermEvent::Key(key))
+            }
+            InputMode::CommandPalette => {
+                // Handle command palette input - delegate to component
+                self.command_palette.handle_event(&CrosstermEvent::Key(key))
             }
             InputMode::PtyRaw => {
                 if key.code == KeyCode::Esc && key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -548,6 +561,8 @@ impl App {
                     KeyCode::Char('q') => return Some(Action::Quit),
                     KeyCode::Tab => return Some(Action::FocusNext),
                     KeyCode::BackTab => return Some(Action::FocusPrev),
+                    // ':' opens command palette (Helix/Vim style)
+                    KeyCode::Char(':') => return Some(Action::OpenCommandPalette),
                     _ => {}
                 }
 
@@ -580,16 +595,8 @@ impl App {
                     FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
                 }
             }
-            // Insert and CommandPalette modes to be implemented in future instances
+            // Insert mode for text input in filters/search
             InputMode::Insert { .. } => {
-                // TODO: i[16]+ - Handle text input for filters/search
-                if key.code == KeyCode::Esc {
-                    return Some(Action::EnterNormalMode);
-                }
-                None
-            }
-            InputMode::CommandPalette => {
-                // TODO: i[16] - Nucleo fuzzy search integration
                 if key.code == KeyCode::Esc {
                     return Some(Action::EnterNormalMode);
                 }
@@ -634,6 +641,18 @@ impl App {
                 self.terminal_widget.scroll_to_bottom();
             }
             Action::EnterNormalMode => {
+                self.input_mode = InputMode::Normal;
+                // Also close command palette if open
+                if self.command_palette.is_visible() {
+                    self.command_palette.hide();
+                }
+            }
+            Action::OpenCommandPalette => {
+                self.command_palette.show();
+                self.input_mode = InputMode::CommandPalette;
+            }
+            Action::CloseCommandPalette => {
+                self.command_palette.hide();
                 self.input_mode = InputMode::Normal;
             }
             Action::FocusNext => {

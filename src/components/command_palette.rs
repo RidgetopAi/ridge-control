@@ -1,0 +1,464 @@
+use crossterm::event::{Event, KeyCode, KeyModifiers};
+use nucleo::{Config, Matcher, Utf32String};
+use ratatui::{
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+    Frame,
+};
+
+use crate::action::Action;
+
+/// A command that can be executed from the command palette
+#[derive(Debug, Clone)]
+pub struct Command {
+    /// Unique identifier for the command
+    pub id: &'static str,
+    /// Display name shown in palette
+    pub name: &'static str,
+    /// Brief description
+    pub description: &'static str,
+    /// The action to dispatch when selected
+    pub action: Action,
+}
+
+impl Command {
+    pub const fn new(id: &'static str, name: &'static str, description: &'static str, action: Action) -> Self {
+        Self { id, name, description, action }
+    }
+}
+
+/// Registry of all available commands
+pub struct CommandRegistry {
+    commands: Vec<Command>,
+}
+
+impl CommandRegistry {
+    pub fn new() -> Self {
+        Self {
+            commands: Self::default_commands(),
+        }
+    }
+
+    fn default_commands() -> Vec<Command> {
+        vec![
+            Command::new("quit", "Quit", "Exit Ridge-Control", Action::Quit),
+            Command::new("force_quit", "Force Quit", "Exit immediately without cleanup", Action::ForceQuit),
+            Command::new("focus_terminal", "Focus Terminal", "Switch focus to terminal pane", Action::FocusArea(crate::input::focus::FocusArea::Terminal)),
+            Command::new("focus_process_monitor", "Focus Process Monitor", "Switch focus to process monitor", Action::FocusArea(crate::input::focus::FocusArea::ProcessMonitor)),
+            Command::new("focus_menu", "Focus Menu", "Switch focus to menu pane", Action::FocusArea(crate::input::focus::FocusArea::Menu)),
+            Command::new("focus_next", "Focus Next", "Cycle to next pane", Action::FocusNext),
+            Command::new("focus_prev", "Focus Previous", "Cycle to previous pane", Action::FocusPrev),
+            Command::new("enter_pty_mode", "Enter PTY Mode", "Switch to PTY raw input mode", Action::EnterPtyMode),
+            Command::new("enter_normal_mode", "Enter Normal Mode", "Switch to normal navigation mode", Action::EnterNormalMode),
+            Command::new("scroll_up", "Scroll Up", "Scroll up one line", Action::ScrollUp(1)),
+            Command::new("scroll_down", "Scroll Down", "Scroll down one line", Action::ScrollDown(1)),
+            Command::new("scroll_page_up", "Scroll Page Up", "Scroll up one page", Action::ScrollPageUp),
+            Command::new("scroll_page_down", "Scroll Page Down", "Scroll down one page", Action::ScrollPageDown),
+            Command::new("scroll_top", "Scroll to Top", "Scroll to beginning", Action::ScrollToTop),
+            Command::new("scroll_bottom", "Scroll to Bottom", "Scroll to end", Action::ScrollToBottom),
+            Command::new("copy", "Copy", "Copy selected text to clipboard", Action::Copy),
+            Command::new("paste", "Paste", "Paste from clipboard", Action::Paste),
+            Command::new("process_refresh", "Refresh Processes", "Update process list", Action::ProcessRefresh),
+            Command::new("process_next", "Process Next", "Select next process", Action::ProcessSelectNext),
+            Command::new("process_prev", "Process Previous", "Select previous process", Action::ProcessSelectPrev),
+            Command::new("stream_refresh", "Refresh Streams", "Reload stream configuration", Action::StreamRefresh),
+            Command::new("llm_cancel", "Cancel LLM", "Cancel current LLM request", Action::LlmCancel),
+            Command::new("llm_clear", "Clear Conversation", "Clear LLM conversation history", Action::LlmClearConversation),
+            Command::new("toggle_dangerous_mode", "Toggle Dangerous Mode", "Enable/disable dangerous tool execution", Action::ToolToggleDangerousMode),
+        ]
+    }
+
+    pub fn commands(&self) -> &[Command] {
+        &self.commands
+    }
+
+    pub fn add_command(&mut self, cmd: Command) {
+        self.commands.push(cmd);
+    }
+}
+
+impl Default for CommandRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Fuzzy matcher result with score and indices
+struct MatchResult {
+    command_idx: usize,
+    score: u32,
+    indices: Vec<u32>,
+}
+
+/// Command Palette component with nucleo fuzzy matching
+pub struct CommandPalette {
+    visible: bool,
+    query: String,
+    registry: CommandRegistry,
+    matcher: Matcher,
+    filtered_results: Vec<MatchResult>,
+    list_state: ListState,
+}
+
+impl CommandPalette {
+    pub fn new() -> Self {
+        let config = Config::DEFAULT;
+        Self {
+            visible: false,
+            query: String::new(),
+            registry: CommandRegistry::new(),
+            matcher: Matcher::new(config),
+            filtered_results: Vec::new(),
+            list_state: ListState::default(),
+        }
+    }
+
+    pub fn is_visible(&self) -> bool {
+        self.visible
+    }
+
+    pub fn show(&mut self) {
+        self.visible = true;
+        self.query.clear();
+        self.update_filtered_results();
+        // Select first item
+        if !self.filtered_results.is_empty() {
+            self.list_state.select(Some(0));
+        }
+    }
+
+    pub fn hide(&mut self) {
+        self.visible = false;
+        self.query.clear();
+        self.filtered_results.clear();
+        self.list_state.select(None);
+    }
+
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    fn update_filtered_results(&mut self) {
+        self.filtered_results.clear();
+
+        if self.query.is_empty() {
+            // Show all commands when no query
+            for (idx, _) in self.registry.commands().iter().enumerate() {
+                self.filtered_results.push(MatchResult {
+                    command_idx: idx,
+                    score: 0,
+                    indices: Vec::new(),
+                });
+            }
+        } else {
+            // Fuzzy match against query
+            let pattern = nucleo::pattern::Pattern::parse(
+                &self.query,
+                nucleo::pattern::CaseMatching::Smart,
+                nucleo::pattern::Normalization::Smart,
+            );
+
+            for (idx, cmd) in self.registry.commands().iter().enumerate() {
+                // Match against both name and description
+                let name_utf32: Utf32String = cmd.name.into();
+                let desc_utf32: Utf32String = cmd.description.into();
+
+                let mut indices = Vec::new();
+                let name_score = pattern.indices(
+                    name_utf32.slice(..),
+                    &mut self.matcher,
+                    &mut indices,
+                );
+
+                // Also check description if name didn't match well
+                let desc_score = if name_score.is_none() {
+                    let mut desc_indices = Vec::new();
+                    pattern.indices(
+                        desc_utf32.slice(..),
+                        &mut self.matcher,
+                        &mut desc_indices,
+                    )
+                } else {
+                    None
+                };
+
+                // Use the best score
+                let final_score = name_score.or(desc_score);
+                if let Some(score) = final_score {
+                    self.filtered_results.push(MatchResult {
+                        command_idx: idx,
+                        score,
+                        indices,
+                    });
+                }
+            }
+
+            // Sort by score (higher is better)
+            self.filtered_results.sort_by(|a, b| b.score.cmp(&a.score));
+        }
+
+        // Reset selection to first item
+        if !self.filtered_results.is_empty() {
+            self.list_state.select(Some(0));
+        } else {
+            self.list_state.select(None);
+        }
+    }
+
+    fn select_next(&mut self) {
+        if self.filtered_results.is_empty() {
+            return;
+        }
+        let current = self.list_state.selected().unwrap_or(0);
+        let next = (current + 1) % self.filtered_results.len();
+        self.list_state.select(Some(next));
+    }
+
+    fn select_prev(&mut self) {
+        if self.filtered_results.is_empty() {
+            return;
+        }
+        let current = self.list_state.selected().unwrap_or(0);
+        let prev = if current == 0 {
+            self.filtered_results.len() - 1
+        } else {
+            current - 1
+        };
+        self.list_state.select(Some(prev));
+    }
+
+    fn execute_selected(&mut self) -> Option<Action> {
+        let selected_idx = self.list_state.selected()?;
+        let result = self.filtered_results.get(selected_idx)?;
+        let cmd = self.registry.commands().get(result.command_idx)?;
+        let action = cmd.action.clone();
+        self.hide();
+        Some(action)
+    }
+
+    pub fn handle_event(&mut self, event: &Event) -> Option<Action> {
+        if !self.visible {
+            return None;
+        }
+
+        if let Event::Key(key) = event {
+            match key.code {
+                KeyCode::Esc => {
+                    self.hide();
+                    return Some(Action::EnterNormalMode);
+                }
+                KeyCode::Enter => {
+                    return self.execute_selected();
+                }
+                KeyCode::Up | KeyCode::BackTab => {
+                    self.select_prev();
+                }
+                KeyCode::Down | KeyCode::Tab => {
+                    self.select_next();
+                }
+                KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.select_next();
+                }
+                KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                    self.select_prev();
+                }
+                KeyCode::Char(c) => {
+                    self.query.push(c);
+                    self.update_filtered_results();
+                }
+                KeyCode::Backspace => {
+                    self.query.pop();
+                    self.update_filtered_results();
+                }
+                _ => {}
+            }
+        }
+
+        None
+    }
+
+    pub fn render(&self, frame: &mut Frame, area: Rect) {
+        if !self.visible {
+            return;
+        }
+
+        // Calculate dialog size (centered, 60% width, 50% height)
+        let dialog_width = (area.width * 60 / 100).max(50).min(100);
+        let dialog_height = (area.height * 50 / 100).max(10).min(30);
+
+        let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
+        let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;
+
+        let dialog_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+        // Clear the area behind
+        frame.render_widget(Clear, dialog_area);
+
+        // Main block
+        let block = Block::default()
+            .title(" Command Palette ")
+            .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta));
+
+        let inner = block.inner(dialog_area);
+        frame.render_widget(block, dialog_area);
+
+        // Split inner area: input line at top, results below
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(1), // Input
+                Constraint::Length(1), // Separator/info
+                Constraint::Min(1),    // Results
+            ])
+            .split(inner);
+
+        // Input line with prompt
+        let input_line = Line::from(vec![
+            Span::styled(": ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(&self.query, Style::default().fg(Color::White)),
+            Span::styled("▎", Style::default().fg(Color::Cyan)), // Cursor
+        ]);
+        frame.render_widget(Paragraph::new(input_line), chunks[0]);
+
+        // Info line
+        let count = self.filtered_results.len();
+        let total = self.registry.commands().len();
+        let info = if self.query.is_empty() {
+            format!("{} commands", total)
+        } else {
+            format!("{}/{} matching", count, total)
+        };
+        let info_line = Paragraph::new(info)
+            .style(Style::default().fg(Color::DarkGray))
+            .alignment(Alignment::Right);
+        frame.render_widget(info_line, chunks[1]);
+
+        // Results list
+        let items: Vec<ListItem> = self
+            .filtered_results
+            .iter()
+            .map(|result| {
+                let cmd = &self.registry.commands()[result.command_idx];
+                self.render_command_item(cmd, &result.indices)
+            })
+            .collect();
+
+        let list = List::new(items)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Rgb(60, 60, 100))
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        // Clone list_state for rendering (ratatui requires &mut for StatefulWidget)
+        let mut list_state = self.list_state.clone();
+        frame.render_stateful_widget(list, chunks[2], &mut list_state);
+    }
+
+    fn render_command_item(&self, cmd: &Command, indices: &[u32]) -> ListItem<'_> {
+        let mut name_spans = Vec::new();
+
+        // Highlight matched characters in name
+        if indices.is_empty() {
+            name_spans.push(Span::styled(
+                cmd.name,
+                Style::default().fg(Color::White),
+            ));
+        } else {
+            let chars: Vec<char> = cmd.name.chars().collect();
+            let indices_set: std::collections::HashSet<u32> = indices.iter().copied().collect();
+
+            for (i, ch) in chars.iter().enumerate() {
+                let style = if indices_set.contains(&(i as u32)) {
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::White)
+                };
+                name_spans.push(Span::styled(ch.to_string(), style));
+            }
+        }
+
+        // Add description
+        name_spans.push(Span::styled(
+            format!("  {}", cmd.description),
+            Style::default().fg(Color::DarkGray),
+        ));
+
+        ListItem::new(Line::from(name_spans))
+    }
+}
+
+impl Default for CommandPalette {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_command_registry_has_default_commands() {
+        let registry = CommandRegistry::new();
+        assert!(!registry.commands().is_empty());
+        
+        // Check that quit command exists
+        let quit = registry.commands().iter().find(|c| c.id == "quit");
+        assert!(quit.is_some());
+    }
+
+    #[test]
+    fn test_command_palette_visibility() {
+        let mut palette = CommandPalette::new();
+        assert!(!palette.is_visible());
+        
+        palette.show();
+        assert!(palette.is_visible());
+        
+        palette.hide();
+        assert!(!palette.is_visible());
+    }
+
+    #[test]
+    fn test_fuzzy_filtering() {
+        let mut palette = CommandPalette::new();
+        palette.show();
+        
+        // Initially shows all commands
+        let initial_count = palette.filtered_results.len();
+        assert!(initial_count > 0);
+        
+        // Filter with "quit" should narrow results
+        palette.query = "quit".to_string();
+        palette.update_filtered_results();
+        
+        // Should have fewer or equal results
+        assert!(palette.filtered_results.len() <= initial_count);
+        // Should still have quit-related commands
+        assert!(!palette.filtered_results.is_empty());
+    }
+
+    #[test]
+    fn test_selection_navigation() {
+        let mut palette = CommandPalette::new();
+        palette.show();
+        
+        assert_eq!(palette.list_state.selected(), Some(0));
+        
+        palette.select_next();
+        assert_eq!(palette.list_state.selected(), Some(1));
+        
+        palette.select_prev();
+        assert_eq!(palette.list_state.selected(), Some(0));
+        
+        // Test wrap around
+        palette.select_prev();
+        assert_eq!(palette.list_state.selected(), Some(palette.filtered_results.len() - 1));
+    }
+}

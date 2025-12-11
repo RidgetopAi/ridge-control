@@ -25,6 +25,8 @@ pub enum Action {
 
     EnterPtyMode,
     EnterNormalMode,
+    OpenCommandPalette,
+    CloseCommandPalette,
 
     FocusNext,
     FocusPrev,
