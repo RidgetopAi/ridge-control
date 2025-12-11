@@ -66,6 +66,7 @@ impl Menu {
             KeyCode::Char('c') => Some(Action::StreamConnect(self.selected)),
             KeyCode::Char('d') => Some(Action::StreamDisconnect(self.selected)),
             KeyCode::Char('r') => Some(Action::StreamRefresh),
+            KeyCode::Char('v') => Some(Action::StreamViewerShow(self.selected)),
             _ => None,
         }
     }
@@ -95,7 +96,7 @@ impl Menu {
         let title_style = theme.title_style(focused);
 
         let title = if focused {
-            " Streams [↵=toggle] "
+            " Streams [↵=toggle v=view] "
         } else {
             " Streams "
         };

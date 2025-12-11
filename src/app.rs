@@ -22,6 +22,7 @@ use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
+use crate::components::stream_viewer::StreamViewer;
 use crate::components::terminal::TerminalWidget;
 use crate::components::Component;
 use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode};
@@ -74,6 +75,10 @@ pub struct App {
     // LLM conversation display
     conversation_viewer: ConversationViewer,
     show_conversation: bool,
+    // Stream viewer
+    stream_viewer: StreamViewer,
+    show_stream_viewer: bool,
+    selected_stream_index: Option<usize>,
 }
 
 impl App {
@@ -155,6 +160,9 @@ impl App {
             tab_manager: TabManager::new(),
             conversation_viewer: ConversationViewer::new(),
             show_conversation: false,
+            stream_viewer: StreamViewer::new(),
+            show_stream_viewer: false,
+            selected_stream_index: None,
         })
     }
 
@@ -495,6 +503,8 @@ impl App {
         let show_palette = self.command_palette.is_visible();
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
         let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty();
+        let show_stream_viewer = self.show_stream_viewer;
+        let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
         let messages = self.llm_manager.conversation().to_vec();
         let streaming_buffer = self.llm_response_buffer.clone();
@@ -613,6 +623,26 @@ impl App {
                 self.menu.set_inner_area(menu_inner);
                 
                 // Render overlays (in order of z-index)
+                
+                // Stream viewer overlay - takes right half of screen when visible
+                if show_stream_viewer {
+                    let stream_area = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(size)[1];
+                    
+                    let selected_stream = selected_stream_idx
+                        .and_then(|idx| streams.get(idx));
+                    
+                    self.stream_viewer.render_stream_themed(
+                        frame,
+                        stream_area,
+                        focus.is_focused(FocusArea::StreamViewer),
+                        selected_stream,
+                        &theme,
+                    );
+                }
+                
                 if show_confirm {
                     self.confirm_dialog.render(frame, size, &theme);
                 }
@@ -693,7 +723,20 @@ impl App {
                     FocusArea::Menu => {
                         self.menu.handle_event(&CrosstermEvent::Key(key))
                     }
-                    FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
+                    FocusArea::StreamViewer => {
+                        // Handle StreamViewer key events
+                        match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => Some(Action::StreamViewerScrollDown(1)),
+                            KeyCode::Char('k') | KeyCode::Up => Some(Action::StreamViewerScrollUp(1)),
+                            KeyCode::Char('g') => Some(Action::StreamViewerScrollToTop),
+                            KeyCode::Char('G') => Some(Action::StreamViewerScrollToBottom),
+                            KeyCode::PageUp => Some(Action::StreamViewerScrollUp(10)),
+                            KeyCode::PageDown => Some(Action::StreamViewerScrollDown(10)),
+                            KeyCode::Esc | KeyCode::Char('q') => Some(Action::StreamViewerHide),
+                            _ => None,
+                        }
+                    }
+                    FocusArea::ConfigPanel => None,
                 }
             }
             InputMode::Insert { .. } => {
@@ -846,6 +889,36 @@ impl App {
                 let config = StreamsConfig::load();
                 self.stream_manager.load_streams(&config);
                 self.menu.set_stream_count(self.stream_manager.clients().len());
+            }
+            Action::StreamViewerShow(idx) => {
+                self.selected_stream_index = Some(idx);
+                self.show_stream_viewer = true;
+                self.focus.focus(FocusArea::StreamViewer);
+            }
+            Action::StreamViewerHide => {
+                self.show_stream_viewer = false;
+                self.focus.focus(FocusArea::Menu);
+            }
+            Action::StreamViewerToggle => {
+                if self.show_stream_viewer {
+                    self.show_stream_viewer = false;
+                    self.focus.focus(FocusArea::Menu);
+                } else if self.selected_stream_index.is_some() {
+                    self.show_stream_viewer = true;
+                    self.focus.focus(FocusArea::StreamViewer);
+                }
+            }
+            Action::StreamViewerScrollUp(n) => {
+                self.stream_viewer.scroll_up(n);
+            }
+            Action::StreamViewerScrollDown(n) => {
+                self.stream_viewer.scroll_down(n);
+            }
+            Action::StreamViewerScrollToTop => {
+                self.stream_viewer.scroll_to_top();
+            }
+            Action::StreamViewerScrollToBottom => {
+                self.stream_viewer.scroll_to_bottom();
             }
             Action::ProcessRefresh
             | Action::ProcessSelectNext

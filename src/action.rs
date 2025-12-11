@@ -59,6 +59,17 @@ pub enum Action {
     StreamToggle(usize),
     StreamRefresh,
     StreamData(String, String),
+    /// Show stream viewer with selected stream index
+    StreamViewerShow(usize),
+    /// Hide stream viewer
+    StreamViewerHide,
+    /// Toggle stream viewer visibility
+    StreamViewerToggle,
+    /// Scroll stream viewer
+    StreamViewerScrollUp(u16),
+    StreamViewerScrollDown(u16),
+    StreamViewerScrollToTop,
+    StreamViewerScrollToBottom,
 
     // Process Monitor actions
     ProcessRefresh,

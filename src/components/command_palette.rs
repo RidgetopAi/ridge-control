@@ -65,6 +65,8 @@ impl CommandRegistry {
             Command::new("process_next", "Process Next", "Select next process", Action::ProcessSelectNext),
             Command::new("process_prev", "Process Previous", "Select previous process", Action::ProcessSelectPrev),
             Command::new("stream_refresh", "Refresh Streams", "Reload stream configuration", Action::StreamRefresh),
+            Command::new("stream_viewer_toggle", "Toggle Stream Viewer", "Show/hide stream viewer panel", Action::StreamViewerToggle),
+            Command::new("stream_viewer_hide", "Hide Stream Viewer", "Close stream viewer panel (Esc)", Action::StreamViewerHide),
             Command::new("llm_cancel", "Cancel LLM", "Cancel current LLM request", Action::LlmCancel),
             Command::new("llm_clear", "Clear Conversation", "Clear LLM conversation history", Action::LlmClearConversation),
             Command::new("conversation_toggle", "Toggle Conversation View", "Show/hide LLM conversation panel (Ctrl+L)", Action::ConversationToggle),
