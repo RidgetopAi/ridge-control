@@ -14,6 +14,7 @@ use ratatui::{
     widgets::{Block, Borders, Widget},
 };
 
+use crate::config::Theme;
 use super::{Tab, TabManager};
 
 /// Visual style configuration for the tab bar
@@ -84,6 +85,28 @@ impl TabBarStyle {
             close_icon: "󰅖",
         }
     }
+
+    /// Create TabBarStyle from Theme configuration
+    pub fn from_theme(theme: &Theme) -> Self {
+        Self {
+            background: theme.colors.background.to_color(),
+            inactive: Style::default()
+                .fg(theme.colors.muted.to_color())
+                .bg(theme.colors.background.to_color()),
+            active: Style::default()
+                .fg(theme.colors.foreground.to_color())
+                .bg(theme.focus.focused_border.to_color())
+                .add_modifier(Modifier::BOLD),
+            activity: Style::default()
+                .fg(theme.colors.warning.to_color())
+                .add_modifier(Modifier::BOLD),
+            separator: "│",
+            main_icon: "󰍜 ",
+            tab_icon: "󰓩 ",
+            activity_icon: "●",
+            close_icon: "󰅖",
+        }
+    }
 }
 
 /// Tab bar widget that renders all tabs
@@ -102,6 +125,17 @@ impl<'a> TabBar<'a> {
             tabs: manager.tabs(),
             active_index: manager.active_index(),
             style: TabBarStyle::default(),
+            show_indices: true,
+            show_close_buttons: true,
+        }
+    }
+
+    /// Create a new tab bar from a TabManager with theme-based styling
+    pub fn from_manager_themed(manager: &'a TabManager, theme: &Theme) -> Self {
+        Self {
+            tabs: manager.tabs(),
+            active_index: manager.active_index(),
+            style: TabBarStyle::from_theme(theme),
             show_indices: true,
             show_close_buttons: true,
         }

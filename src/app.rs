@@ -34,7 +34,7 @@ use crate::llm::{
 };
 use crate::pty::PtyHandle;
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
-use crate::tabs::{TabManager, TabBar};
+use crate::tabs::{TabManager, TabBar, TabBarStyle};
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -488,6 +488,7 @@ impl App {
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
+        let theme = self.config_manager.theme().clone();
 
         self.terminal
             .draw(|frame| {
@@ -507,7 +508,7 @@ impl App {
 
                 // Render tab bar if visible
                 if show_tabs {
-                    let tab_bar = TabBar::from_manager(&self.tab_manager);
+                    let tab_bar = TabBar::from_manager_themed(&self.tab_manager, &theme);
                     frame.render_widget(tab_bar, tab_bar_area);
                 }
 
@@ -525,17 +526,20 @@ impl App {
                     frame,
                     main_chunks[0],
                     focus.is_focused(FocusArea::Terminal),
+                    &theme,
                 );
                 self.process_monitor.render(
                     frame,
                     right_chunks[0],
                     focus.is_focused(FocusArea::ProcessMonitor),
+                    &theme,
                 );
                 self.menu.render_with_streams(
                     frame,
                     right_chunks[1],
                     focus.is_focused(FocusArea::Menu),
                     &streams,
+                    &theme,
                 );
 
                 let term_inner = {
@@ -561,11 +565,11 @@ impl App {
                 
                 // Render overlays (in order of z-index)
                 if show_confirm {
-                    self.confirm_dialog.render(frame, size);
+                    self.confirm_dialog.render(frame, size, &theme);
                 }
                 
                 if show_palette {
-                    self.command_palette.render(frame, size);
+                    self.command_palette.render(frame, size, &theme);
                 }
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;

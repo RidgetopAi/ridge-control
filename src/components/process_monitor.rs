@@ -12,6 +12,7 @@ use ratatui::{
 
 use crate::action::{Action, SortColumn, SortOrder};
 use crate::components::Component;
+use crate::config::Theme;
 
 #[derive(Debug, Clone)]
 pub struct ProcessInfo {
@@ -259,6 +260,39 @@ impl ProcessMonitor {
             .collect()
     }
 
+    fn header_spans_themed(&self, theme: &Theme) -> Vec<Span<'static>> {
+        let cols = [
+            (SortColumn::Pid, "PID"),
+            (SortColumn::Name, "NAME"),
+            (SortColumn::Cpu, "CPU%"),
+            (SortColumn::Memory, "MEM"),
+            (SortColumn::State, "STATE"),
+        ];
+
+        cols.iter()
+            .map(|(col, name)| {
+                let indicator = if *col == self.sort_column {
+                    match self.sort_order {
+                        SortOrder::Ascending => " ▲",
+                        SortOrder::Descending => " ▼",
+                    }
+                } else {
+                    ""
+                };
+
+                let style = if *col == self.sort_column {
+                    Style::default()
+                        .fg(theme.colors.accent.to_color())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme.process_monitor.header_fg.to_color())
+                };
+
+                Span::styled(format!("{}{}", name, indicator), style)
+            })
+            .collect()
+    }
+
     pub fn set_inner_area(&mut self, area: Rect) {
         self.inner_area = area;
     }
@@ -399,12 +433,8 @@ impl Component for ProcessMonitor {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = theme.border_style(focused);
 
         let title = if let ConfirmState::AwaitingKillConfirm(pid) = self.confirm_state {
             format!(" Kill PID {}? [y/n] ", pid)
@@ -415,15 +445,15 @@ impl Component for ProcessMonitor {
         };
 
         let title_style = if matches!(self.confirm_state, ConfirmState::AwaitingKillConfirm(_)) {
-            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            Style::default().fg(theme.colors.error.to_color()).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(border_color)
+            theme.title_style(focused)
         };
 
         let block = Block::default()
             .title(Span::styled(title, title_style))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(border_style);
 
         let filtered = self.filtered_processes();
         
@@ -433,28 +463,24 @@ impl Component for ProcessMonitor {
             .map(|(idx, proc)| {
                 let is_selected = self.table_state.selected() == Some(idx);
                 
+                let cpu_color = theme.cpu_color(proc.cpu_percent as f32, 10.0, 50.0);
+                
                 let cells = vec![
                     Span::styled(
                         format!("{:>6}", proc.pid),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(theme.colors.foreground.to_color()),
                     ),
                     Span::styled(
                         format!("{:<15}", truncate_string(&proc.name, 15)),
-                        Style::default().fg(Color::Cyan),
+                        Style::default().fg(theme.colors.secondary.to_color()),
                     ),
                     Span::styled(
                         format!("{:>5.1}", proc.cpu_percent),
-                        Style::default().fg(if proc.cpu_percent > 50.0 {
-                            Color::Red
-                        } else if proc.cpu_percent > 10.0 {
-                            Color::Yellow
-                        } else {
-                            Color::Green
-                        }),
+                        Style::default().fg(cpu_color),
                     ),
                     Span::styled(
                         format!("{:>6}", Self::format_memory(proc.memory_kb)),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(theme.process_monitor.memory_color.to_color()),
                     ),
                     Span::styled(
                         format!("{:<8}", proc.state_display()),
@@ -467,7 +493,8 @@ impl Component for ProcessMonitor {
                 if is_selected && focused {
                     row.style(
                         Style::default()
-                            .bg(Color::DarkGray)
+                            .bg(theme.process_monitor.selected_bg.to_color())
+                            .fg(theme.process_monitor.selected_fg.to_color())
                             .add_modifier(Modifier::BOLD),
                     )
                 } else {
@@ -476,8 +503,11 @@ impl Component for ProcessMonitor {
             })
             .collect();
 
-        let header = Row::new(self.header_spans())
-            .style(Style::default().add_modifier(Modifier::BOLD))
+        let header = Row::new(self.header_spans_themed(theme))
+            .style(Style::default()
+                .fg(theme.process_monitor.header_fg.to_color())
+                .bg(theme.process_monitor.header_bg.to_color())
+                .add_modifier(Modifier::BOLD))
             .height(1);
 
         let widths = [
@@ -492,7 +522,7 @@ impl Component for ProcessMonitor {
             .header(header)
             .block(block)
             .row_highlight_style(if focused {
-                Style::default().bg(Color::DarkGray)
+                Style::default().bg(theme.process_monitor.selected_bg.to_color())
             } else {
                 Style::default()
             });

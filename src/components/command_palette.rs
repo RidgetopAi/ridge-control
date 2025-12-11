@@ -9,6 +9,7 @@ use ratatui::{
 };
 
 use crate::action::Action;
+use crate::config::Theme;
 
 /// A command that can be executed from the command palette
 #[derive(Debug, Clone)]
@@ -289,7 +290,7 @@ impl CommandPalette {
         None
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, theme: &Theme) {
         if !self.visible {
             return;
         }
@@ -309,9 +310,9 @@ impl CommandPalette {
         // Main block
         let block = Block::default()
             .title(" Command Palette ")
-            .title_style(Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD))
+            .title_style(Style::default().fg(theme.command_palette.border.to_color()).add_modifier(Modifier::BOLD))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Magenta));
+            .border_style(Style::default().fg(theme.command_palette.border.to_color()));
 
         let inner = block.inner(dialog_area);
         frame.render_widget(block, dialog_area);
@@ -328,9 +329,9 @@ impl CommandPalette {
 
         // Input line with prompt
         let input_line = Line::from(vec![
-            Span::styled(": ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(&self.query, Style::default().fg(Color::White)),
-            Span::styled("▎", Style::default().fg(Color::Cyan)), // Cursor
+            Span::styled(": ", Style::default().fg(theme.colors.primary.to_color()).add_modifier(Modifier::BOLD)),
+            Span::styled(&self.query, Style::default().fg(theme.command_palette.input_fg.to_color())),
+            Span::styled("▎", Style::default().fg(theme.colors.primary.to_color())), // Cursor
         ]);
         frame.render_widget(Paragraph::new(input_line), chunks[0]);
 
@@ -343,7 +344,7 @@ impl CommandPalette {
             format!("{}/{} matching", count, total)
         };
         let info_line = Paragraph::new(info)
-            .style(Style::default().fg(Color::DarkGray))
+            .style(Style::default().fg(theme.command_palette.description_fg.to_color()))
             .alignment(Alignment::Right);
         frame.render_widget(info_line, chunks[1]);
 
@@ -353,14 +354,15 @@ impl CommandPalette {
             .iter()
             .map(|result| {
                 let cmd = &self.registry.commands()[result.command_idx];
-                self.render_command_item(cmd, &result.indices)
+                self.render_command_item(cmd, &result.indices, theme)
             })
             .collect();
 
         let list = List::new(items)
             .highlight_style(
                 Style::default()
-                    .bg(Color::Rgb(60, 60, 100))
+                    .bg(theme.command_palette.selected_bg.to_color())
+                    .fg(theme.command_palette.selected_fg.to_color())
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▶ ");
@@ -370,14 +372,14 @@ impl CommandPalette {
         frame.render_stateful_widget(list, chunks[2], &mut list_state);
     }
 
-    fn render_command_item(&self, cmd: &Command, indices: &[u32]) -> ListItem<'_> {
+    fn render_command_item(&self, cmd: &Command, indices: &[u32], theme: &Theme) -> ListItem<'_> {
         let mut name_spans = Vec::new();
 
         // Highlight matched characters in name
         if indices.is_empty() {
             name_spans.push(Span::styled(
                 cmd.name,
-                Style::default().fg(Color::White),
+                Style::default().fg(theme.command_palette.item_fg.to_color()),
             ));
         } else {
             let chars: Vec<char> = cmd.name.chars().collect();
@@ -385,9 +387,9 @@ impl CommandPalette {
 
             for (i, ch) in chars.iter().enumerate() {
                 let style = if indices_set.contains(&(i as u32)) {
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)
+                    Style::default().fg(theme.command_palette.match_highlight.to_color()).add_modifier(Modifier::BOLD)
                 } else {
-                    Style::default().fg(Color::White)
+                    Style::default().fg(theme.command_palette.item_fg.to_color())
                 };
                 name_spans.push(Span::styled(ch.to_string(), style));
             }
@@ -396,7 +398,7 @@ impl CommandPalette {
         // Add description
         name_spans.push(Span::styled(
             format!("  {}", cmd.description),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme.command_palette.description_fg.to_color()),
         ));
 
         ListItem::new(Line::from(name_spans))

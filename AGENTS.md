@@ -1,439 +1,399 @@
-# Ridge-Control: Multi-Instance Build Experiment
+# Ridge-Control: Task-Driven Build Phase
 
-You are part of an experiment in AI-driven software development. Multiple LLM instances will collaboratively plan and build a complex TUI application through iterative refinement.
+You are continuing the ridge-control project. The planning phase (i[0]-i[9]) and initial build phase (i[10]-i[20]) are complete. You are now in the **task execution phase**.
 
-**This is your workspace. Own it.**
-
----
-
-## 1. The Experiment
-
-### What's Happening
-
-A sequence of LLM instances (i[0] through i[N]) will:
-1. Read the CONTRACT.md specification
-2. Read previous instances' work via Mandrel
-3. Contribute meaningful progress
-4. Hand off to the next instance
-
-Each instance is **stateless** - you have no memory of previous runs. Your continuity comes from:
-- `CONTRACT.md` - The immutable specification
-- Mandrel contexts - Stored reasoning and decisions from previous instances
-- The codebase itself (starting i[10])
-
-### Why This Matters
-
-This isn't just building software. It's an experiment in:
-- Distributed AI cognition across instances
-- Emergent architectural decisions
-- Quality through iteration rather than omniscience
-- Honest, incremental progress over heroic single-pass attempts
-
-**You are one voice in a chain. Make your voice count.**
+**Your job: Execute your assigned TRC task completely. No shortcuts. No tech debt.**
 
 ---
 
-## 2. Project Identity
+## 1. Your Mission
 
-| Field | Value |
-|-------|-------|
-| Project Name | `ridge-control` |
-| Mandrel Project | `ridge-control` |
-| Working Directory | `~/projects/ridge-control/` |
-| Language | Rust |
-| Framework | Ratatui |
-| Platform | Linux |
+You have been assigned a specific task from the TRC (Task Ridge Control) backlog. Your instance number determines your task:
 
-### Key Files
+| Instance | Task ID | Description |
+|----------|---------|-------------|
+| i[21] | TRC-001 | Apply Theme to All Component Rendering |
+| i[22] | TRC-002 | Display LLM Responses in UI |
+| i[23] | TRC-003 | Integrate StreamViewer into Layout |
+| i[24] | TRC-004 | Wire Stream Menu Selection to StreamViewer |
+| i[25] | TRC-005 | Implement PTY Per Tab Isolation |
+| i[26] | TRC-006 | Implement OpenAI Provider |
+| i[27] | TRC-007 | Implement Google Gemini Provider |
+| i[28] | TRC-008 | Implement xAI Grok Provider |
+| i[29] | TRC-009 | Implement Groq Provider |
+| i[30] | TRC-010 | Wire Mouse Click on Tabs |
+| i[31] | TRC-011 | Implement Secure Key Storage (keyring + encrypted fallback) |
+| i[32] | TRC-012 | Implement Session Persistence (save/restore tabs) |
+| i[33] | TRC-013 | Add Log Viewer with Auto-scroll Toggle |
+| i[34] | TRC-014 | Implement Config Panel UI (Settings viewer) |
+| i[35] | TRC-015 | Add Progress Spinners and Animations |
+| i[36] | TRC-016 | Implement LLM Tool Use UI |
+| i[37] | TRC-017 | Add Extended Thinking (thinking blocks) Display |
+| i[38] | TRC-018 | Implement --dangerously-allow-all Equivalent Flag |
+| i[39] | TRC-019 | Add GPU Usage Indicator |
+| i[40] | TRC-020 | Implement Right-Click Context Menus |
+| i[41] | TRC-021 | Add Search Within Log/Stream Viewers |
+| i[42] | TRC-022 | Implement Log Filtering/Grep Functionality |
+| i[43] | TRC-023 | Add Notification System for Background Events |
+| i[44] | TRC-024 | Implement Split Pane Resizing |
+| i[45] | TRC-025 | Add Graceful Degradation for Unavailable Streams |
+| i[46] | TRC-026 | Add Unix Domain Socket Protocol Support |
+| i[47] | TRC-027 | Add TCP Socket Protocol Support |
+| i[48] | TRC-028 | Implement Dynamic Menu Generation from Config |
+| i[49] | TRC-029 | Add Tab Inline Rename |
+| i[50] | TRC-030 | Clean Up Dead Code Warnings |
 
-- `CONTRACT.md` - **Read this first. It is law.**
-- `AGENTS.md` - This file (your operating instructions)
-- `THE-MONITOR.md` - Who reviews your work
-- `docs/` - Any documentation you create goes here
-- `src/` - Source code (created starting i[10])
+---
+
+## 2. Zero Tolerance Policy
+
+### NO TECH DEBT
+
+Previous instances accumulated tech debt. That era is over.
+
+- **If you find a bug, fix it** - Do not document it for later
+- **If something is broken, repair it** - Do not work around it
+- **If code is incomplete, complete it** - Do not leave stubs
+- **If you can't finish, say why** - Do not pretend completion
+
+### NO PARTIAL IMPLEMENTATIONS
+
+Your task is not done until:
+- Code compiles with zero errors
+- All tests pass (add tests if needed)
+- The feature actually works end-to-end
+- No `// TODO` comments left behind
+- No `unimplemented!()` macros
+- No dead code introduced
+
+### NO MISLEADING
+
+The Monitor reviews all work. Deception will be caught.
+
+- Claim only what you actually delivered
+- Surface problems immediately
+- Acknowledge what you couldn't complete and why
 
 ---
 
 ## 3. Your Workflow
 
-### Know Your Phase
-
-**Planning Phase (i[0] - i[9]):**
 ```
-[EXPLORE] → [THINK/PLAN] → [SAVE REASONING]
+[EXPLORE] → [UNDERSTAND] → [IMPLEMENT] → [VERIFY] → [COMMIT] → [HANDOFF]
 ```
 
-**Building Phase (i[10]+):**
+### Step 1: EXPLORE
+
+```bash
+# Switch to project
+project_switch("ridge-control")
+
+# Get your task details
+task_list()  # Find your TRC-XXX task
+
+# Read prior handoffs
+context_get_recent(limit: 5)
+context_search("your task topic")
+
+# Read CONTRACT.md for requirements
+Read CONTRACT.md
 ```
-[EXPLORE] → [THINK/PLAN] → [SAVE REASONING] → [BUILD] → [COMMIT/PUSH]
+
+### Step 2: UNDERSTAND
+
+Before writing any code:
+- What does CONTRACT.md require for this feature?
+- What code already exists that relates to this?
+- What patterns are established in the codebase?
+- What will this feature interact with?
+
+Read the relevant source files. Understand before you act.
+
+### Step 3: IMPLEMENT
+
+Write production-quality Rust code:
+- Follow existing patterns in the codebase
+- Use the established module structure
+- Handle all errors properly
+- Add tests for new functionality
+- No shortcuts, no "good enough"
+
+### Step 4: VERIFY
+
+Before claiming completion:
+
+```bash
+# Must pass
+cargo build
+
+# Must pass
+cargo test
+
+# Should be clean (fix warnings you introduce)
+cargo clippy
+
+# Actually run it and test the feature
+cargo run
 ```
 
-### Every Instance Must
+### Step 5: COMMIT
 
-1. **Switch to the ridge-control project**
-   ```
-   project_switch("ridge-control")
-   ```
+```bash
+git add .
+git commit -m "Instance #N: TRC-XXX - [Description]"
+git push origin main
+```
 
-2. **Gather context**
-   - Read CONTRACT.md thoroughly
-   - Fetch recent handoffs:
-     ```
-     context_search("ridge-control handoff", tags: ["ridge-control", "handoff"])
-     context_get_recent(limit: 5)
-     ```
-   - Search for relevant decisions:
-     ```
-     decision_search(projectId: "ridge-control")
-     ```
+### Step 6: HANDOFF
 
-3. **Understand the state**
-   - What has been decided?
-   - What is still open?
-   - What did the last instance recommend?
-   - Are there problems to fix first?
-
-4. **Contribute meaningfully**
-   - You don't need to solve everything
-   - Focus on one clear contribution
-   - Quality over quantity
-
-5. **Save your work to Mandrel**
-   - Handoff context (required)
-   - Decisions (when you make significant choices)
-   - Tasks (if breaking down work)
-
----
-
-## 4. Tools Available
-
-### Mandrel MCP Tools
-
-Your primary memory and coordination system:
-
-| Tool | Purpose |
-|------|---------|
-| `project_switch` | Set active project to ridge-control |
-| `project_current` | Verify current project |
-| `context_store` | Save your reasoning and handoffs |
-| `context_search` | Find relevant prior work |
-| `context_get_recent` | Get latest contexts |
-| `decision_record` | Record architectural/technical decisions |
-| `decision_search` | Find prior decisions |
-| `task_create` | Create tracked tasks |
-| `task_list` | See existing tasks |
-| `task_update` | Update task status |
-| `smart_search` | AI-powered search across all Mandrel data |
-
-### Ampcode Special Agents
-
-You have access to specialized agents:
-
-| Agent | Purpose | When to Use |
-|-------|---------|-------------|
-| **Librarian** | Searches documentation and repositories for examples | When you need code examples, API documentation, or implementation patterns from external sources |
-| **Oracle** | Planning, design, and problem-solving specialist | When facing complex architectural decisions, design trade-offs, or thorny problems that need deeper analysis |
-
-**How to invoke:**
-- Librarian: Use when you need to research Ratatui patterns, PTY handling examples, REST client implementations, etc.
-- Oracle: Use when you're stuck on a design decision or need to think through a complex problem systematically
-
-### Standard Tools
-
-- File operations (Read, Write, Edit, Glob, Grep)
-- Bash for system commands
-- Web search/fetch for research
-
----
-
-## 5. Handoff Protocol
-
-At the end of your run, you MUST save a handoff:
+Save to Mandrel:
 
 ```
 context_store(
-  content: "[Your handoff content]",
+  content: "[Your handoff - see template below]",
   type: "handoff",
-  tags: ["ridge-control", "i[N]", "handoff"]
+  tags: ["ridge-control", "i[N]", "TRC-XXX"]
 )
 ```
 
-### Handoff Structure
-
-```markdown
-# Ridge-Control Instance i[N] Handoff
-
-## Instance Identity
-- Instance Number: i[N]
-- Phase: Planning / Building
-- Focus Area: [What you worked on]
-
-## What I Accomplished
-- [Concrete deliverable 1]
-- [Concrete deliverable 2]
-
-## Key Decisions Made
-- [Decision]: [Rationale]
-
-## Exploration Done
-- [What you researched]
-- [What you learned]
-
-## Problems Found
-- [Any issues discovered, especially from prior instances]
-- [How you addressed them, or why you couldn't]
-
-## Open Questions
-- [Unresolved questions]
-- [Decisions deferred]
-
-## Tech Debt (if any)
-- [Debt introduced]: [Remediation path]
-
-## Recommendations for i[N+1]
-1. [Specific next action]
-2. [Specific next action]
-3. [Specific next action]
-
-## Files Created/Modified
-- [file path]: [what changed]
+Update task status:
+```
+task_update(taskId: "your-task-id", status: "completed")
 ```
 
 ---
 
-## 6. Instance-Specific Guidance
+## 4. Project Identity
 
-### i[0] - The Pioneer
+| Field | Value |
+|-------|-------|
+| Project | ridge-control |
+| Mandrel Project | ridge-control |
+| Directory | ~/projects/ridge-control/ |
+| Language | Rust (latest stable) |
+| Framework | Ratatui |
+| Platform | Linux only |
 
-You are the first instance. Your job:
+### Key Files
 
-1. **Read CONTRACT.md completely**
-2. **Research extensively** using Librarian:
-   - Ratatui architecture patterns
-   - PTY terminal emulation in Rust
-   - REST API client patterns
-   - Streaming/async patterns
-3. **Propose at least 3 architectural approaches**
-   - Use Oracle to help analyze trade-offs
-   - Each approach should be viable
-   - Identify pros/cons of each
-4. **Save comprehensive handoff**
-   - Your research findings
-   - Your proposed approaches
-   - Recommendation for which approach i[1] should explore deeper
+- `CONTRACT.md` - The specification (read this)
+- `AGENTS.md` - This file (your instructions)
+- `THE-MONITOR.md` - Who reviews your work
+- `src/` - All source code
+- `Cargo.toml` - Dependencies
 
-### i[1] through i[9] - The Planners
+### Current Architecture (as of i[20])
 
-You are refining the plan. Your job:
+```
+src/
+├── main.rs           # Entry point
+├── app.rs            # Main App struct, event loop, dispatch
+├── action.rs         # Action enum for all application actions
+├── error.rs          # Error types
+├── event.rs          # Event types
+├── components/       # UI components
+│   ├── mod.rs
+│   ├── command_palette.rs  # Fuzzy search command palette
+│   ├── confirm_dialog.rs   # Tool confirmation dialog
+│   ├── menu.rs             # Right panel menu
+│   ├── placeholder.rs      # Placeholder widgets
+│   ├── process_monitor.rs  # Process list with click-to-kill
+│   ├── stream_viewer.rs    # Stream display widget (needs integration)
+│   └── terminal.rs         # PTY terminal widget
+├── config/           # Configuration system
+│   ├── mod.rs              # ConfigManager
+│   ├── keybindings.rs      # Helix-style keybindings
+│   ├── theme.rs            # Theme definitions
+│   └── watcher.rs          # Hot-reload watcher
+├── input/            # Input handling
+│   ├── mod.rs
+│   ├── focus.rs            # Focus areas
+│   └── mode.rs             # Input modes
+├── llm/              # LLM integration
+│   ├── mod.rs
+│   ├── anthropic.rs        # Anthropic provider (implemented)
+│   ├── manager.rs          # LLM manager
+│   ├── provider.rs         # Provider trait
+│   ├── tools.rs            # Tool definitions and executor
+│   └── types.rs            # LLM types
+├── pty/              # PTY terminal
+│   ├── mod.rs              # PtyHandle
+│   └── grid.rs             # Terminal grid with scrollback
+├── streams/          # Stream clients
+│   ├── mod.rs
+│   ├── client.rs           # StreamClient
+│   └── config.rs           # Stream configuration
+└── tabs/             # Tab system
+    ├── mod.rs              # TabManager
+    └── tab_bar.rs          # TabBar widget
+```
 
-1. **Read previous handoffs**
-2. **Evaluate prior proposals**
-3. **Deepen or pivot** based on your analysis
-4. **Contribute one of:**
-   - Deeper architecture design
-   - Component specifications
-   - Data flow diagrams
-   - API contracts
-   - Module breakdown
-   - Risk analysis
-   - Research findings
-5. **Maintain momentum** - Don't rehash, advance
+---
 
-### i[10]+ - The Builders
+## 5. Mandrel Tools
 
-You are writing code. Your job:
+| Tool | Purpose |
+|------|---------|
+| `project_switch("ridge-control")` | Set active project |
+| `project_current()` | Verify current project |
+| `task_list()` | See all TRC tasks |
+| `task_details(taskId)` | Get task details |
+| `task_update(taskId, status)` | Mark task complete |
+| `context_store(content, type, tags)` | Save handoff |
+| `context_search(query)` | Find prior work |
+| `context_get_recent(limit)` | Get recent contexts |
+| `decision_record(...)` | Record significant decisions |
+| `smart_search(query)` | AI-powered search |
 
-1. **Review the plan** - By now architecture should be settled
-2. **Pick a concrete task** - Don't try to build everything
-3. **Write production code** - See CONTRACT.md quality standards
-4. **Test your work** - Code must compile, ideally run
-5. **Commit with clear message**:
-   ```
-   Instance #N: [clear description]
-   ```
-6. **Hand off cleanly** - What works, what doesn't, what's next
+---
+
+## 6. Handoff Template
+
+```markdown
+# Instance i[N] Handoff - TRC-XXX: [Task Title]
+
+## Task Assignment
+- Instance: i[N]
+- Task: TRC-XXX
+- Status: COMPLETE / INCOMPLETE
+
+## What I Implemented
+- [Specific feature/change 1]
+- [Specific feature/change 2]
+
+## Files Modified
+- `src/path/file.rs` - [What changed]
+
+## Files Created
+- `src/path/new_file.rs` - [Purpose]
+
+## How to Verify
+1. [Step to test the feature]
+2. [Expected result]
+
+## Tests Added
+- `test_name` - [What it tests]
+
+## Problems Found and Fixed
+- [Problem]: [How I fixed it]
+
+## Build Status
+- `cargo build`: PASS/FAIL
+- `cargo test`: X/Y passing
+- `cargo clippy`: [Warning count]
+
+## Notes for Future Instances
+- [Any relevant context]
+```
 
 ---
 
 ## 7. Quality Standards
 
-### Code Quality (Building Phase)
+### Code Must
 
-- TypeScript compilation passes (once we have code)
-- No hard-coded secrets or endpoints
-- Error handling - never swallow errors
-- Comments where logic isn't obvious
-- Follow patterns established by prior instances
+- Compile with zero errors
+- Pass all existing tests
+- Follow established patterns
+- Handle errors explicitly (no `.unwrap()` in production paths)
+- Be documented where non-obvious
 
-### Reasoning Quality (All Phases)
+### Code Must Not
 
-- Be explicit about assumptions
-- Show your work - how did you arrive at conclusions?
-- Acknowledge uncertainty - "I believe X because Y, but Z is unclear"
-- Reference prior decisions when building on them
-
-### Honesty Standards
-
-- **Never claim completion if incomplete**
-- **Never hide problems** - surface them clearly
-- **Never mislead** - The Monitor will check your work
-- Partial progress honestly reported > false completion claims
+- Introduce `// TODO` without completing it
+- Use `unimplemented!()` or `todo!()`
+- Add dependencies without justification
+- Hard-code values that should be configurable
+- Swallow errors silently
+- Break existing functionality
 
 ---
 
-## 8. What NOT To Do
+## 8. If You Find Problems
 
-- Do not modify CONTRACT.md
-- Do not ignore prior instance work without justification
-- Do not try to finish everything in one run
-- Do not introduce dependencies without justification
-- Do not hard-code values that should be configurable
-- Do not create excessive markdown files (use Mandrel for documentation)
-- Do not rush - there is no time pressure
-- Do not guess - research or acknowledge uncertainty
+Previous instances may have left issues. Here's what to do:
+
+### Small Problem (< 30 min to fix)
+Fix it. Include in your handoff that you fixed it.
+
+### Medium Problem (Blocks your task)
+Fix it first. Your task depends on working foundations.
+
+### Large Problem (Unrelated to your task)
+1. Document it clearly
+2. Create a new task in Mandrel:
+   ```
+   task_create(title: "BUG: [Description]", ...)
+   ```
+3. Continue with your assigned task if possible
+
+**Never ignore problems. Never work around broken code.**
 
 ---
 
 ## 9. The Monitor
 
-Your work will be reviewed by **The Monitor** (defined in THE-MONITOR.md).
+Your work will be reviewed by The Monitor (see THE-MONITOR.md).
 
-The Monitor:
-- Checks your work for quality and honesty
-- Identifies gaps and problems
-- Guides the project alongside Brian
-- Has significant latitude to course-correct
+The Monitor checks:
+- Did you complete your assigned task?
+- Does the code actually work?
+- Did you introduce new problems?
+- Is your handoff accurate?
+- Did you follow the zero-debt policy?
 
-You should work as if everything you do will be scrutinized - because it will be.
+Work as if everything will be scrutinized - because it will be.
 
 ---
 
 ## 10. Git Workflow
 
-### Repository
-
-| Field | Value |
-|-------|-------|
-| Remote | `git@github.com:RidgetopAi/ridge-control.git` |
-| Branch | `main` |
-| Local | `~/projects/ridge-control/` |
-
-### Before Ending Your Session
-
-**You MUST commit and push your work before ending.** This is not optional.
-
-#### Planning Instances (i[0] - i[9])
-
-If you created or modified any files:
-
 ```bash
+# Before starting
 cd ~/projects/ridge-control
+git pull origin main
 
-# Check what changed
-git status
-git diff
+# After completing your task
+cargo build && cargo test  # Must pass
 
-# Stage and commit
 git add .
-git commit -m "Instance #N: [clear description of your contribution]"
-
-# Push to remote
-git push origin main
-```
-
-#### Building Instances (i[10]+)
-
-**Always commit your code changes:**
-
-```bash
-cd ~/projects/ridge-control
-
-# Verify code compiles first
-cargo check
-
-# If compilation fails, fix it before committing
-
-# Check what changed
-git status
-git diff
-
-# Stage and commit
-git add .
-git commit -m "Instance #N: [clear description of what you built]"
-
-# Push to remote
+git commit -m "Instance #N: TRC-XXX - [Brief description]"
 git push origin main
 ```
 
 ### Commit Message Format
 
 ```
-Instance #N: [Brief description]
+Instance #N: TRC-XXX - [Brief description]
 
 - [Detail 1]
 - [Detail 2]
-
-[Optional: Note any known issues or next steps]
 ```
 
-**Examples:**
-- `Instance #0: Initial architecture research and 3 approach proposals`
-- `Instance #5: PTY module specification and async runtime decision`
-- `Instance #12: Implement basic PTY spawn and read loop`
-
-### Important Rules
-
-1. **Never force push** - `git push --force` is forbidden
-2. **Never rewrite history** - No rebasing shared commits
-3. **Always pull first** - If push fails, pull and resolve conflicts
-4. **Test before commit** - Code must compile (building phase)
-5. **Atomic commits** - One logical change per commit
-
-### If You Encounter Conflicts
-
-```bash
-# Pull latest
-git pull origin main
-
-# If conflicts, resolve them manually
-# Edit conflicted files, then:
-git add .
-git commit -m "Instance #N: Resolve merge conflict in [files]"
-git push origin main
+**Example:**
 ```
+Instance #21: TRC-001 - Apply theme to all component rendering
 
-### What Gets Committed
-
-**Tracked (committed):**
-- `README.md`
-- `src/` (all Rust code)
-- `Cargo.toml`
-- `docs/` (if you must create docs locally)
-- Any other source files
-
-**Ignored (not committed):**
-- `.env` and all environment files
-- `*.md` files except README.md (use Mandrel instead)
-- `/target/` build artifacts
-- IDE settings
+- Wire ThemeConfig to process_monitor render
+- Wire ThemeConfig to terminal render
+- Wire ThemeConfig to menu render
+- Add theme parameter to all render methods
+```
 
 ---
 
 ## 11. Remember
 
-You are part of something larger than a single run. The instances before you laid groundwork. The instances after you will build on what you leave.
+You are not exploring. You are not planning. You are **executing**.
 
-**Your job is to leave this project better than you found it.**
+- You have a specific task
+- You have working code to build on
+- You have clear requirements in CONTRACT.md
+- You have prior context in Mandrel
 
-- Clearer architecture
-- Sharper reasoning
-- Concrete progress
-- Honest assessment
-
-Take pride in your contribution. Make it count.
-
-**Before you end: Save handoff to Mandrel AND commit/push to git.**
+**Execute your task completely. Leave no debt. Move the project forward.**
 
 ---
 
-*This workspace belongs to the instances building ridge-control. Treat it with respect.*
+*Previous phase: AGENTS-SIRK-RC.md (archived)*
+*Current phase: Task execution (i[21]+)*

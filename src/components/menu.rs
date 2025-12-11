@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::config::Theme;
 use crate::streams::{ConnectionState, StreamClient};
 
 pub struct Menu {
@@ -89,12 +90,9 @@ impl Menu {
         }
     }
 
-    pub fn render_with_streams(&self, frame: &mut Frame, area: Rect, focused: bool, streams: &[StreamClient]) {
-        let border_color = if focused {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
+    pub fn render_with_streams(&self, frame: &mut Frame, area: Rect, focused: bool, streams: &[StreamClient], theme: &Theme) {
+        let border_style = theme.border_style(focused);
+        let title_style = theme.title_style(focused);
 
         let title = if focused {
             " Streams [↵=toggle] "
@@ -104,8 +102,9 @@ impl Menu {
 
         let block = Block::default()
             .title(title)
+            .title_style(title_style)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(border_style);
 
         let items: Vec<ListItem> = streams
             .iter()
@@ -113,24 +112,25 @@ impl Menu {
             .map(|(i, client)| {
                 let state_icon = client.state().to_string();
                 let state_color = match client.state() {
-                    ConnectionState::Connected => Color::Green,
-                    ConnectionState::Connecting => Color::Yellow,
-                    ConnectionState::Reconnecting { .. } => Color::Yellow,
-                    ConnectionState::Disconnected => Color::DarkGray,
-                    ConnectionState::Failed => Color::Red,
+                    ConnectionState::Connected => theme.menu.stream_connected.to_color(),
+                    ConnectionState::Connecting => theme.menu.stream_connecting.to_color(),
+                    ConnectionState::Reconnecting { .. } => theme.menu.stream_connecting.to_color(),
+                    ConnectionState::Disconnected => theme.menu.stream_disconnected.to_color(),
+                    ConnectionState::Failed => theme.menu.stream_error.to_color(),
                 };
 
                 let protocol_str = format!("[{}]", client.protocol());
 
                 let line = Line::from(vec![
                     Span::styled(format!("{} ", state_icon), Style::default().fg(state_color)),
-                    Span::styled(format!("{:5} ", protocol_str), Style::default().fg(Color::Magenta)),
-                    Span::styled(client.name(), Style::default().fg(Color::White)),
+                    Span::styled(format!("{:5} ", protocol_str), Style::default().fg(theme.colors.accent.to_color())),
+                    Span::styled(client.name(), Style::default().fg(theme.menu.item_fg.to_color())),
                 ]);
 
                 let style = if i == self.selected && focused {
                     Style::default()
-                        .bg(Color::DarkGray)
+                        .bg(theme.menu.selected_bg.to_color())
+                        .fg(theme.menu.selected_fg.to_color())
                         .add_modifier(Modifier::BOLD)
                 } else {
                     Style::default()
@@ -143,7 +143,7 @@ impl Menu {
         if items.is_empty() {
             let empty_msg = ListItem::new(Line::from(Span::styled(
                 "No streams configured",
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+                Style::default().fg(theme.menu.disabled_fg.to_color()).add_modifier(Modifier::ITALIC),
             )));
             let list = List::new(vec![empty_msg]).block(block);
             frame.render_widget(list, area);
@@ -176,21 +176,19 @@ impl Component for Menu {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = theme.border_style(focused);
+        let title_style = theme.title_style(focused);
 
         let block = Block::default()
             .title(" Streams ")
+            .title_style(title_style)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(border_style);
 
         let empty_msg = ListItem::new(Line::from(Span::styled(
             "No streams configured",
-            Style::default().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
+            Style::default().fg(theme.menu.disabled_fg.to_color()).add_modifier(Modifier::ITALIC),
         )));
 
         let list = List::new(vec![empty_msg]).block(block);

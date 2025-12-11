@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::config::Theme;
 use crate::streams::{StreamClient, StreamData};
 
 pub struct StreamViewer {
@@ -116,6 +117,71 @@ impl StreamViewer {
             self.scroll_offset = (self.line_count - self.visible_height as usize) as u16;
         }
     }
+
+    pub fn render_stream_themed(&self, frame: &mut Frame, area: Rect, focused: bool, stream: Option<&StreamClient>, theme: &Theme) {
+        let border_style = theme.border_style(focused);
+        let title_style = theme.title_style(focused);
+
+        let title = if let Some(s) = stream {
+            format!(" {} [{}] ", s.name(), s.state())
+        } else {
+            " Stream Viewer ".to_string()
+        };
+
+        let block = Block::default()
+            .title(title)
+            .title_style(title_style)
+            .borders(Borders::ALL)
+            .border_style(border_style);
+
+        if let Some(stream) = stream {
+            let buffer = stream.buffer();
+
+            if buffer.is_empty() {
+                let msg = Paragraph::new(Line::from(Span::styled(
+                    "No data received yet...",
+                    Style::default().fg(theme.colors.muted.to_color()).add_modifier(Modifier::ITALIC),
+                )))
+                .block(block);
+                frame.render_widget(msg, area);
+            } else {
+                let lines: Vec<Line> = buffer
+                    .iter()
+                    .flat_map(|data| {
+                        match data {
+                            StreamData::Text(text) => {
+                                text.lines()
+                                    .map(|line| {
+                                        Line::from(Span::styled(line.to_string(), Style::default().fg(theme.colors.foreground.to_color())))
+                                    })
+                                    .collect::<Vec<_>>()
+                            }
+                            StreamData::Binary(bin) => {
+                                vec![Line::from(Span::styled(
+                                    format!("[binary: {} bytes]", bin.len()),
+                                    Style::default().fg(theme.colors.warning.to_color()),
+                                ))]
+                            }
+                        }
+                    })
+                    .collect();
+
+                let paragraph = Paragraph::new(lines)
+                    .block(block)
+                    .wrap(Wrap { trim: false })
+                    .scroll((self.scroll_offset, 0));
+
+                frame.render_widget(paragraph, area);
+            }
+        } else {
+            let msg = Paragraph::new(Line::from(Span::styled(
+                "Select a stream from the menu",
+                Style::default().fg(theme.colors.muted.to_color()).add_modifier(Modifier::ITALIC),
+            )))
+            .block(block);
+            frame.render_widget(msg, area);
+        }
+    }
 }
 
 impl Component for StreamViewer {
@@ -136,8 +202,8 @@ impl Component for StreamViewer {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        self.render_stream(frame, area, focused, None);
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        self.render_stream_themed(frame, area, focused, None, theme);
     }
 }
 

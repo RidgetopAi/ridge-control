@@ -10,6 +10,7 @@ use crossterm::event::Event;
 use ratatui::{layout::Rect, Frame};
 
 use crate::action::Action;
+use crate::config::Theme;
 
 /// Component trait for standardized lifecycle per RIDGE-CONTROL-MASTER.md
 /// Pattern: handle_event() → update() → render()
@@ -20,6 +21,6 @@ pub trait Component {
     /// Update component state based on dispatched Action
     fn update(&mut self, action: &Action);
 
-    /// Render the component to the frame
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool);
+    /// Render the component to the frame with theme styling
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme);
 }

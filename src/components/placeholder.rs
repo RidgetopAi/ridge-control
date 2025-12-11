@@ -1,13 +1,14 @@
 use crossterm::event::Event;
 use ratatui::{
     layout::Rect,
-    style::{Color, Style},
+    style::Style,
     widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::config::Theme;
 
 pub struct PlaceholderWidget {
     title: String,
@@ -34,21 +35,19 @@ impl Component for PlaceholderWidget {
 
     fn update(&mut self, _action: &Action) {}
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused {
-            Color::Magenta
-        } else {
-            Color::DarkGray
-        };
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = theme.border_style(focused);
+        let title_style = theme.title_style(focused);
 
         let block = Block::default()
             .title(format!(" {} ", self.title))
+            .title_style(title_style)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(border_style);
 
         let paragraph = Paragraph::new(self.content.as_str())
             .block(block)
-            .style(Style::default().fg(Color::Gray));
+            .style(Style::default().fg(theme.colors.muted.to_color()));
 
         frame.render_widget(paragraph, area);
     }

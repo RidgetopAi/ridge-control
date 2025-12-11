@@ -10,7 +10,7 @@
 
 mod tab_bar;
 
-pub use tab_bar::TabBar;
+pub use tab_bar::{TabBar, TabBarStyle};
 
 use std::time::Instant;
 

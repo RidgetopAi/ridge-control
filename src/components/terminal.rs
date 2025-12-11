@@ -9,6 +9,7 @@ use ratatui::{
 
 use crate::action::Action;
 use crate::components::Component;
+use crate::config::Theme;
 use crate::pty::grid::Grid;
 
 pub struct TerminalWidget {
@@ -143,12 +144,9 @@ impl Component for TerminalWidget {
         }
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, focused: bool) {
-        let border_color = if focused {
-            Color::Cyan
-        } else {
-            Color::DarkGray
-        };
+    fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = theme.border_style(focused);
+        let title_style = theme.title_style(focused);
 
         let scroll_offset = self.grid.scroll_offset();
         let max_scroll = self.grid.max_scroll_offset();
@@ -160,8 +158,9 @@ impl Component for TerminalWidget {
 
         let block = Block::default()
             .title(title)
+            .title_style(title_style)
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(border_color));
+            .border_style(border_style);
 
         let inner = block.inner(area);
         frame.render_widget(block, area);
@@ -169,6 +168,7 @@ impl Component for TerminalWidget {
         let grid_widget = GridWidget {
             grid: &self.grid,
             show_cursor: focused && scroll_offset == 0,
+            theme,
         };
         frame.render_widget(grid_widget, inner);
     }
@@ -211,6 +211,7 @@ impl TerminalWidget {
 struct GridWidget<'a> {
     grid: &'a Grid,
     show_cursor: bool,
+    theme: &'a Theme,
 }
 
 impl<'a> Widget for GridWidget<'a> {
@@ -236,8 +237,7 @@ impl<'a> Widget for GridWidget<'a> {
                 let mut style = cell.style;
 
                 if self.grid.is_position_selected(x, y) {
-                    style = style
-                        .bg(Color::Rgb(100, 100, 180))
+                    style = self.theme.selection_style()
                         .remove_modifier(Modifier::REVERSED);
                 }
 
@@ -247,7 +247,9 @@ impl<'a> Widget for GridWidget<'a> {
                     && y == cursor_y;
 
                 if is_cursor {
-                    style = style.bg(Color::White).fg(Color::Black);
+                    style = style
+                        .bg(self.theme.terminal.cursor_color.to_color())
+                        .fg(self.theme.colors.background.to_color());
                 }
 
                 if let Some(buf_cell) = buf.cell_mut((buf_x, buf_y)) {
