@@ -4,6 +4,7 @@ use futures::StreamExt;
 use tokio::sync::mpsc;
 
 use super::anthropic::AnthropicProvider;
+use super::gemini::GeminiProvider;
 use super::provider::{Provider, ProviderRegistry};
 use super::types::{LLMError, LLMRequest, Message, StreamChunk, ToolUse, ContentBlock, ToolResult};
 
@@ -45,6 +46,19 @@ impl LLMManager {
 
     pub fn register_anthropic(&mut self, api_key: impl Into<String>) {
         let provider = Arc::new(AnthropicProvider::new(api_key));
+        let default_model = provider.default_model().to_string();
+        let name = provider.name().to_string();
+
+        self.registry.register(provider);
+
+        if self.current_provider.is_empty() {
+            self.current_provider = name;
+            self.current_model = default_model;
+        }
+    }
+
+    pub fn register_gemini(&mut self, api_key: impl Into<String>) {
+        let provider = Arc::new(GeminiProvider::new(api_key));
         let default_model = provider.default_model().to_string();
         let name = provider.name().to_string();
 
