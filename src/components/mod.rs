@@ -1,5 +1,6 @@
 pub mod command_palette;
 pub mod confirm_dialog;
+pub mod conversation_viewer;
 pub mod menu;
 pub mod placeholder;
 pub mod process_monitor;

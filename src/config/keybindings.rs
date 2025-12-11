@@ -312,6 +312,11 @@ impl Default for KeybindingsConfig {
             "C-S-tab".to_string(),
             ActionBinding { action: "tab_prev".to_string(), args: vec![] },
         );
+        // Conversation viewer
+        normal.bindings.insert(
+            "C-l".to_string(),
+            ActionBinding { action: "conversation_toggle".to_string(), args: vec![] },
+        );
         
         let mut pty_raw = ModeBindings::default();
         pty_raw.bindings.insert(
@@ -426,6 +431,17 @@ impl KeybindingsConfig {
                 Some(Action::TabRename(name))
             }
             "config_reload" => Some(Action::ConfigReload),
+            "conversation_toggle" => Some(Action::ConversationToggle),
+            "conversation_scroll_up" => {
+                let n = args.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+                Some(Action::ConversationScrollUp(n))
+            }
+            "conversation_scroll_down" => {
+                let n = args.first().and_then(|s| s.parse().ok()).unwrap_or(1);
+                Some(Action::ConversationScrollDown(n))
+            }
+            "conversation_scroll_to_top" => Some(Action::ConversationScrollToTop),
+            "conversation_scroll_to_bottom" => Some(Action::ConversationScrollToBottom),
             _ => None,
         }
     }

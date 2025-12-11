@@ -102,6 +102,15 @@ pub enum Action {
     /// Apply theme changes
     ConfigApplyTheme,
 
+    // Conversation viewer actions
+    /// Toggle conversation viewer visibility
+    ConversationToggle,
+    /// Scroll conversation viewer
+    ConversationScrollUp(u16),
+    ConversationScrollDown(u16),
+    ConversationScrollToTop,
+    ConversationScrollToBottom,
+
     // Tab actions
     /// Create a new tab
     TabCreate,

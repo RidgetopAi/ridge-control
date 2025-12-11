@@ -67,6 +67,7 @@ impl CommandRegistry {
             Command::new("stream_refresh", "Refresh Streams", "Reload stream configuration", Action::StreamRefresh),
             Command::new("llm_cancel", "Cancel LLM", "Cancel current LLM request", Action::LlmCancel),
             Command::new("llm_clear", "Clear Conversation", "Clear LLM conversation history", Action::LlmClearConversation),
+            Command::new("conversation_toggle", "Toggle Conversation View", "Show/hide LLM conversation panel (Ctrl+L)", Action::ConversationToggle),
             Command::new("toggle_dangerous_mode", "Toggle Dangerous Mode", "Enable/disable dangerous tool execution", Action::ToolToggleDangerousMode),
             // Tab commands
             Command::new("tab_new", "New Tab", "Create a new tab (Ctrl+T)", Action::TabCreate),

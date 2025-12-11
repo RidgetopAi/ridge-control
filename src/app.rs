@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 use crate::action::Action;
 use crate::components::command_palette::CommandPalette;
 use crate::components::confirm_dialog::ConfirmDialog;
+use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::terminal::TerminalWidget;
@@ -70,6 +71,9 @@ pub struct App {
     config_watcher: Option<ConfigWatcherMode>,
     // Tab system
     tab_manager: TabManager,
+    // LLM conversation display
+    conversation_viewer: ConversationViewer,
+    show_conversation: bool,
 }
 
 impl App {
@@ -149,6 +153,8 @@ impl App {
             config_manager,
             config_watcher,
             tab_manager: TabManager::new(),
+            conversation_viewer: ConversationViewer::new(),
+            show_conversation: false,
         })
     }
 
@@ -488,7 +494,10 @@ impl App {
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
+        let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty();
         let theme = self.config_manager.theme().clone();
+        let messages = self.llm_manager.conversation().to_vec();
+        let streaming_buffer = self.llm_response_buffer.clone();
 
         self.terminal
             .draw(|frame| {
@@ -512,6 +521,7 @@ impl App {
                     frame.render_widget(tab_bar, tab_bar_area);
                 }
 
+                // Main layout: left (terminal or terminal+conversation) and right (process monitor + menu)
                 let main_chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
@@ -522,12 +532,58 @@ impl App {
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
                     .split(main_chunks[1]);
 
-                self.terminal_widget.render(
-                    frame,
-                    main_chunks[0],
-                    focus.is_focused(FocusArea::Terminal),
-                    &theme,
-                );
+                // Left area: split between terminal and conversation if conversation is visible
+                if show_conversation {
+                    let left_chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                        .split(main_chunks[0]);
+
+                    self.terminal_widget.render(
+                        frame,
+                        left_chunks[0],
+                        focus.is_focused(FocusArea::Terminal),
+                        &theme,
+                    );
+
+                    self.conversation_viewer.render_conversation(
+                        frame,
+                        left_chunks[1],
+                        focus.is_focused(FocusArea::StreamViewer), // Reuse StreamViewer focus for now
+                        &messages,
+                        &streaming_buffer,
+                        &theme,
+                    );
+
+                    let term_inner = {
+                        let block = ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL);
+                        block.inner(left_chunks[0])
+                    };
+                    self.terminal_widget.set_inner_area(term_inner);
+
+                    let conv_inner = {
+                        let block = ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL);
+                        block.inner(left_chunks[1])
+                    };
+                    self.conversation_viewer.set_inner_area(conv_inner);
+                } else {
+                    self.terminal_widget.render(
+                        frame,
+                        main_chunks[0],
+                        focus.is_focused(FocusArea::Terminal),
+                        &theme,
+                    );
+
+                    let term_inner = {
+                        let block = ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL);
+                        block.inner(main_chunks[0])
+                    };
+                    self.terminal_widget.set_inner_area(term_inner);
+                }
+
                 self.process_monitor.render(
                     frame,
                     right_chunks[0],
@@ -541,13 +597,6 @@ impl App {
                     &streams,
                     &theme,
                 );
-
-                let term_inner = {
-                    let block = ratatui::widgets::Block::default()
-                        .borders(ratatui::widgets::Borders::ALL);
-                    block.inner(main_chunks[0])
-                };
-                self.terminal_widget.set_inner_area(term_inner);
 
                 let proc_inner = {
                     let block = ratatui::widgets::Block::default()
@@ -895,6 +944,23 @@ impl App {
                 tracing::debug!("Theme changes applied");
             }
             
+            // Conversation viewer actions
+            Action::ConversationToggle => {
+                self.show_conversation = !self.show_conversation;
+            }
+            Action::ConversationScrollUp(n) => {
+                self.conversation_viewer.scroll_up(n);
+            }
+            Action::ConversationScrollDown(n) => {
+                self.conversation_viewer.scroll_down(n);
+            }
+            Action::ConversationScrollToTop => {
+                self.conversation_viewer.scroll_to_top();
+            }
+            Action::ConversationScrollToBottom => {
+                self.conversation_viewer.scroll_to_bottom();
+            }
+
             // Tab actions
             Action::TabCreate => {
                 self.tab_manager.create_tab_default();

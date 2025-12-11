@@ -146,7 +146,7 @@ git push origin main
 
 ### Step 6: HANDOFF
 
-Save to Mandrel:
+Save to Mandrel with **REQUIRED** tags (must be JSON array format):
 
 ```
 context_store(
@@ -155,6 +155,10 @@ context_store(
   tags: ["ridge-control", "i[N]", "TRC-XXX"]
 )
 ```
+
+**IMPORTANT:** Tags parameter MUST be a JSON array, not a string:
+- ✅ Correct: `["ridge-control", "i21", "TRC-001"]`
+- ❌ Wrong: `"ridge-control, i21, TRC-001"`
 
 Update task status:
 ```
