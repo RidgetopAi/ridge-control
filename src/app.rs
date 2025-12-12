@@ -15,11 +15,12 @@ use ratatui::{
 };
 use tokio::sync::mpsc;
 
-use crate::action::Action;
+use crate::action::{Action, ContextMenuTarget};
 use crate::cli::Cli;
 use crate::components::command_palette::CommandPalette;
 use crate::components::config_panel::ConfigPanel;
 use crate::components::confirm_dialog::ConfirmDialog;
+use crate::components::context_menu::{ContextMenu, ContextMenuItem};
 use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::log_viewer::LogViewer;
 use crate::components::menu::Menu;
@@ -101,6 +102,8 @@ pub struct App {
     spinner_manager: SpinnerManager,
     // TRC-018: Dangerous mode flag (from --dangerously-allow-all CLI flag)
     dangerous_mode: bool,
+    // Context menu (TRC-020)
+    context_menu: ContextMenu,
 }
 
 impl App {
@@ -228,6 +231,7 @@ impl App {
             show_config_panel: false,
             spinner_manager: SpinnerManager::new(),
             dangerous_mode: false,
+            context_menu: ContextMenu::new(),
         })
     }
 
@@ -684,6 +688,7 @@ impl App {
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
+        let show_context_menu = self.context_menu.is_visible();
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
         let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty() || !self.thinking_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
@@ -914,6 +919,11 @@ impl App {
                 if show_palette {
                     self.command_palette.render(frame, size, &theme);
                 }
+                
+                // TRC-020: Context menu overlay (highest z-index)
+                if show_context_menu {
+                    self.context_menu.render(frame, size, &theme);
+                }
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
@@ -1050,6 +1060,21 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
+        // TRC-020: If context menu is visible, route all mouse events to it first
+        if self.context_menu.is_visible() {
+            if let Some(action) = self.context_menu.handle_event(&CrosstermEvent::Mouse(mouse)) {
+                return Some(action);
+            }
+            // If click was outside menu, the handler returns ContextMenuClose
+            // For any other event not handled by context menu, consume it
+            return None;
+        }
+        
+        // TRC-020: Handle right-click to show context menus
+        if let MouseEventKind::Down(MouseButton::Right) = mouse.kind {
+            return self.handle_right_click(mouse.column, mouse.row);
+        }
+        
         // TRC-010: Check for clicks on the tab bar first (before focus-based routing)
         if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
             // Check if click is within tab bar area
@@ -1116,6 +1141,81 @@ impl App {
                     _ => None,
                 }
             }
+        }
+    }
+    
+    /// TRC-020: Handle right-click to determine context menu target and items
+    fn handle_right_click(&mut self, x: u16, y: u16) -> Option<Action> {
+        let term_size = self.terminal.size().ok()?;
+        let screen = Rect::new(0, 0, term_size.width, term_size.height);
+        
+        // Check tab bar first
+        if self.tab_bar_area.height > 0 && self.tab_bar_area.contains((x, y).into()) {
+            let tab_bar = TabBar::from_manager(&self.tab_manager);
+            let hit_areas = tab_bar.calculate_hit_areas(self.tab_bar_area);
+            
+            for (start_x, end_x, tab_index) in hit_areas {
+                if x >= start_x && x < end_x {
+                    return Some(Action::ContextMenuShow { 
+                        x, 
+                        y, 
+                        target: ContextMenuTarget::Tab(tab_index) 
+                    });
+                }
+            }
+            return None;
+        }
+        
+        // Determine target based on position
+        // Calculate layout areas (same as in draw())
+        let show_tabs = self.tab_manager.count() > 1 || self.dangerous_mode;
+        let content_y = if show_tabs { 1 } else { 0 };
+        let content_height = screen.height.saturating_sub(content_y);
+        let content_area = Rect::new(0, content_y, screen.width, content_height);
+        
+        // Main layout: 67% left, 33% right
+        let left_width = (content_area.width * 67) / 100;
+        let right_x = left_width;
+        
+        // Right side: 50% top (process monitor), 50% bottom (menu)
+        let right_top_height = content_height / 2;
+        let right_bottom_y = content_y + right_top_height;
+        
+        // Determine which area was clicked
+        if x < left_width {
+            // Terminal area
+            Some(Action::ContextMenuShow {
+                x,
+                y,
+                target: ContextMenuTarget::Terminal,
+            })
+        } else if y < right_bottom_y {
+            // Process monitor area
+            // Try to find which process was clicked
+            let inner_y = y.saturating_sub(content_y + 1); // Account for border
+            let selected_pid = self.process_monitor.get_pid_at_row(inner_y as usize);
+            
+            if let Some(pid) = selected_pid {
+                Some(Action::ContextMenuShow {
+                    x,
+                    y,
+                    target: ContextMenuTarget::Process(pid),
+                })
+            } else {
+                Some(Action::ContextMenuShow {
+                    x,
+                    y,
+                    target: ContextMenuTarget::Generic,
+                })
+            }
+        } else {
+            // Menu area - check for stream
+            let stream_idx = self.menu.selected_index();
+            Some(Action::ContextMenuShow {
+                x,
+                y,
+                target: ContextMenuTarget::Stream(stream_idx),
+            })
         }
     }
 
@@ -1714,6 +1814,24 @@ impl App {
                 self.conversation_viewer.toggle_thinking_collapse();
             }
             
+            // TRC-020: Context menu actions
+            Action::ContextMenuShow { x, y, target } => {
+                let items = self.build_context_menu_items(&target);
+                self.context_menu.show(x, y, target, items);
+            }
+            Action::ContextMenuClose => {
+                self.context_menu.hide();
+            }
+            Action::ContextMenuNext => {
+                // Navigation is handled internally by context_menu.handle_event()
+            }
+            Action::ContextMenuPrev => {
+                // Navigation is handled internally by context_menu.handle_event()
+            }
+            Action::ContextMenuSelect => {
+                // Selection is handled internally by context_menu.handle_event()
+            }
+            
             _ => {}
         }
         Ok(())
@@ -1744,6 +1862,166 @@ impl App {
     
     pub fn config(&self) -> &ConfigManager {
         &self.config_manager
+    }
+    
+    /// TRC-020: Build context menu items based on target
+    fn build_context_menu_items(&self, target: &ContextMenuTarget) -> Vec<ContextMenuItem> {
+        match target {
+            ContextMenuTarget::Tab(tab_index) => {
+                let tab_count = self.tab_manager.count();
+                let is_active = *tab_index == self.tab_manager.active_index();
+                
+                let mut items = vec![
+                    ContextMenuItem::new("New Tab", Action::TabCreate)
+                        .with_shortcut("Ctrl+T"),
+                ];
+                
+                // Can only close if not the only tab
+                if tab_count > 1 {
+                    items.push(
+                        ContextMenuItem::new("Close Tab", Action::TabCloseIndex(*tab_index))
+                            .with_shortcut("Ctrl+W")
+                    );
+                } else {
+                    items.push(
+                        ContextMenuItem::new("Close Tab", Action::TabCloseIndex(*tab_index))
+                            .with_shortcut("Ctrl+W")
+                            .disabled()
+                    );
+                }
+                
+                items.push(ContextMenuItem::separator());
+                
+                // Navigation
+                if *tab_index > 0 {
+                    items.push(ContextMenuItem::new("Move Left", Action::TabMove { 
+                        from: *tab_index, 
+                        to: tab_index.saturating_sub(1) 
+                    }));
+                }
+                if *tab_index < tab_count.saturating_sub(1) {
+                    items.push(ContextMenuItem::new("Move Right", Action::TabMove { 
+                        from: *tab_index, 
+                        to: tab_index + 1 
+                    }));
+                }
+                
+                items.push(ContextMenuItem::separator());
+                items.push(ContextMenuItem::new("Rename...", Action::OpenCommandPalette));
+                
+                items
+            }
+            
+            ContextMenuTarget::Process(pid) => {
+                vec![
+                    ContextMenuItem::new(format!("Kill Process ({})", pid), Action::ProcessKillRequest(*pid))
+                        .with_shortcut("k"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Refresh", Action::ProcessRefresh)
+                        .with_shortcut("r"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Sort by PID", Action::ProcessSetSort(crate::action::SortColumn::Pid)),
+                    ContextMenuItem::new("Sort by Name", Action::ProcessSetSort(crate::action::SortColumn::Name)),
+                    ContextMenuItem::new("Sort by CPU", Action::ProcessSetSort(crate::action::SortColumn::Cpu)),
+                    ContextMenuItem::new("Sort by Memory", Action::ProcessSetSort(crate::action::SortColumn::Memory)),
+                ]
+            }
+            
+            ContextMenuTarget::Stream(stream_idx) => {
+                let stream_count = self.stream_manager.clients().len();
+                if *stream_idx >= stream_count {
+                    return vec![
+                        ContextMenuItem::new("No streams configured", Action::None).disabled(),
+                    ];
+                }
+                
+                let is_connected = self.stream_manager.clients()
+                    .get(*stream_idx)
+                    .map(|c| matches!(c.state(), ConnectionState::Connected))
+                    .unwrap_or(false);
+                
+                let mut items = Vec::new();
+                
+                if is_connected {
+                    items.push(ContextMenuItem::new("Disconnect", Action::StreamDisconnect(*stream_idx))
+                        .with_shortcut("d"));
+                    items.push(ContextMenuItem::new("View Stream", Action::StreamViewerShow(*stream_idx))
+                        .with_shortcut("v"));
+                } else {
+                    items.push(ContextMenuItem::new("Connect", Action::StreamConnect(*stream_idx))
+                        .with_shortcut("c"));
+                }
+                
+                items.push(ContextMenuItem::separator());
+                items.push(ContextMenuItem::new("Refresh All", Action::StreamRefresh)
+                    .with_shortcut("r"));
+                
+                items
+            }
+            
+            ContextMenuTarget::Terminal => {
+                let has_selection = self.tab_manager
+                    .active_pty_session()
+                    .map(|s| s.terminal().has_selection())
+                    .unwrap_or(false);
+                
+                let mut items = vec![
+                    if has_selection {
+                        ContextMenuItem::new("Copy", Action::Copy).with_shortcut("Ctrl+C")
+                    } else {
+                        ContextMenuItem::new("Copy", Action::Copy).with_shortcut("Ctrl+C").disabled()
+                    },
+                    ContextMenuItem::new("Paste", Action::Paste).with_shortcut("Ctrl+V"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Clear Scrollback", Action::ScrollToTop),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("New Tab", Action::TabCreate).with_shortcut("Ctrl+T"),
+                ];
+                
+                items
+            }
+            
+            ContextMenuTarget::LogViewer => {
+                vec![
+                    ContextMenuItem::new("Clear Logs", Action::LogViewerClear)
+                        .with_shortcut("c"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Toggle Auto-scroll", Action::LogViewerToggleAutoScroll)
+                        .with_shortcut("a"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Scroll to Top", Action::LogViewerScrollToTop)
+                        .with_shortcut("g"),
+                    ContextMenuItem::new("Scroll to Bottom", Action::LogViewerScrollToBottom)
+                        .with_shortcut("G"),
+                ]
+            }
+            
+            ContextMenuTarget::Conversation => {
+                vec![
+                    ContextMenuItem::new("Clear Conversation", Action::LlmClearConversation),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Toggle Thinking", Action::ThinkingToggleCollapse)
+                        .with_shortcut("T"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Expand All Tools", Action::ToolCallExpandAll),
+                    ContextMenuItem::new("Collapse All Tools", Action::ToolCallCollapseAll),
+                ]
+            }
+            
+            ContextMenuTarget::Generic => {
+                vec![
+                    ContextMenuItem::new("Command Palette", Action::OpenCommandPalette)
+                        .with_shortcut(":"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("New Tab", Action::TabCreate)
+                        .with_shortcut("Ctrl+T"),
+                    ContextMenuItem::new("Settings", Action::ConfigPanelToggle),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Quit", Action::Quit)
+                        .with_shortcut("Ctrl+C"),
+                ]
+            }
+        }
     }
 }
 

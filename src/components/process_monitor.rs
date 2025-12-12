@@ -303,6 +303,18 @@ impl ProcessMonitor {
     pub fn set_inner_area(&mut self, area: Rect) {
         self.inner_area = area;
     }
+    
+    /// TRC-020: Get PID at a specific row index (for context menu targeting)
+    pub fn get_pid_at_row(&self, row: usize) -> Option<i32> {
+        // Account for header row (row 0) and GPU indicator (if visible, takes 3 rows)
+        let gpu_rows = if self.gpu_available() { 3 } else { 0 };
+        let header_row = 1;
+        let data_row = row.saturating_sub(gpu_rows + header_row);
+        
+        self.filtered_processes()
+            .get(data_row)
+            .map(|p| p.pid)
+    }
 }
 
 impl Component for ProcessMonitor {

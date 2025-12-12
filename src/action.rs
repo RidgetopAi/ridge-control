@@ -249,5 +249,36 @@ pub enum Action {
     /// Toggle collapse/expand of all thinking blocks
     ThinkingToggleCollapse,
 
+    // Context menu actions (TRC-020)
+    /// Show context menu at position for target
+    ContextMenuShow { x: u16, y: u16, target: ContextMenuTarget },
+    /// Close context menu
+    ContextMenuClose,
+    /// Navigate to next context menu item
+    ContextMenuNext,
+    /// Navigate to previous context menu item
+    ContextMenuPrev,
+    /// Select/activate current context menu item
+    ContextMenuSelect,
+
     None,
+}
+
+/// Target type for context menus (TRC-020)
+#[derive(Debug, Clone)]
+pub enum ContextMenuTarget {
+    /// Right-clicked on a tab (includes tab index)
+    Tab(usize),
+    /// Right-clicked on a process (includes PID)
+    Process(i32),
+    /// Right-clicked on a stream (includes stream index)
+    Stream(usize),
+    /// Right-clicked on terminal area
+    Terminal,
+    /// Right-clicked on log viewer
+    LogViewer,
+    /// Right-clicked on conversation viewer
+    Conversation,
+    /// Generic/no specific target
+    Generic,
 }
