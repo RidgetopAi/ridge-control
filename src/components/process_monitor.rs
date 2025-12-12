@@ -3,14 +3,15 @@ use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, MouseButton, MouseEventKind};
 use ratatui::{
-    layout::{Constraint, Rect},
+    layout::{Constraint, Layout, Direction, Rect},
     style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, Borders, Row, Table, TableState},
+    text::{Line, Span},
+    widgets::{Block, Borders, Gauge, Row, Table, TableState},
     Frame,
 };
 
 use crate::action::{Action, SortColumn, SortOrder};
+use crate::components::gpu_monitor::{GpuMonitor, GpuVendor};
 use crate::components::Component;
 use crate::config::Theme;
 
@@ -72,6 +73,7 @@ pub struct ProcessMonitor {
     ticks_per_second: u64,
     page_size: u64,
     inner_area: Rect,
+    gpu_monitor: GpuMonitor,
 }
 
 impl ProcessMonitor {
@@ -91,10 +93,15 @@ impl ProcessMonitor {
             ticks_per_second: ticks,
             page_size: page,
             inner_area: Rect::default(),
+            gpu_monitor: GpuMonitor::new(),
         };
         
         monitor.refresh_processes();
         monitor
+    }
+
+    pub fn gpu_available(&self) -> bool {
+        self.gpu_monitor.is_available()
     }
 
     pub fn refresh_processes(&mut self) {
@@ -428,6 +435,9 @@ impl Component for ProcessMonitor {
                 if self.last_refresh.elapsed().as_secs() >= 2 {
                     self.refresh_processes();
                 }
+                if self.gpu_monitor.should_refresh() {
+                    self.gpu_monitor.refresh();
+                }
             }
             _ => {}
         }
@@ -435,6 +445,19 @@ impl Component for ProcessMonitor {
 
     fn render(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
         let border_style = theme.border_style(focused);
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(5),
+            ])
+            .split(area);
+
+        let gpu_area = chunks[0];
+        let table_area = chunks[1];
+
+        self.render_gpu_indicator(frame, gpu_area, focused, theme);
 
         let title = if let ConfirmState::AwaitingKillConfirm(pid) = self.confirm_state {
             format!(" Kill PID {}? [y/n] ", pid)
@@ -527,7 +550,82 @@ impl Component for ProcessMonitor {
                 Style::default()
             });
 
-        frame.render_stateful_widget(table, area, &mut self.table_state.clone());
+        frame.render_stateful_widget(table, table_area, &mut self.table_state.clone());
+    }
+}
+
+impl ProcessMonitor {
+    fn render_gpu_indicator(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let border_style = theme.border_style(focused);
+
+        if !self.gpu_monitor.is_available() {
+            let block = Block::default()
+                .title(Span::styled(
+                    " GPU ",
+                    Style::default().fg(theme.gpu_unavailable_color()),
+                ))
+                .borders(Borders::ALL)
+                .border_style(border_style);
+
+            let inner = block.inner(area);
+            frame.render_widget(block, area);
+
+            let unavailable_text = Line::from(vec![
+                Span::styled(
+                    " No GPU detected",
+                    Style::default().fg(theme.gpu_unavailable_color()),
+                ),
+            ]);
+            frame.render_widget(unavailable_text, inner);
+            return;
+        }
+
+        if let Some(gpu) = self.gpu_monitor.primary_gpu() {
+            let util_percent = gpu.utilization as u16;
+            let gpu_color = theme.gpu_color(gpu.utilization);
+
+            let vendor_icon = match self.gpu_monitor.vendor() {
+                GpuVendor::Nvidia => "",
+                GpuVendor::Amd => "󰍹",
+                GpuVendor::Unknown => "",
+            };
+
+            let temp_str = gpu.temperature
+                .map(|t| format!(" {}°C", t))
+                .unwrap_or_default();
+
+            let power_str = gpu.power_draw
+                .map(|p| format!(" {:.0}W", p))
+                .unwrap_or_default();
+
+            let title = format!(
+                " {} GPU {}%{}{}  {}",
+                vendor_icon,
+                util_percent,
+                temp_str,
+                power_str,
+                gpu.format_memory(),
+            );
+
+            let block = Block::default()
+                .title(Span::styled(
+                    title,
+                    Style::default().fg(gpu_color).add_modifier(Modifier::BOLD),
+                ))
+                .borders(Borders::ALL)
+                .border_style(border_style);
+
+            let gauge = Gauge::default()
+                .block(block)
+                .gauge_style(Style::default().fg(gpu_color).bg(theme.colors.background.to_color()))
+                .percent(util_percent.min(100))
+                .label(Span::styled(
+                    format!("{}% ", util_percent),
+                    Style::default().fg(theme.colors.foreground.to_color()),
+                ));
+
+            frame.render_widget(gauge, area);
+        }
     }
 }
 

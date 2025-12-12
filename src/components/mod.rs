@@ -2,6 +2,7 @@ pub mod command_palette;
 pub mod config_panel;
 pub mod confirm_dialog;
 pub mod conversation_viewer;
+pub mod gpu_monitor;
 pub mod log_viewer;
 pub mod menu;
 pub mod placeholder;

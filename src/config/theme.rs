@@ -156,6 +156,11 @@ pub struct ProcessMonitorStyle {
     pub cpu_critical: HexColor,
     pub memory_color: HexColor,
     pub kill_button: HexColor,
+    pub gpu_low: HexColor,
+    pub gpu_medium: HexColor,
+    pub gpu_high: HexColor,
+    pub gpu_critical: HexColor,
+    pub gpu_unavailable: HexColor,
 }
 
 impl Default for ProcessMonitorStyle {
@@ -171,6 +176,11 @@ impl Default for ProcessMonitorStyle {
             cpu_critical: HexColor::new("#f7768e"),
             memory_color: HexColor::new("#7dcfff"),
             kill_button: HexColor::new("#f7768e"),
+            gpu_low: HexColor::new("#76b947"),
+            gpu_medium: HexColor::new("#e0af68"),
+            gpu_high: HexColor::new("#ff9e64"),
+            gpu_critical: HexColor::new("#f7768e"),
+            gpu_unavailable: HexColor::new("#565f89"),
         }
     }
 }
@@ -403,6 +413,22 @@ impl Theme {
         } else {
             self.process_monitor.cpu_low.to_color()
         }
+    }
+
+    pub fn gpu_color(&self, percentage: f32) -> Color {
+        if percentage >= 90.0 {
+            self.process_monitor.gpu_critical.to_color()
+        } else if percentage >= 70.0 {
+            self.process_monitor.gpu_high.to_color()
+        } else if percentage >= 40.0 {
+            self.process_monitor.gpu_medium.to_color()
+        } else {
+            self.process_monitor.gpu_low.to_color()
+        }
+    }
+
+    pub fn gpu_unavailable_color(&self) -> Color {
+        self.process_monitor.gpu_unavailable.to_color()
     }
 }
 
