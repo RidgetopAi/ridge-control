@@ -493,4 +493,23 @@ mod tests {
         let toml_str = toml::to_string_pretty(&config).unwrap();
         let _parsed: KeybindingsConfig = toml::from_str(&toml_str).unwrap();
     }
+    
+    #[test]
+    fn test_enter_key_maps_to_enter_pty_mode() {
+        use crate::input::mode::InputMode;
+        
+        let config = KeybindingsConfig::default();
+        
+        // Simulate Enter key press (no modifiers)
+        let enter_key = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        
+        // In Normal mode, Enter should map to EnterPtyMode
+        let action = config.get_action(&InputMode::Normal, &enter_key);
+        assert!(action.is_some(), "Enter key should map to an action in Normal mode");
+        
+        match action {
+            Some(Action::EnterPtyMode) => (),
+            other => panic!("Expected EnterPtyMode, got {:?}", other),
+        }
+    }
 }

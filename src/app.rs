@@ -676,6 +676,10 @@ impl App {
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        // Debug: Log key events to help diagnose input issues
+        #[cfg(debug_assertions)]
+        tracing::debug!("Key event: {:?}, mode: {:?}, focus: {:?}", key, self.input_mode, self.focus.current());
+        
         match &self.input_mode {
             InputMode::Confirm { .. } => {
                 self.confirm_dialog.handle_event(&CrosstermEvent::Key(key))
@@ -711,7 +715,10 @@ impl App {
             }
             InputMode::Normal => {
                 // First check configurable keybindings for global actions
-                if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
+                let binding_action = self.config_manager.keybindings().get_action(&self.input_mode, &key);
+                #[cfg(debug_assertions)]
+                tracing::debug!("Normal mode keybinding lookup result: {:?}", binding_action);
+                if let Some(action) = binding_action {
                     return Some(action);
                 }
                 
@@ -725,7 +732,14 @@ impl App {
 
                 // Focus-specific key handling
                 match self.focus.current() {
-                    FocusArea::Terminal => None,
+                    FocusArea::Terminal => {
+                        // Enter key should enter PTY mode when terminal is focused
+                        // This is a hardcoded fallback in case keybinding lookup fails
+                        if key.code == KeyCode::Enter && key.modifiers.is_empty() {
+                            return Some(Action::EnterPtyMode);
+                        }
+                        None
+                    }
                     FocusArea::ProcessMonitor => {
                         self.process_monitor.handle_event(&CrosstermEvent::Key(key))
                     }
