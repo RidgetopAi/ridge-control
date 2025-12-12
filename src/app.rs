@@ -496,6 +496,9 @@ impl App {
     }
     
     fn handle_tool_use_request(&mut self, tool_use: ToolUse) {
+        // Register tool use in conversation viewer for UI tracking (TRC-016)
+        self.conversation_viewer.register_tool_use(tool_use.clone());
+        
         // Check if the tool can be executed
         let check = self.tool_executor.can_execute(&tool_use, false);
         
@@ -533,6 +536,9 @@ impl App {
     fn execute_tool(&mut self, pending: PendingToolUse) {
         // Add the tool use to the conversation
         self.llm_manager.add_tool_use(pending.tool.clone());
+        
+        // Update tool state to Running in conversation viewer (TRC-016)
+        self.conversation_viewer.start_tool_execution(&pending.tool.id);
         
         // Execute the tool asynchronously
         let tool = pending.tool.clone();
@@ -1237,6 +1243,8 @@ impl App {
             }
             Action::LlmClearConversation => {
                 self.llm_manager.clear_conversation();
+                // Also clear tool calls in conversation viewer (TRC-016)
+                self.conversation_viewer.clear_tool_calls();
             }
             Action::LlmStreamChunk(_) | Action::LlmStreamComplete | Action::LlmStreamError(_) => {
                 // These are handled by handle_llm_event, not dispatched directly
@@ -1266,6 +1274,9 @@ impl App {
                 self.input_mode = InputMode::Normal;
                 
                 if let Some(pending) = self.pending_tool.take() {
+                    // Update tool state in conversation viewer (TRC-016)
+                    self.conversation_viewer.reject_tool(&pending.tool.id);
+                    
                     // Send an error result back to the LLM
                     let error_result = crate::llm::ToolResult {
                         tool_use_id: pending.tool.id.clone(),
@@ -1281,6 +1292,11 @@ impl App {
                 }
             }
             Action::ToolResult(result) => {
+                // Update tool state in conversation viewer (TRC-016)
+                if let Some(ref pending) = self.pending_tool {
+                    self.conversation_viewer.complete_tool(&pending.tool.id, result.clone());
+                }
+                
                 // Tool execution completed, send result back to LLM
                 self.llm_manager.add_tool_result(result);
                 self.pending_tool = None;
@@ -1572,6 +1588,29 @@ impl App {
             }
             Action::SpinnerSetLabel(name, label) => {
                 self.spinner_manager.set_label(&SpinnerKey::custom(name), label);
+            }
+            
+            // Tool Call UI actions (TRC-016)
+            Action::ToolCallNextTool => {
+                self.conversation_viewer.select_next_tool();
+            }
+            Action::ToolCallPrevTool => {
+                self.conversation_viewer.select_prev_tool();
+            }
+            Action::ToolCallToggleExpand => {
+                self.conversation_viewer.toggle_selected_tool();
+            }
+            Action::ToolCallExpandAll => {
+                self.conversation_viewer.expand_all_tools();
+            }
+            Action::ToolCallCollapseAll => {
+                self.conversation_viewer.collapse_all_tools();
+            }
+            Action::ToolCallStartExecution(tool_id) => {
+                self.conversation_viewer.start_tool_execution(&tool_id);
+            }
+            Action::ToolCallRegister(tool_use) => {
+                self.conversation_viewer.register_tool_use(tool_use);
             }
             
             _ => {}

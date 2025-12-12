@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::config::KeyId;
 use crate::input::focus::FocusArea;
-use crate::llm::{LLMError, StreamChunk, PendingToolUse, ToolResult};
+use crate::llm::{LLMError, StreamChunk, PendingToolUse, ToolResult, ToolUse};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
@@ -226,6 +226,22 @@ pub enum Action {
     SpinnerStop(String),
     /// Set spinner label
     SpinnerSetLabel(String, Option<String>),
+
+    // Tool Call UI actions (TRC-016)
+    /// Navigate to next tool call in conversation
+    ToolCallNextTool,
+    /// Navigate to previous tool call in conversation
+    ToolCallPrevTool,
+    /// Toggle expand/collapse of selected tool call
+    ToolCallToggleExpand,
+    /// Expand all tool calls in conversation
+    ToolCallExpandAll,
+    /// Collapse all tool calls in conversation
+    ToolCallCollapseAll,
+    /// Start execution of a tool by ID
+    ToolCallStartExecution(String),
+    /// Register a tool use from LLM in the conversation viewer
+    ToolCallRegister(ToolUse),
 
     None,
 }

@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
@@ -9,11 +9,12 @@ use ratatui::{
 
 use crate::action::Action;
 use crate::components::spinner::{Spinner, SpinnerStyle};
+use crate::components::tool_call_widget::{ToolCallManager, ToolCallWidget, ToolStatus};
 use crate::components::Component;
 use crate::config::Theme;
 use crate::llm::{ContentBlock, Message, Role, ToolUse, ToolResult};
 
-/// Displays LLM conversation history with streaming response support
+/// Displays LLM conversation history with streaming response support and tool call management
 pub struct ConversationViewer {
     scroll_offset: u16,
     line_count: usize,
@@ -21,6 +22,10 @@ pub struct ConversationViewer {
     auto_scroll: bool,
     inner_area: Rect,
     streaming_spinner: Spinner,
+    tool_spinner: Spinner,
+    tool_call_manager: ToolCallManager,
+    /// Whether we're in tool call navigation mode
+    tool_navigation_mode: bool,
 }
 
 impl ConversationViewer {
@@ -32,16 +37,75 @@ impl ConversationViewer {
             auto_scroll: true,
             inner_area: Rect::default(),
             streaming_spinner: Spinner::new(SpinnerStyle::BrailleDots),
+            tool_spinner: Spinner::new(SpinnerStyle::Braille),
+            tool_call_manager: ToolCallManager::new(),
+            tool_navigation_mode: false,
         }
     }
     
     pub fn tick_spinner(&mut self) {
         self.streaming_spinner.tick();
+        self.tool_spinner.tick();
     }
 
     pub fn set_inner_area(&mut self, area: Rect) {
         self.inner_area = area;
         self.visible_height = area.height;
+    }
+    
+    /// Get the tool call manager for external access
+    pub fn tool_call_manager(&self) -> &ToolCallManager {
+        &self.tool_call_manager
+    }
+    
+    /// Get mutable tool call manager
+    pub fn tool_call_manager_mut(&mut self) -> &mut ToolCallManager {
+        &mut self.tool_call_manager
+    }
+    
+    /// Register a new tool use from LLM
+    pub fn register_tool_use(&mut self, tool_use: ToolUse) {
+        self.tool_call_manager.add_tool_call(tool_use);
+    }
+    
+    /// Start execution of a tool by ID
+    pub fn start_tool_execution(&mut self, tool_id: &str) {
+        self.tool_call_manager.start_execution(tool_id);
+    }
+    
+    /// Complete a tool with result
+    pub fn complete_tool(&mut self, tool_id: &str, result: ToolResult) {
+        self.tool_call_manager.complete_tool(tool_id, result);
+    }
+    
+    /// Reject a tool
+    pub fn reject_tool(&mut self, tool_id: &str) {
+        self.tool_call_manager.reject_tool(tool_id);
+    }
+    
+    /// Check if there's a pending tool that needs confirmation
+    pub fn has_pending_tool(&self) -> bool {
+        self.tool_call_manager.has_pending()
+    }
+    
+    /// Check if there's a running tool
+    pub fn has_running_tool(&self) -> bool {
+        self.tool_call_manager.has_running()
+    }
+    
+    /// Toggle tool call navigation mode
+    pub fn toggle_tool_navigation(&mut self) {
+        self.tool_navigation_mode = !self.tool_navigation_mode;
+    }
+    
+    /// Check if in tool navigation mode
+    pub fn is_tool_navigation_mode(&self) -> bool {
+        self.tool_navigation_mode
+    }
+    
+    /// Clear all tool calls (e.g., when conversation is cleared)
+    pub fn clear_tool_calls(&mut self) {
+        self.tool_call_manager.clear();
     }
 
     /// Render conversation with messages and current streaming buffer
@@ -57,11 +121,8 @@ impl ConversationViewer {
         let border_style = theme.border_style(focused);
         let title_style = theme.title_style(focused);
 
-        let title = if streaming_buffer.is_empty() {
-            " Conversation ".to_string()
-        } else {
-            format!(" {} Streaming... ", self.streaming_spinner.current_frame())
-        };
+        // Build title with status indicators
+        let title = self.build_title(streaming_buffer);
 
         let block = Block::default()
             .title(title)
@@ -94,8 +155,8 @@ impl ConversationViewer {
             lines.push(Line::from(Span::styled(role_text, role_style)));
 
             // Add content blocks
-            for block in &message.content {
-                match block {
+            for content_block in &message.content {
+                match content_block {
                     ContentBlock::Text(text) => {
                         for line in text.lines() {
                             lines.push(Line::from(Span::styled(
@@ -121,7 +182,7 @@ impl ConversationViewer {
                         }
                     }
                     ContentBlock::ToolUse(tool) => {
-                        lines.extend(self.render_tool_use(tool, theme));
+                        lines.extend(self.render_tool_use_enhanced(tool, theme));
                     }
                     ContentBlock::ToolResult(result) => {
                         lines.extend(self.render_tool_result(result, theme));
@@ -206,8 +267,58 @@ impl ConversationViewer {
             );
         }
     }
+    
+    fn build_title(&self, streaming_buffer: &str) -> String {
+        let mut title_parts = vec![" Conversation".to_string()];
+        
+        // Add tool status indicators
+        let tool_count = self.tool_call_manager.len();
+        if tool_count > 0 {
+            let pending = self.tool_call_manager.tool_calls().iter()
+                .filter(|tc| tc.status == ToolStatus::Pending)
+                .count();
+            let running = self.tool_call_manager.tool_calls().iter()
+                .filter(|tc| tc.status == ToolStatus::Running)
+                .count();
+            
+            if pending > 0 {
+                title_parts.push(format!(" [⏳{}]", pending));
+            }
+            if running > 0 {
+                title_parts.push(format!(" [{}{}]", self.tool_spinner.current_frame(), running));
+            }
+        }
+        
+        // Add streaming indicator
+        if !streaming_buffer.is_empty() {
+            title_parts.push(format!(" {} Streaming...", self.streaming_spinner.current_frame()));
+        }
+        
+        title_parts.push(" ".to_string());
+        title_parts.join("")
+    }
 
-    fn render_tool_use(&self, tool: &ToolUse, theme: &Theme) -> Vec<Line<'static>> {
+    /// Render a tool use with enhanced UI using ToolCallWidget
+    fn render_tool_use_enhanced(&self, tool: &ToolUse, theme: &Theme) -> Vec<Line<'static>> {
+        // Try to find the tool call in our manager for state info
+        if let Some(tracked_tool) = self.tool_call_manager.get(&tool.id) {
+            let is_selected = self.tool_call_manager.selected()
+                .map(|s| s.tool_id() == tool.id)
+                .unwrap_or(false);
+            
+            let widget = ToolCallWidget::new(tracked_tool, theme)
+                .with_spinner(&self.tool_spinner)
+                .selected(is_selected);
+            
+            widget.render_lines()
+        } else {
+            // Fallback to simple rendering if tool isn't tracked
+            self.render_tool_use_simple(tool, theme)
+        }
+    }
+    
+    /// Simple tool use rendering (fallback)
+    fn render_tool_use_simple(&self, tool: &ToolUse, theme: &Theme) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
         lines.push(Line::from(vec![
@@ -337,6 +448,31 @@ impl ConversationViewer {
     pub fn is_auto_scroll(&self) -> bool {
         self.auto_scroll
     }
+    
+    /// Select next tool call (for navigation)
+    pub fn select_next_tool(&mut self) {
+        self.tool_call_manager.select_next();
+    }
+    
+    /// Select previous tool call (for navigation)
+    pub fn select_prev_tool(&mut self) {
+        self.tool_call_manager.select_prev();
+    }
+    
+    /// Toggle expand/collapse of selected tool
+    pub fn toggle_selected_tool(&mut self) {
+        self.tool_call_manager.toggle_selected();
+    }
+    
+    /// Expand all tool calls
+    pub fn expand_all_tools(&mut self) {
+        self.tool_call_manager.expand_all();
+    }
+    
+    /// Collapse all tool calls
+    pub fn collapse_all_tools(&mut self) {
+        self.tool_call_manager.collapse_all();
+    }
 }
 
 impl Default for ConversationViewer {
@@ -359,6 +495,11 @@ impl Component for ConversationViewer {
             Action::ScrollDown(n) => self.scroll_down(*n),
             Action::ScrollToTop => self.scroll_to_top(),
             Action::ScrollToBottom => self.scroll_to_bottom(),
+            Action::ToolCallNextTool => self.select_next_tool(),
+            Action::ToolCallPrevTool => self.select_prev_tool(),
+            Action::ToolCallToggleExpand => self.toggle_selected_tool(),
+            Action::ToolCallExpandAll => self.expand_all_tools(),
+            Action::ToolCallCollapseAll => self.collapse_all_tools(),
             _ => {}
         }
     }
@@ -370,6 +511,23 @@ impl Component for ConversationViewer {
 
 impl ConversationViewer {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        // Tool navigation mode keys
+        if self.tool_navigation_mode {
+            match key.code {
+                KeyCode::Char('j') | KeyCode::Down => return Some(Action::ToolCallNextTool),
+                KeyCode::Char('k') | KeyCode::Up => return Some(Action::ToolCallPrevTool),
+                KeyCode::Enter | KeyCode::Char(' ') => return Some(Action::ToolCallToggleExpand),
+                KeyCode::Char('e') => return Some(Action::ToolCallExpandAll),
+                KeyCode::Char('c') => return Some(Action::ToolCallCollapseAll),
+                KeyCode::Esc => {
+                    self.tool_navigation_mode = false;
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        
+        // Normal conversation viewer keys
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown(1)),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp(1)),
@@ -381,6 +539,13 @@ impl ConversationViewer {
                 self.toggle_auto_scroll();
                 None
             }
+            KeyCode::Char('t') => {
+                // Enter tool navigation mode
+                if !self.tool_call_manager.is_empty() {
+                    self.tool_navigation_mode = true;
+                }
+                None
+            }
             _ => None,
         }
     }
@@ -389,12 +554,23 @@ impl ConversationViewer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn create_test_tool_use(name: &str) -> ToolUse {
+        ToolUse {
+            id: format!("tool_{}", name),
+            name: name.to_string(),
+            input: json!({"path": "/test/path"}),
+        }
+    }
 
     #[test]
     fn test_conversation_viewer_new() {
         let viewer = ConversationViewer::new();
         assert_eq!(viewer.scroll_offset, 0);
         assert!(viewer.auto_scroll);
+        assert!(viewer.tool_call_manager.is_empty());
+        assert!(!viewer.tool_navigation_mode);
     }
 
     #[test]
@@ -427,5 +603,77 @@ mod tests {
 
         viewer.toggle_auto_scroll();
         assert!(viewer.is_auto_scroll());
+    }
+
+    #[test]
+    fn test_tool_registration() {
+        let mut viewer = ConversationViewer::new();
+        
+        viewer.register_tool_use(create_test_tool_use("file_read"));
+        assert_eq!(viewer.tool_call_manager.len(), 1);
+        assert!(viewer.has_pending_tool());
+        
+        viewer.start_tool_execution("tool_file_read");
+        assert!(!viewer.has_pending_tool());
+        assert!(viewer.has_running_tool());
+    }
+
+    #[test]
+    fn test_tool_navigation_mode() {
+        let mut viewer = ConversationViewer::new();
+        assert!(!viewer.is_tool_navigation_mode());
+        
+        viewer.toggle_tool_navigation();
+        assert!(viewer.is_tool_navigation_mode());
+        
+        viewer.toggle_tool_navigation();
+        assert!(!viewer.is_tool_navigation_mode());
+    }
+
+    #[test]
+    fn test_tool_navigation() {
+        let mut viewer = ConversationViewer::new();
+        
+        viewer.register_tool_use(create_test_tool_use("tool1"));
+        viewer.register_tool_use(create_test_tool_use("tool2"));
+        viewer.register_tool_use(create_test_tool_use("tool3"));
+        
+        assert_eq!(viewer.tool_call_manager.selected_index(), Some(2));
+        
+        viewer.select_prev_tool();
+        assert_eq!(viewer.tool_call_manager.selected_index(), Some(1));
+        
+        viewer.select_next_tool();
+        assert_eq!(viewer.tool_call_manager.selected_index(), Some(2));
+    }
+
+    #[test]
+    fn test_tool_expand_collapse() {
+        let mut viewer = ConversationViewer::new();
+        
+        viewer.register_tool_use(create_test_tool_use("tool1"));
+        viewer.register_tool_use(create_test_tool_use("tool2"));
+        
+        // Default is expanded
+        assert!(viewer.tool_call_manager.tool_calls().iter().all(|tc| tc.expanded));
+        
+        viewer.collapse_all_tools();
+        assert!(viewer.tool_call_manager.tool_calls().iter().all(|tc| !tc.expanded));
+        
+        viewer.expand_all_tools();
+        assert!(viewer.tool_call_manager.tool_calls().iter().all(|tc| tc.expanded));
+    }
+
+    #[test]
+    fn test_clear_tool_calls() {
+        let mut viewer = ConversationViewer::new();
+        
+        viewer.register_tool_use(create_test_tool_use("tool1"));
+        viewer.register_tool_use(create_test_tool_use("tool2"));
+        
+        assert_eq!(viewer.tool_call_manager.len(), 2);
+        
+        viewer.clear_tool_calls();
+        assert!(viewer.tool_call_manager.is_empty());
     }
 }
