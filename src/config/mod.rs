@@ -1,10 +1,12 @@
 mod keybindings;
 mod keystore;
+mod session;
 mod theme;
 mod watcher;
 
 pub use keybindings::{KeyBinding, KeybindingsConfig, Modifier};
 pub use keystore::{KeyId, KeyStore, KeyStoreBackend, SecretString, prompt_master_password, prompt_new_password};
+pub use session::{SessionData, SessionManager, TabData};
 pub use theme::{Theme, ThemeColors, FocusStyle};
 pub use watcher::{ConfigWatcher, ConfigWatcherMode, ConfigEvent};
 

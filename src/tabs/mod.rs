@@ -371,6 +371,51 @@ impl TabManager {
     pub fn clear_active_activity(&mut self) {
         self.tabs[self.active_index].set_activity(false);
     }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Session Persistence Support (TRC-012)
+    // ───────────────────────────────────────────────────────────────────────
+
+    /// Get an iterator over tab names and is_main flags for session persistence
+    pub fn tabs_for_session(&self) -> impl Iterator<Item = (&str, bool)> {
+        self.tabs.iter().map(|t| (t.name(), t.is_main()))
+    }
+
+    /// Restore tabs from session data
+    /// Creates tabs in order (skips main tab which always exists)
+    /// Returns list of newly created tab IDs that need PTY spawning
+    pub fn restore_from_session(
+        &mut self,
+        tab_names: impl Iterator<Item = (String, bool)>,
+        active_index: usize,
+    ) -> Vec<TabId> {
+        let mut created_ids = Vec::new();
+        let mut is_first = true;
+
+        for (name, is_main) in tab_names {
+            if is_first && is_main {
+                // First tab is always the main tab, just rename if needed
+                if self.tabs[0].name() != name {
+                    self.tabs[0].set_name(name);
+                }
+                is_first = false;
+                continue;
+            }
+            is_first = false;
+
+            // Create additional tabs
+            if !is_main {
+                let id = self.create_tab(name);
+                created_ids.push(id);
+            }
+        }
+
+        // Set active tab, clamping to valid range
+        let valid_index = active_index.min(self.tabs.len().saturating_sub(1));
+        self.select(valid_index);
+
+        created_ids
+    }
 }
 
 #[cfg(test)]

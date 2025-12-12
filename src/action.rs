@@ -157,5 +157,13 @@ pub enum Action {
     /// Move tab from one position to another
     TabMove { from: usize, to: usize },
 
+    // Session persistence actions (TRC-012)
+    /// Save current session (tabs, layout) to disk
+    SessionSave,
+    /// Load session from disk and restore tabs
+    SessionLoad,
+    /// Clear saved session file
+    SessionClear,
+
     None,
 }

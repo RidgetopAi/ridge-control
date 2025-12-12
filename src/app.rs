@@ -23,7 +23,7 @@ use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::stream_viewer::StreamViewer;
 use crate::components::Component;
-use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode, KeyId, KeyStore, SecretString};
+use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode, KeyId, KeyStore, SecretString, SessionData, SessionManager};
 use crate::error::{Result, RidgeError};
 use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
@@ -79,6 +79,8 @@ pub struct App {
     tab_bar_area: Rect,
     // Secure key storage (TRC-011)
     keystore: Option<KeyStore>,
+    // Session persistence (TRC-012)
+    session_manager: Option<SessionManager>,
 }
 
 impl App {
@@ -156,6 +158,15 @@ impl App {
         let mut tab_manager = TabManager::new();
         tab_manager.set_terminal_size(term_cols as u16, term_rows as u16);
 
+        // Initialize session manager (TRC-012)
+        let session_manager = match SessionManager::new() {
+            Ok(sm) => Some(sm),
+            Err(e) => {
+                tracing::warn!("Failed to initialize session manager: {}", e);
+                None
+            }
+        };
+
         Ok(Self {
             terminal,
             should_quit: false,
@@ -187,6 +198,7 @@ impl App {
             selected_stream_index: initial_stream_index,
             tab_bar_area: Rect::default(),
             keystore,
+            session_manager,
         })
     }
 
@@ -209,6 +221,57 @@ impl App {
             self.pty_receivers.push(rx);
         }
         Ok(())
+    }
+
+    /// Restore session from disk (TRC-012)
+    /// Should be called after spawn_pty() to restore additional tabs
+    pub fn restore_session(&mut self) -> Result<()> {
+        let Some(ref session_manager) = self.session_manager else {
+            return Ok(());
+        };
+
+        let session = session_manager.load();
+        
+        // Skip if only main tab (default session)
+        if session.tabs.len() <= 1 {
+            tracing::debug!("No additional tabs to restore");
+            return Ok(());
+        }
+
+        // Restore tabs from session
+        let tab_iter = session.tabs.iter().map(|t| (t.name.clone(), t.is_main));
+        let new_tab_ids = self.tab_manager.restore_from_session(tab_iter, session.active_tab_index);
+
+        // Spawn PTY for each restored tab
+        for tab_id in new_tab_ids {
+            if let Err(e) = self.spawn_pty_for_tab(tab_id) {
+                tracing::error!("Failed to spawn PTY for restored tab {}: {}", tab_id, e);
+            }
+        }
+
+        tracing::info!(
+            "Restored {} tabs from session, active: {}",
+            session.tabs.len(),
+            session.active_tab_index
+        );
+
+        Ok(())
+    }
+
+    /// Save current session to disk (TRC-012)
+    fn save_session(&self) {
+        let Some(ref session_manager) = self.session_manager else {
+            return;
+        };
+
+        let session = SessionData::from_tabs(
+            self.tab_manager.tabs_for_session(),
+            self.tab_manager.active_index(),
+        );
+
+        if let Err(e) = session_manager.save(&session) {
+            tracing::error!("Failed to save session: {}", e);
+        }
     }
 
     /// Spawn PTY for a new tab (TRC-005)
@@ -864,6 +927,8 @@ impl App {
     fn dispatch(&mut self, action: Action) -> Result<()> {
         match action {
             Action::Quit | Action::ForceQuit => {
+                // Auto-save session on quit (TRC-012)
+                self.save_session();
                 self.should_quit = true;
             }
             Action::EnterPtyMode => {
@@ -1265,6 +1330,23 @@ impl App {
                     match ks.init_encrypted(&password) {
                         Ok(()) => tracing::info!("Keystore initialized with encryption"),
                         Err(e) => tracing::error!("Failed to initialize keystore: {}", e),
+                    }
+                }
+            }
+            
+            // Session persistence actions (TRC-012)
+            Action::SessionSave => {
+                self.save_session();
+            }
+            Action::SessionLoad => {
+                if let Err(e) = self.restore_session() {
+                    tracing::error!("Failed to restore session: {}", e);
+                }
+            }
+            Action::SessionClear => {
+                if let Some(ref session_manager) = self.session_manager {
+                    if let Err(e) = session_manager.clear() {
+                        tracing::error!("Failed to clear session: {}", e);
                     }
                 }
             }
