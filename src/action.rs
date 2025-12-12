@@ -107,6 +107,8 @@ pub enum Action {
     ToolResult(ToolResult),
     /// Toggle dangerous mode for tool execution
     ToolToggleDangerousMode,
+    /// Set dangerous mode explicitly (used by CLI flag --dangerously-allow-all)
+    ToolSetDangerousMode(bool),
 
     // Config actions
     /// Configuration file changed (hot-reload trigger)

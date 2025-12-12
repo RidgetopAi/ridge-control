@@ -116,6 +116,8 @@ pub struct TabBar<'a> {
     style: TabBarStyle,
     show_indices: bool,
     show_close_buttons: bool,
+    /// TRC-018: Show dangerous mode warning indicator
+    dangerous_mode: bool,
 }
 
 impl<'a> TabBar<'a> {
@@ -127,6 +129,7 @@ impl<'a> TabBar<'a> {
             style: TabBarStyle::default(),
             show_indices: true,
             show_close_buttons: true,
+            dangerous_mode: false,
         }
     }
 
@@ -138,6 +141,7 @@ impl<'a> TabBar<'a> {
             style: TabBarStyle::from_theme(theme),
             show_indices: true,
             show_close_buttons: true,
+            dangerous_mode: false,
         }
     }
 
@@ -149,7 +153,14 @@ impl<'a> TabBar<'a> {
             style: TabBarStyle::default(),
             show_indices: true,
             show_close_buttons: true,
+            dangerous_mode: false,
         }
+    }
+    
+    /// Set dangerous mode indicator (TRC-018)
+    pub fn dangerous_mode(mut self, enabled: bool) -> Self {
+        self.dangerous_mode = enabled;
+        self
     }
 
     /// Set custom style
@@ -287,6 +298,32 @@ impl Widget for TabBar<'_> {
             // Add tab spans
             let is_active = index == self.active_index;
             spans.extend(self.build_tab_spans(tab, index, is_active));
+        }
+
+        // TRC-018: Add dangerous mode warning indicator on the right side
+        if self.dangerous_mode {
+            // Calculate used width for tabs
+            let tabs_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            
+            // Add spacing to push warning to the right
+            let warning_text = " ⚠ DANGEROUS MODE ";
+            let warning_width = warning_text.chars().count();
+            let available = area.width as usize;
+            
+            if tabs_width + warning_width + 2 < available {
+                let padding = available.saturating_sub(tabs_width + warning_width + 1);
+                spans.push(Span::styled(
+                    " ".repeat(padding),
+                    Style::default().bg(self.style.background),
+                ));
+                spans.push(Span::styled(
+                    warning_text.to_string(),
+                    Style::default()
+                        .fg(Color::Rgb(0, 0, 0)) // Black text
+                        .bg(Color::Rgb(255, 100, 100)) // Red background
+                        .add_modifier(Modifier::BOLD),
+                ));
+            }
         }
 
         // Render the line

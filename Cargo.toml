@@ -103,7 +103,7 @@ nucleo = "0.5"  # 6-7x faster than skim, used by Helix editor
 # ─────────────────────────────────────────────────────────────────────────────
 # CLI
 # ─────────────────────────────────────────────────────────────────────────────
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 
 [dev-dependencies]
 pretty_assertions = "1"

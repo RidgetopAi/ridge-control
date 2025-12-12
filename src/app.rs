@@ -16,6 +16,7 @@ use ratatui::{
 use tokio::sync::mpsc;
 
 use crate::action::Action;
+use crate::cli::Cli;
 use crate::components::command_palette::CommandPalette;
 use crate::components::config_panel::ConfigPanel;
 use crate::components::confirm_dialog::ConfirmDialog;
@@ -98,6 +99,8 @@ pub struct App {
     show_config_panel: bool,
     // Spinner manager for animations (TRC-015)
     spinner_manager: SpinnerManager,
+    // TRC-018: Dangerous mode flag (from --dangerously-allow-all CLI flag)
+    dangerous_mode: bool,
 }
 
 impl App {
@@ -224,7 +227,57 @@ impl App {
             config_panel: ConfigPanel::new(),
             show_config_panel: false,
             spinner_manager: SpinnerManager::new(),
+            dangerous_mode: false,
         })
+    }
+
+    /// Create App with CLI arguments (TRC-018)
+    pub fn with_cli(cli: &Cli) -> Result<Self> {
+        let mut app = Self::new()?;
+        
+        // TRC-018: Set dangerous mode from CLI flag
+        if cli.dangerously_allow_all {
+            app.set_dangerous_mode(true);
+            tracing::warn!("DANGEROUS MODE ENABLED: All tool executions will be auto-approved");
+        }
+        
+        // Set working directory if provided
+        if let Some(ref working_dir) = cli.working_dir {
+            app.tool_executor = ToolExecutor::new(working_dir.clone());
+            if app.dangerous_mode {
+                app.tool_executor.set_dangerous_mode(true);
+            }
+        }
+        
+        // Register API keys from CLI (override keystore/config)
+        if let Some(ref key) = cli.anthropic_api_key {
+            app.llm_manager.register_anthropic(key.clone());
+        }
+        if let Some(ref key) = cli.openai_api_key {
+            app.llm_manager.register_openai(key.clone());
+        }
+        if let Some(ref key) = cli.gemini_api_key {
+            app.llm_manager.register_gemini(key.clone());
+        }
+        if let Some(ref key) = cli.grok_api_key {
+            app.llm_manager.register_grok(key.clone());
+        }
+        if let Some(ref key) = cli.groq_api_key {
+            app.llm_manager.register_groq(key.clone());
+        }
+        
+        Ok(app)
+    }
+    
+    /// Set dangerous mode for tool execution (TRC-018)
+    pub fn set_dangerous_mode(&mut self, enabled: bool) {
+        self.dangerous_mode = enabled;
+        self.tool_executor.set_dangerous_mode(enabled);
+    }
+    
+    /// Check if dangerous mode is enabled (TRC-018)
+    pub fn is_dangerous_mode(&self) -> bool {
+        self.dangerous_mode
     }
 
     pub fn configure_llm(&mut self, api_key: impl Into<String>) {
@@ -664,8 +717,11 @@ impl App {
             .draw(|frame| {
                 let size = frame.area();
 
-                // Split: optional tab bar at top, then main content
-                let (tab_bar_area, content_area) = if show_tabs {
+                // TRC-018: Show status bar if dangerous mode enabled OR multiple tabs
+                let show_status_bar = show_tabs || self.dangerous_mode;
+                
+                // Split: optional tab/status bar at top, then main content
+                let (tab_bar_area, content_area) = if show_status_bar {
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([Constraint::Length(1), Constraint::Min(0)])
@@ -676,9 +732,11 @@ impl App {
                     (Rect::default(), size)
                 };
 
-                // Render tab bar if visible
-                if show_tabs {
-                    let tab_bar = TabBar::from_manager_themed(&self.tab_manager, &theme);
+                // Render tab bar if multiple tabs OR dangerous mode warning bar
+                // TRC-018: Pass dangerous_mode to show warning indicator
+                if show_status_bar {
+                    let tab_bar = TabBar::from_manager_themed(&self.tab_manager, &theme)
+                        .dangerous_mode(self.dangerous_mode);
                     frame.render_widget(tab_bar, tab_bar_area);
                 }
 
@@ -1339,8 +1397,11 @@ impl App {
                 self.llm_manager.continue_after_tool(None);
             }
             Action::ToolToggleDangerousMode => {
-                let current = self.tool_executor.registry().is_dangerous_mode();
-                self.tool_executor.set_dangerous_mode(!current);
+                let current = self.dangerous_mode;
+                self.set_dangerous_mode(!current);
+            }
+            Action::ToolSetDangerousMode(enabled) => {
+                self.set_dangerous_mode(enabled);
             }
             
             // Config actions
