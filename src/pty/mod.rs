@@ -1,12 +1,32 @@
 pub mod grid;
 
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::process::Child;
 
+use libc::{fcntl, F_GETFL, F_SETFL, O_NONBLOCK};
 use pty_process::blocking::{Command, Pty};
 
 use crate::error::{Result, RidgeError};
+
+/// Set a file descriptor to non-blocking mode.
+/// 
+/// This is critical for the PTY I/O thread to avoid blocking indefinitely
+/// on reads, which would prevent it from processing writes to the PTY.
+fn set_nonblocking(fd: RawFd) -> io::Result<()> {
+    unsafe {
+        let flags = fcntl(fd, F_GETFL);
+        if flags < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        if flags & O_NONBLOCK == 0 {
+            if fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 {
+                return Err(io::Error::last_os_error());
+            }
+        }
+    }
+    Ok(())
+}
 
 pub struct PtyHandle {
     pty: Pty,
@@ -18,6 +38,13 @@ impl PtyHandle {
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
 
         let pty = Pty::new().map_err(|e| RidgeError::Pty(e.to_string()))?;
+
+        // CRITICAL: Set PTY fd to non-blocking mode.
+        // Without this, the PTY I/O thread blocks on read() when the shell is idle,
+        // preventing it from processing writes (keyboard input) from the TUI.
+        // This causes the "freeze" when entering PTY input mode.
+        set_nonblocking(pty.as_raw_fd())
+            .map_err(|e| RidgeError::Pty(format!("Failed to set PTY non-blocking: {}", e)))?;
 
         let pts = pty.pts().map_err(|e| RidgeError::Pty(e.to_string()))?;
 

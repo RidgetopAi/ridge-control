@@ -33,7 +33,7 @@ use crate::llm::{
     ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolUse,
 };
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
-use crate::tabs::{TabId, TabManager, TabBar, TabBarStyle};
+use crate::tabs::{TabId, TabManager, TabBar};
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -75,6 +75,8 @@ pub struct App {
     stream_viewer: StreamViewer,
     show_stream_viewer: bool,
     selected_stream_index: Option<usize>,
+    // Layout areas for mouse hit-testing (TRC-010)
+    tab_bar_area: Rect,
 }
 
 impl App {
@@ -165,6 +167,7 @@ impl App {
             stream_viewer: StreamViewer::new(),
             show_stream_viewer: false,
             selected_stream_index: initial_stream_index,
+            tab_bar_area: Rect::default(),
         })
     }
 
@@ -503,6 +506,20 @@ impl App {
         
         // Get active tab's PTY session for rendering (TRC-005)
         let active_tab_id = self.tab_manager.active_tab().id();
+        
+        // Pre-calculate tab bar area for mouse hit-testing (TRC-010)
+        let term_size = self.terminal.size().unwrap_or_default();
+        let term_rect = Rect::new(0, 0, term_size.width, term_size.height);
+        let computed_tab_bar_area = if show_tabs {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([Constraint::Length(1), Constraint::Min(0)])
+                .split(term_rect);
+            chunks[0]
+        } else {
+            Rect::default()
+        };
+        self.tab_bar_area = computed_tab_bar_area;
 
         self.terminal
             .draw(|frame| {
@@ -772,6 +789,30 @@ impl App {
     }
 
     fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
+        // TRC-010: Check for clicks on the tab bar first (before focus-based routing)
+        if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+            // Check if click is within tab bar area
+            if self.tab_bar_area.height > 0
+                && mouse.row >= self.tab_bar_area.y
+                && mouse.row < self.tab_bar_area.y + self.tab_bar_area.height
+                && mouse.column >= self.tab_bar_area.x
+                && mouse.column < self.tab_bar_area.x + self.tab_bar_area.width
+            {
+                // Hit-test against tabs
+                let tab_bar = TabBar::from_manager(&self.tab_manager);
+                let hit_areas = tab_bar.calculate_hit_areas(self.tab_bar_area);
+                
+                for (start_x, end_x, tab_index) in hit_areas {
+                    if mouse.column >= start_x && mouse.column < end_x {
+                        return Some(Action::TabSelect(tab_index));
+                    }
+                }
+                // Click was in tab bar but not on a tab - consume event
+                return None;
+            }
+        }
+        
+        // Focus-based mouse handling
         match self.focus.current() {
             FocusArea::Terminal => match mouse.kind {
                 MouseEventKind::Down(MouseButton::Left)
