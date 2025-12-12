@@ -3,9 +3,13 @@ use std::sync::Arc;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
+use crate::config::{KeyId, KeyStore, SecretString};
+
 use super::anthropic::AnthropicProvider;
 use super::gemini::GeminiProvider;
 use super::grok::GrokProvider;
+use super::groq::GroqProvider;
+use super::openai::OpenAIProvider;
 use super::provider::{Provider, ProviderRegistry};
 use super::types::{LLMError, LLMRequest, Message, StreamChunk, ToolUse, ContentBlock, ToolResult};
 
@@ -82,6 +86,74 @@ impl LLMManager {
             self.current_provider = name;
             self.current_model = default_model;
         }
+    }
+
+    pub fn register_openai(&mut self, api_key: impl Into<String>) {
+        let provider = Arc::new(OpenAIProvider::new(api_key));
+        let default_model = provider.default_model().to_string();
+        let name = provider.name().to_string();
+
+        self.registry.register(provider);
+
+        if self.current_provider.is_empty() {
+            self.current_provider = name;
+            self.current_model = default_model;
+        }
+    }
+
+    pub fn register_groq(&mut self, api_key: impl Into<String>) {
+        let provider = Arc::new(GroqProvider::new(api_key));
+        let default_model = provider.default_model().to_string();
+        let name = provider.name().to_string();
+
+        self.registry.register(provider);
+
+        if self.current_provider.is_empty() {
+            self.current_provider = name;
+            self.current_model = default_model;
+        }
+    }
+
+    /// Register all providers from a KeyStore
+    /// Returns a list of successfully registered provider names
+    pub fn register_from_keystore(&mut self, keystore: &KeyStore) -> Vec<String> {
+        let mut registered = Vec::new();
+
+        // Try to get each known provider's key
+        let providers = [
+            (KeyId::Anthropic, "anthropic"),
+            (KeyId::OpenAI, "openai"),
+            (KeyId::Gemini, "gemini"),
+            (KeyId::Grok, "grok"),
+            (KeyId::Groq, "groq"),
+        ];
+
+        for (key_id, name) in providers {
+            if let Ok(Some(secret)) = keystore.get(&key_id) {
+                match key_id {
+                    KeyId::Anthropic => self.register_anthropic(secret.expose()),
+                    KeyId::OpenAI => self.register_openai(secret.expose()),
+                    KeyId::Gemini => self.register_gemini(secret.expose()),
+                    KeyId::Grok => self.register_grok(secret.expose()),
+                    KeyId::Groq => self.register_groq(secret.expose()),
+                    KeyId::Custom(_) => continue,
+                }
+                registered.push(name.to_string());
+                tracing::info!("Registered {} provider from keystore", name);
+            }
+        }
+
+        registered
+    }
+
+    /// Check if a specific provider is registered
+    pub fn has_provider(&self, name: &str) -> bool {
+        self.registry.get(name).is_some()
+    }
+
+    /// Get list of registered provider names
+    pub fn registered_providers(&self) -> Vec<String> {
+        self.registry.list().into_iter().map(|s| s.to_string()).collect()
     }
 
     pub fn take_event_rx(&mut self) -> Option<mpsc::UnboundedReceiver<LLMEvent>> {

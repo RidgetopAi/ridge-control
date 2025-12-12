@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::config::KeyId;
 use crate::input::focus::FocusArea;
 use crate::llm::{LLMError, StreamChunk, PendingToolUse, ToolResult};
 
@@ -114,6 +115,20 @@ pub enum Action {
     ConfigReload,
     /// Apply theme changes
     ConfigApplyTheme,
+
+    // Key storage actions
+    /// Store an API key securely
+    KeyStore(KeyId, String),
+    /// Request to retrieve an API key
+    KeyGet(KeyId),
+    /// Delete an API key
+    KeyDelete(KeyId),
+    /// List all stored keys
+    KeyList,
+    /// Unlock encrypted keystore with master password
+    KeyUnlock(String),
+    /// Initialize encrypted keystore with master password  
+    KeyInit(String),
 
     // Conversation viewer actions
     /// Toggle conversation viewer visibility

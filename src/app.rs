@@ -23,7 +23,7 @@ use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::stream_viewer::StreamViewer;
 use crate::components::Component;
-use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode};
+use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode, KeyId, KeyStore, SecretString};
 use crate::error::{Result, RidgeError};
 use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
@@ -77,6 +77,8 @@ pub struct App {
     selected_stream_index: Option<usize>,
     // Layout areas for mouse hit-testing (TRC-010)
     tab_bar_area: Rect,
+    // Secure key storage (TRC-011)
+    keystore: Option<KeyStore>,
 }
 
 impl App {
@@ -106,7 +108,23 @@ impl App {
         // Initialize selected_stream_index to 0 if streams exist
         let initial_stream_index = if stream_count > 0 { Some(0) } else { None };
 
-        let llm_manager = LLMManager::new();
+        let mut llm_manager = LLMManager::new();
+        
+        // Initialize secure key storage (TRC-011)
+        let keystore = match KeyStore::new() {
+            Ok(ks) => {
+                // Try to register providers from keystore
+                let registered = llm_manager.register_from_keystore(&ks);
+                if !registered.is_empty() {
+                    tracing::info!("Loaded API keys for providers: {:?}", registered);
+                }
+                Some(ks)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize keystore: {}", e);
+                None
+            }
+        };
         
         // Get working directory for tool executor
         let working_dir = std::env::current_dir().unwrap_or_else(|_| {
@@ -168,6 +186,7 @@ impl App {
             show_stream_viewer: false,
             selected_stream_index: initial_stream_index,
             tab_bar_area: Rect::default(),
+            keystore,
         })
     }
 
@@ -1173,6 +1192,81 @@ impl App {
             }
             Action::TabMove { from, to } => {
                 self.tab_manager.move_tab(from, to);
+            }
+            
+            // Key storage actions (TRC-011)
+            Action::KeyStore(key_id, secret) => {
+                if let Some(ref mut ks) = self.keystore {
+                    let secret_str = SecretString::new(secret);
+                    match ks.store(&key_id, &secret_str) {
+                        Ok(()) => {
+                            tracing::info!("Stored API key for {}", key_id);
+                            // Re-register provider with new key
+                            match ks.get(&key_id) {
+                                Ok(Some(s)) => {
+                                    match key_id {
+                                        KeyId::Anthropic => self.llm_manager.register_anthropic(s.expose()),
+                                        KeyId::OpenAI => self.llm_manager.register_openai(s.expose()),
+                                        KeyId::Gemini => self.llm_manager.register_gemini(s.expose()),
+                                        KeyId::Grok => self.llm_manager.register_grok(s.expose()),
+                                        KeyId::Groq => self.llm_manager.register_groq(s.expose()),
+                                        KeyId::Custom(_) => {}
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => tracing::error!("Failed to store API key: {}", e),
+                    }
+                } else {
+                    tracing::warn!("Keystore not initialized");
+                }
+            }
+            Action::KeyGet(_key_id) => {
+                // Key retrieval is handled internally by register_from_keystore
+                // This action exists for programmatic access if needed
+            }
+            Action::KeyDelete(key_id) => {
+                if let Some(ref mut ks) = self.keystore {
+                    match ks.delete(&key_id) {
+                        Ok(()) => tracing::info!("Deleted API key for {}", key_id),
+                        Err(e) => tracing::error!("Failed to delete API key: {}", e),
+                    }
+                }
+            }
+            Action::KeyList => {
+                if let Some(ref ks) = self.keystore {
+                    match ks.list() {
+                        Ok(keys) => {
+                            let names: Vec<_> = keys.iter().map(|k| k.as_str()).collect();
+                            tracing::info!("Stored API keys: {:?}", names);
+                        }
+                        Err(e) => tracing::error!("Failed to list API keys: {}", e),
+                    }
+                }
+            }
+            Action::KeyUnlock(password) => {
+                if let Some(ref mut ks) = self.keystore {
+                    match ks.unlock(&password) {
+                        Ok(()) => {
+                            tracing::info!("Keystore unlocked");
+                            // Re-register providers after unlock
+                            let registered = self.llm_manager.register_from_keystore(ks);
+                            if !registered.is_empty() {
+                                tracing::info!("Loaded API keys for providers: {:?}", registered);
+                            }
+                        }
+                        Err(e) => tracing::error!("Failed to unlock keystore: {}", e),
+                    }
+                }
+            }
+            Action::KeyInit(password) => {
+                if let Some(ref mut ks) = self.keystore {
+                    match ks.init_encrypted(&password) {
+                        Ok(()) => tracing::info!("Keystore initialized with encryption"),
+                        Err(e) => tracing::error!("Failed to initialize keystore: {}", e),
+                    }
+                }
             }
             
             _ => {}
