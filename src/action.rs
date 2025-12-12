@@ -191,5 +191,31 @@ pub enum Action {
     /// Add log entry (target, message)
     LogViewerPush(String, String),
 
+    // Config panel actions (TRC-014)
+    /// Show config panel
+    ConfigPanelShow,
+    /// Hide config panel
+    ConfigPanelHide,
+    /// Toggle config panel visibility
+    ConfigPanelToggle,
+    /// Scroll config panel up
+    ConfigPanelScrollUp(u16),
+    /// Scroll config panel down
+    ConfigPanelScrollDown(u16),
+    /// Scroll config panel to top
+    ConfigPanelScrollToTop,
+    /// Scroll config panel to bottom
+    ConfigPanelScrollToBottom,
+    /// Scroll config panel page up
+    ConfigPanelScrollPageUp,
+    /// Scroll config panel page down
+    ConfigPanelScrollPageDown,
+    /// Navigate to next section in config panel
+    ConfigPanelNextSection,
+    /// Navigate to previous section in config panel
+    ConfigPanelPrevSection,
+    /// Toggle section expand/collapse
+    ConfigPanelToggleSection,
+
     None,
 }

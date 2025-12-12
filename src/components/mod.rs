@@ -1,4 +1,5 @@
 pub mod command_palette;
+pub mod config_panel;
 pub mod confirm_dialog;
 pub mod conversation_viewer;
 pub mod log_viewer;

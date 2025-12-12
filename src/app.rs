@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::action::Action;
 use crate::components::command_palette::CommandPalette;
+use crate::components::config_panel::ConfigPanel;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::log_viewer::LogViewer;
@@ -85,6 +86,9 @@ pub struct App {
     // Log viewer with auto-scroll (TRC-013)
     log_viewer: LogViewer,
     show_log_viewer: bool,
+    // Config panel (TRC-014)
+    config_panel: ConfigPanel,
+    show_config_panel: bool,
 }
 
 impl App {
@@ -205,6 +209,8 @@ impl App {
             session_manager,
             log_viewer: LogViewer::new(),
             show_log_viewer: false,
+            config_panel: ConfigPanel::new(),
+            show_config_panel: false,
         })
     }
 
@@ -588,6 +594,7 @@ impl App {
         let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
         let show_log_viewer = self.show_log_viewer;
+        let show_config_panel = self.show_config_panel;
         let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
         let messages = self.llm_manager.conversation().to_vec();
@@ -775,6 +782,28 @@ impl App {
                     self.log_viewer.set_inner_area(log_inner);
                 }
                 
+                // Config panel overlay (TRC-014) - takes right half of screen when visible
+                if show_config_panel {
+                    let config_area = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(size)[1];
+                    
+                    self.config_panel.render(
+                        frame,
+                        config_area,
+                        focus.is_focused(FocusArea::ConfigPanel),
+                        &theme,
+                    );
+                    
+                    let config_inner = {
+                        let block = ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL);
+                        block.inner(config_area)
+                    };
+                    self.config_panel.set_inner_area(config_inner);
+                }
+                
                 if show_confirm {
                     self.confirm_dialog.render(frame, size, &theme);
                 }
@@ -887,7 +916,10 @@ impl App {
                             _ => None,
                         }
                     }
-                    FocusArea::ConfigPanel => None,
+                    FocusArea::ConfigPanel => {
+                        // Handle ConfigPanel key events (TRC-014)
+                        self.config_panel.handle_event(&CrosstermEvent::Key(key))
+                    }
                     FocusArea::LogViewer => {
                         // Handle LogViewer key events (TRC-013)
                         match key.code {
@@ -963,8 +995,12 @@ impl App {
             FocusArea::Menu => {
                 self.menu.handle_event(&CrosstermEvent::Mouse(mouse))
             }
-            // Overlay areas - not in primary mouse handling
-            FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
+            // Overlay areas
+            FocusArea::StreamViewer => None,
+            FocusArea::ConfigPanel => {
+                // Handle ConfigPanel mouse events (TRC-014)
+                self.config_panel.handle_event(&CrosstermEvent::Mouse(mouse))
+            }
             FocusArea::LogViewer => {
                 // Handle LogViewer mouse events (TRC-013)
                 match mouse.kind {
@@ -1451,6 +1487,67 @@ impl App {
             }
             Action::LogViewerPush(target, message) => {
                 self.log_viewer.push_info(target, message);
+            }
+            
+            // Config panel actions (TRC-014)
+            Action::ConfigPanelShow => {
+                // Refresh config panel with current settings before showing
+                let providers = self.llm_manager.registered_providers();
+                self.config_panel.refresh(
+                    self.config_manager.app_config(),
+                    self.config_manager.keybindings(),
+                    self.config_manager.theme(),
+                    &providers,
+                );
+                self.show_config_panel = true;
+                self.focus.focus(FocusArea::ConfigPanel);
+            }
+            Action::ConfigPanelHide => {
+                self.show_config_panel = false;
+                self.focus.focus(FocusArea::Menu);
+            }
+            Action::ConfigPanelToggle => {
+                if self.show_config_panel {
+                    self.show_config_panel = false;
+                    self.focus.focus(FocusArea::Menu);
+                } else {
+                    let providers = self.llm_manager.registered_providers();
+                    self.config_panel.refresh(
+                        self.config_manager.app_config(),
+                        self.config_manager.keybindings(),
+                        self.config_manager.theme(),
+                        &providers,
+                    );
+                    self.show_config_panel = true;
+                    self.focus.focus(FocusArea::ConfigPanel);
+                }
+            }
+            Action::ConfigPanelScrollUp(n) => {
+                self.config_panel.scroll_up(n);
+            }
+            Action::ConfigPanelScrollDown(n) => {
+                self.config_panel.scroll_down(n);
+            }
+            Action::ConfigPanelScrollToTop => {
+                self.config_panel.scroll_to_top();
+            }
+            Action::ConfigPanelScrollToBottom => {
+                self.config_panel.scroll_to_bottom();
+            }
+            Action::ConfigPanelScrollPageUp => {
+                self.config_panel.scroll_page_up();
+            }
+            Action::ConfigPanelScrollPageDown => {
+                self.config_panel.scroll_page_down();
+            }
+            Action::ConfigPanelNextSection => {
+                self.config_panel.next_section();
+            }
+            Action::ConfigPanelPrevSection => {
+                self.config_panel.prev_section();
+            }
+            Action::ConfigPanelToggleSection => {
+                self.config_panel.toggle_section();
             }
             
             _ => {}
