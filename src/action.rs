@@ -165,5 +165,31 @@ pub enum Action {
     /// Clear saved session file
     SessionClear,
 
+    // Log viewer actions (TRC-013)
+    /// Show log viewer
+    LogViewerShow,
+    /// Hide log viewer
+    LogViewerHide,
+    /// Toggle log viewer visibility
+    LogViewerToggle,
+    /// Scroll log viewer up
+    LogViewerScrollUp(u16),
+    /// Scroll log viewer down
+    LogViewerScrollDown(u16),
+    /// Scroll log viewer to top
+    LogViewerScrollToTop,
+    /// Scroll log viewer to bottom
+    LogViewerScrollToBottom,
+    /// Scroll log viewer page up
+    LogViewerScrollPageUp,
+    /// Scroll log viewer page down
+    LogViewerScrollPageDown,
+    /// Toggle auto-scroll for log viewer
+    LogViewerToggleAutoScroll,
+    /// Clear all log entries
+    LogViewerClear,
+    /// Add log entry (target, message)
+    LogViewerPush(String, String),
+
     None,
 }

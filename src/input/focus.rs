@@ -12,6 +12,8 @@ pub enum FocusArea {
     StreamViewer,
     /// When config panel is open
     ConfigPanel,
+    /// When log viewer is open (overlay) - TRC-013
+    LogViewer,
 }
 
 impl FocusArea {

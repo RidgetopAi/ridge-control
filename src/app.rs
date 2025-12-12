@@ -19,6 +19,7 @@ use crate::action::Action;
 use crate::components::command_palette::CommandPalette;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::conversation_viewer::ConversationViewer;
+use crate::components::log_viewer::LogViewer;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::stream_viewer::StreamViewer;
@@ -81,6 +82,9 @@ pub struct App {
     keystore: Option<KeyStore>,
     // Session persistence (TRC-012)
     session_manager: Option<SessionManager>,
+    // Log viewer with auto-scroll (TRC-013)
+    log_viewer: LogViewer,
+    show_log_viewer: bool,
 }
 
 impl App {
@@ -199,6 +203,8 @@ impl App {
             tab_bar_area: Rect::default(),
             keystore,
             session_manager,
+            log_viewer: LogViewer::new(),
+            show_log_viewer: false,
         })
     }
 
@@ -581,6 +587,7 @@ impl App {
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
         let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
+        let show_log_viewer = self.show_log_viewer;
         let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
         let messages = self.llm_manager.conversation().to_vec();
@@ -746,6 +753,28 @@ impl App {
                     );
                 }
                 
+                // Log viewer overlay (TRC-013) - takes right half of screen when visible
+                if show_log_viewer {
+                    let log_area = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                        .split(size)[1];
+                    
+                    self.log_viewer.render(
+                        frame,
+                        log_area,
+                        focus.is_focused(FocusArea::LogViewer),
+                        &theme,
+                    );
+                    
+                    let log_inner = {
+                        let block = ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL);
+                        block.inner(log_area)
+                    };
+                    self.log_viewer.set_inner_area(log_inner);
+                }
+                
                 if show_confirm {
                     self.confirm_dialog.render(frame, size, &theme);
                 }
@@ -859,6 +888,21 @@ impl App {
                         }
                     }
                     FocusArea::ConfigPanel => None,
+                    FocusArea::LogViewer => {
+                        // Handle LogViewer key events (TRC-013)
+                        match key.code {
+                            KeyCode::Char('j') | KeyCode::Down => Some(Action::LogViewerScrollDown(1)),
+                            KeyCode::Char('k') | KeyCode::Up => Some(Action::LogViewerScrollUp(1)),
+                            KeyCode::Char('g') => Some(Action::LogViewerScrollToTop),
+                            KeyCode::Char('G') => Some(Action::LogViewerScrollToBottom),
+                            KeyCode::PageUp => Some(Action::LogViewerScrollPageUp),
+                            KeyCode::PageDown => Some(Action::LogViewerScrollPageDown),
+                            KeyCode::Char('a') => Some(Action::LogViewerToggleAutoScroll),
+                            KeyCode::Char('c') => Some(Action::LogViewerClear),
+                            KeyCode::Esc | KeyCode::Char('q') => Some(Action::LogViewerHide),
+                            _ => None,
+                        }
+                    }
                 }
             }
             InputMode::Insert { .. } => {
@@ -921,6 +965,18 @@ impl App {
             }
             // Overlay areas - not in primary mouse handling
             FocusArea::StreamViewer | FocusArea::ConfigPanel => None,
+            FocusArea::LogViewer => {
+                // Handle LogViewer mouse events (TRC-013)
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => Some(Action::LogViewerScrollUp(3)),
+                    MouseEventKind::ScrollDown => Some(Action::LogViewerScrollDown(3)),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // Click on title bar area toggles auto-scroll
+                        Some(Action::LogViewerToggleAutoScroll)
+                    }
+                    _ => None,
+                }
+            }
         }
     }
 
@@ -1349,6 +1405,52 @@ impl App {
                         tracing::error!("Failed to clear session: {}", e);
                     }
                 }
+            }
+            
+            // Log viewer actions (TRC-013)
+            Action::LogViewerShow => {
+                self.show_log_viewer = true;
+                self.focus.focus(FocusArea::LogViewer);
+            }
+            Action::LogViewerHide => {
+                self.show_log_viewer = false;
+                self.focus.focus(FocusArea::Menu);
+            }
+            Action::LogViewerToggle => {
+                if self.show_log_viewer {
+                    self.show_log_viewer = false;
+                    self.focus.focus(FocusArea::Menu);
+                } else {
+                    self.show_log_viewer = true;
+                    self.focus.focus(FocusArea::LogViewer);
+                }
+            }
+            Action::LogViewerScrollUp(n) => {
+                self.log_viewer.scroll_up(n);
+            }
+            Action::LogViewerScrollDown(n) => {
+                self.log_viewer.scroll_down(n);
+            }
+            Action::LogViewerScrollToTop => {
+                self.log_viewer.scroll_to_top();
+            }
+            Action::LogViewerScrollToBottom => {
+                self.log_viewer.scroll_to_bottom();
+            }
+            Action::LogViewerScrollPageUp => {
+                self.log_viewer.scroll_page_up();
+            }
+            Action::LogViewerScrollPageDown => {
+                self.log_viewer.scroll_page_down();
+            }
+            Action::LogViewerToggleAutoScroll => {
+                self.log_viewer.toggle_auto_scroll();
+            }
+            Action::LogViewerClear => {
+                self.log_viewer.clear();
+            }
+            Action::LogViewerPush(target, message) => {
+                self.log_viewer.push_info(target, message);
             }
             
             _ => {}
