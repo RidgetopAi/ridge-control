@@ -23,9 +23,12 @@ pub struct ConversationViewer {
     inner_area: Rect,
     streaming_spinner: Spinner,
     tool_spinner: Spinner,
+    thinking_spinner: Spinner,
     tool_call_manager: ToolCallManager,
     /// Whether we're in tool call navigation mode
     tool_navigation_mode: bool,
+    /// Whether thinking blocks are collapsed (TRC-017)
+    thinking_collapsed: bool,
 }
 
 impl ConversationViewer {
@@ -38,14 +41,32 @@ impl ConversationViewer {
             inner_area: Rect::default(),
             streaming_spinner: Spinner::new(SpinnerStyle::BrailleDots),
             tool_spinner: Spinner::new(SpinnerStyle::Braille),
+            thinking_spinner: Spinner::new(SpinnerStyle::DigitalDots),
             tool_call_manager: ToolCallManager::new(),
             tool_navigation_mode: false,
+            thinking_collapsed: false,
         }
     }
     
     pub fn tick_spinner(&mut self) {
         self.streaming_spinner.tick();
         self.tool_spinner.tick();
+        self.thinking_spinner.tick();
+    }
+    
+    /// Toggle thinking block collapse state (TRC-017)
+    pub fn toggle_thinking_collapse(&mut self) {
+        self.thinking_collapsed = !self.thinking_collapsed;
+    }
+    
+    /// Get thinking collapse state (TRC-017)
+    pub fn is_thinking_collapsed(&self) -> bool {
+        self.thinking_collapsed
+    }
+    
+    /// Set thinking collapse state (TRC-017)
+    pub fn set_thinking_collapsed(&mut self, collapsed: bool) {
+        self.thinking_collapsed = collapsed;
     }
 
     pub fn set_inner_area(&mut self, area: Rect) {
@@ -108,7 +129,8 @@ impl ConversationViewer {
         self.tool_call_manager.clear();
     }
 
-    /// Render conversation with messages and current streaming buffer
+    /// Render conversation with messages and current streaming buffers
+    /// TRC-017: Now accepts separate thinking_buffer for extended thinking display
     pub fn render_conversation(
         &mut self,
         frame: &mut Frame,
@@ -116,13 +138,14 @@ impl ConversationViewer {
         focused: bool,
         messages: &[Message],
         streaming_buffer: &str,
+        thinking_buffer: &str,
         theme: &Theme,
     ) {
         let border_style = theme.border_style(focused);
         let title_style = theme.title_style(focused);
 
-        // Build title with status indicators
-        let title = self.build_title(streaming_buffer);
+        // Build title with status indicators (TRC-017: include thinking indicator)
+        let title = self.build_title(streaming_buffer, thinking_buffer);
 
         let block = Block::default()
             .title(title)
@@ -166,20 +189,8 @@ impl ConversationViewer {
                         }
                     }
                     ContentBlock::Thinking(text) => {
-                        lines.push(Line::from(Span::styled(
-                            "  󰔡 Thinking:",
-                            Style::default()
-                                .fg(theme.colors.accent.to_color())
-                                .add_modifier(Modifier::ITALIC),
-                        )));
-                        for line in text.lines() {
-                            lines.push(Line::from(Span::styled(
-                                format!("    {}", line),
-                                Style::default()
-                                    .fg(theme.colors.muted.to_color())
-                                    .add_modifier(Modifier::ITALIC),
-                            )));
-                        }
+                        // TRC-017: Collapsible thinking blocks
+                        lines.extend(self.render_thinking_block(text, theme));
                     }
                     ContentBlock::ToolUse(tool) => {
                         lines.extend(self.render_tool_use_enhanced(tool, theme));
@@ -200,14 +211,73 @@ impl ConversationViewer {
             lines.push(Line::from(""));
         }
 
+        // TRC-017: Add streaming thinking buffer if present (before text buffer)
+        if !thinking_buffer.is_empty() {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("  {} ", self.thinking_spinner.current_frame()),
+                    Style::default()
+                        .fg(theme.colors.accent.to_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "Thinking...",
+                    Style::default()
+                        .fg(theme.colors.accent.to_color())
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+            
+            // Show thinking content if not collapsed
+            if !self.thinking_collapsed {
+                // Count lines for summary
+                let thinking_lines: Vec<&str> = thinking_buffer.lines().collect();
+                let max_thinking_lines = 20;
+                let truncated = thinking_lines.len() > max_thinking_lines;
+                
+                for line in thinking_lines.iter().take(max_thinking_lines) {
+                    lines.push(Line::from(Span::styled(
+                        format!("    {}", line),
+                        Style::default()
+                            .fg(theme.colors.muted.to_color())
+                            .add_modifier(Modifier::ITALIC),
+                    )));
+                }
+                
+                if truncated {
+                    lines.push(Line::from(Span::styled(
+                        format!("    ... ({} more lines - press 'T' to toggle)", thinking_lines.len() - max_thinking_lines),
+                        Style::default()
+                            .fg(theme.colors.muted.to_color())
+                            .add_modifier(Modifier::DIM),
+                    )));
+                }
+            } else {
+                // Show collapsed summary
+                let line_count = thinking_buffer.lines().count();
+                let char_count = thinking_buffer.len();
+                lines.push(Line::from(Span::styled(
+                    format!("    [Collapsed: {} lines, {} chars - press 'T' to expand]", line_count, char_count),
+                    Style::default()
+                        .fg(theme.colors.muted.to_color())
+                        .add_modifier(Modifier::DIM),
+                )));
+            }
+            
+            lines.push(Line::from("")); // Spacing after thinking
+        }
+
         // Add streaming buffer if present
         if !streaming_buffer.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "󰚩 Assistant",
-                Style::default()
-                    .fg(theme.colors.secondary.to_color())
-                    .add_modifier(Modifier::BOLD),
-            )));
+            // Only add assistant header if we don't have streaming thinking
+            if thinking_buffer.is_empty() {
+                lines.push(Line::from(Span::styled(
+                    "󰚩 Assistant",
+                    Style::default()
+                        .fg(theme.colors.secondary.to_color())
+                        .add_modifier(Modifier::BOLD),
+                )));
+            }
             for line in streaming_buffer.lines() {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
@@ -268,7 +338,8 @@ impl ConversationViewer {
         }
     }
     
-    fn build_title(&self, streaming_buffer: &str) -> String {
+    /// TRC-017: Updated to include thinking buffer indicator
+    fn build_title(&self, streaming_buffer: &str, thinking_buffer: &str) -> String {
         let mut title_parts = vec![" Conversation".to_string()];
         
         // Add tool status indicators
@@ -289,6 +360,12 @@ impl ConversationViewer {
             }
         }
         
+        // TRC-017: Add thinking indicator
+        if !thinking_buffer.is_empty() {
+            let collapse_indicator = if self.thinking_collapsed { "▶" } else { "▼" };
+            title_parts.push(format!(" {} 󰔡 Thinking", collapse_indicator));
+        }
+        
         // Add streaming indicator
         if !streaming_buffer.is_empty() {
             title_parts.push(format!(" {} Streaming...", self.streaming_spinner.current_frame()));
@@ -296,6 +373,64 @@ impl ConversationViewer {
         
         title_parts.push(" ".to_string());
         title_parts.join("")
+    }
+    
+    /// TRC-017: Render a thinking block (collapsible)
+    fn render_thinking_block(&self, text: &str, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        
+        let collapse_indicator = if self.thinking_collapsed { "▶" } else { "▼" };
+        
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", collapse_indicator),
+                Style::default()
+                    .fg(theme.colors.accent.to_color()),
+            ),
+            Span::styled(
+                "󰔡 Thinking",
+                Style::default()
+                    .fg(theme.colors.accent.to_color())
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+        
+        if !self.thinking_collapsed {
+            // Show thinking content
+            let thinking_lines: Vec<&str> = text.lines().collect();
+            let max_lines = 30;
+            let truncated = thinking_lines.len() > max_lines;
+            
+            for line in thinking_lines.iter().take(max_lines) {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", line),
+                    Style::default()
+                        .fg(theme.colors.muted.to_color())
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
+            
+            if truncated {
+                lines.push(Line::from(Span::styled(
+                    format!("    ... ({} more lines)", thinking_lines.len() - max_lines),
+                    Style::default()
+                        .fg(theme.colors.muted.to_color())
+                        .add_modifier(Modifier::DIM),
+                )));
+            }
+        } else {
+            // Show collapsed summary
+            let line_count = text.lines().count();
+            let char_count = text.len();
+            lines.push(Line::from(Span::styled(
+                format!("    [Collapsed: {} lines, {} chars - press 'T' to expand]", line_count, char_count),
+                Style::default()
+                    .fg(theme.colors.muted.to_color())
+                    .add_modifier(Modifier::DIM),
+            )));
+        }
+        
+        lines
     }
 
     /// Render a tool use with enhanced UI using ToolCallWidget
@@ -500,6 +635,8 @@ impl Component for ConversationViewer {
             Action::ToolCallToggleExpand => self.toggle_selected_tool(),
             Action::ToolCallExpandAll => self.expand_all_tools(),
             Action::ToolCallCollapseAll => self.collapse_all_tools(),
+            // TRC-017: Handle thinking toggle
+            Action::ThinkingToggleCollapse => self.toggle_thinking_collapse(),
             _ => {}
         }
     }
@@ -545,6 +682,10 @@ impl ConversationViewer {
                     self.tool_navigation_mode = true;
                 }
                 None
+            }
+            // TRC-017: Toggle thinking block collapse with 'T'
+            KeyCode::Char('T') => {
+                Some(Action::ThinkingToggleCollapse)
             }
             _ => None,
         }

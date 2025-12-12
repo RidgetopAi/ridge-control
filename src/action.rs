@@ -243,5 +243,9 @@ pub enum Action {
     /// Register a tool use from LLM in the conversation viewer
     ToolCallRegister(ToolUse),
 
+    // Thinking block actions (TRC-017)
+    /// Toggle collapse/expand of all thinking blocks
+    ThinkingToggleCollapse,
+
     None,
 }

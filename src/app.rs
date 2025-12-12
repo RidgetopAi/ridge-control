@@ -32,7 +32,7 @@ use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
 use crate::input::mode::InputMode;
 use crate::llm::{
-    LLMManager, LLMEvent, StreamChunk, StreamDelta, StopReason,
+    BlockType, LLMManager, LLMEvent, StreamChunk, StreamDelta, StopReason,
     ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolUse,
 };
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
@@ -50,6 +50,12 @@ pub struct App {
     stream_manager: StreamManager,
     llm_manager: LLMManager,
     llm_response_buffer: String,
+    /// Separate buffer for streaming thinking blocks (TRC-017)
+    thinking_buffer: String,
+    /// Current content block type being streamed (TRC-017)
+    current_block_type: Option<BlockType>,
+    /// Whether to show thinking blocks collapsed by default (TRC-017)
+    collapse_thinking: bool,
     clipboard: Option<Clipboard>,
     last_tick: Instant,
     // Tool execution
@@ -188,6 +194,9 @@ impl App {
             stream_manager,
             llm_manager,
             llm_response_buffer: String::new(),
+            thinking_buffer: String::new(),
+            current_block_type: None,
+            collapse_thinking: false,
             clipboard,
             last_tick: Instant::now(),
             tool_executor,
@@ -435,13 +444,18 @@ impl App {
         match event {
             LLMEvent::Chunk(chunk) => {
                 match chunk {
+                    StreamChunk::BlockStart { block_type, .. } => {
+                        // TRC-017: Track what type of block we're receiving
+                        self.current_block_type = Some(block_type);
+                    }
                     StreamChunk::Delta(delta) => {
                         match delta {
                             StreamDelta::Text(text) => {
                                 self.llm_response_buffer.push_str(&text);
                             }
                             StreamDelta::Thinking(text) => {
-                                self.llm_response_buffer.push_str(&text);
+                                // TRC-017: Route thinking to separate buffer
+                                self.thinking_buffer.push_str(&text);
                             }
                             StreamDelta::ToolInput { id, name, input_json } => {
                                 // Track tool use being built up
@@ -455,6 +469,12 @@ impl App {
                         }
                     }
                     StreamChunk::BlockStop { .. } => {
+                        // TRC-017: When a thinking block stops, finalize the thinking content
+                        if self.current_block_type == Some(BlockType::Thinking) {
+                            // Thinking block completed - it will be stored with the message
+                            // when the full response completes
+                        }
+                        
                         // When a tool use block stops, we have the complete tool use
                         if let (Some(id), Some(name)) = (self.current_tool_id.take(), self.current_tool_name.take()) {
                             let input: serde_json::Value = serde_json::from_str(&self.current_tool_input)
@@ -464,6 +484,9 @@ impl App {
                             let tool_use = ToolUse { id, name, input };
                             self.handle_tool_use_request(tool_use);
                         }
+                        
+                        // Clear current block type
+                        self.current_block_type = None;
                     }
                     StreamChunk::Stop { reason, .. } => {
                         // If stop reason is ToolUse, the tool was already handled in BlockStop
@@ -473,6 +496,9 @@ impl App {
                                 self.llm_response_buffer.clear();
                             }
                         }
+                        // TRC-017: Clear thinking buffer on stop (it's already been displayed during streaming)
+                        self.thinking_buffer.clear();
+                        self.current_block_type = None;
                     }
                     _ => {}
                 }
@@ -482,9 +508,14 @@ impl App {
                     self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
                     self.llm_response_buffer.clear();
                 }
+                // TRC-017: Clear thinking buffer on complete
+                self.thinking_buffer.clear();
+                self.current_block_type = None;
             }
             LLMEvent::Error(_err) => {
                 self.llm_response_buffer.clear();
+                self.thinking_buffer.clear();
+                self.current_block_type = None;
                 self.current_tool_id = None;
                 self.current_tool_name = None;
                 self.current_tool_input.clear();
@@ -601,7 +632,7 @@ impl App {
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
-        let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty();
+        let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty() || !self.thinking_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
         let show_log_viewer = self.show_log_viewer;
         let show_config_panel = self.show_config_panel;
@@ -609,6 +640,8 @@ impl App {
         let theme = self.config_manager.theme().clone();
         let messages = self.llm_manager.conversation().to_vec();
         let streaming_buffer = self.llm_response_buffer.clone();
+        // TRC-017: Clone thinking buffer for rendering
+        let thinking_buffer = self.thinking_buffer.clone();
         
         // Get active tab's PTY session for rendering (TRC-005)
         let active_tab_id = self.tab_manager.active_tab().id();
@@ -677,12 +710,14 @@ impl App {
                         );
                     }
 
+                    // TRC-017: Pass thinking_buffer for extended thinking display
                     self.conversation_viewer.render_conversation(
                         frame,
                         left_chunks[1],
                         focus.is_focused(FocusArea::StreamViewer), // Reuse StreamViewer focus for now
                         &messages,
                         &streaming_buffer,
+                        &thinking_buffer,
                         &theme,
                     );
 
@@ -1613,6 +1648,11 @@ impl App {
                 self.conversation_viewer.register_tool_use(tool_use);
             }
             
+            // TRC-017: Thinking block toggle
+            Action::ThinkingToggleCollapse => {
+                self.conversation_viewer.toggle_thinking_collapse();
+            }
+            
             _ => {}
         }
         Ok(())
@@ -1624,6 +1664,21 @@ impl App {
 
     pub fn llm_response_buffer(&self) -> &str {
         &self.llm_response_buffer
+    }
+    
+    /// Get the current streaming thinking buffer (TRC-017)
+    pub fn thinking_buffer(&self) -> &str {
+        &self.thinking_buffer
+    }
+    
+    /// Check if thinking blocks should be collapsed (TRC-017)
+    pub fn is_thinking_collapsed(&self) -> bool {
+        self.collapse_thinking
+    }
+    
+    /// Toggle thinking block collapse state (TRC-017)
+    pub fn toggle_thinking_collapse(&mut self) {
+        self.collapse_thinking = !self.collapse_thinking;
     }
     
     pub fn config(&self) -> &ConfigManager {
