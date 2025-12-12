@@ -23,6 +23,7 @@ use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::log_viewer::LogViewer;
 use crate::components::menu::Menu;
 use crate::components::process_monitor::ProcessMonitor;
+use crate::components::spinner_manager::{SpinnerManager, SpinnerKey};
 use crate::components::stream_viewer::StreamViewer;
 use crate::components::Component;
 use crate::config::{ConfigManager, ConfigEvent, ConfigWatcherMode, KeyId, KeyStore, SecretString, SessionData, SessionManager};
@@ -89,6 +90,8 @@ pub struct App {
     // Config panel (TRC-014)
     config_panel: ConfigPanel,
     show_config_panel: bool,
+    // Spinner manager for animations (TRC-015)
+    spinner_manager: SpinnerManager,
 }
 
 impl App {
@@ -211,6 +214,7 @@ impl App {
             show_log_viewer: false,
             config_panel: ConfigPanel::new(),
             show_config_panel: false,
+            spinner_manager: SpinnerManager::new(),
         })
     }
 
@@ -1212,6 +1216,12 @@ impl App {
             }
             Action::Tick => {
                 self.process_monitor.update(&Action::Tick);
+                // Tick all active spinners (TRC-015)
+                self.spinner_manager.tick();
+                // Tick menu spinners for stream connection animations
+                self.menu.tick_spinners();
+                // Tick conversation viewer spinner for LLM streaming
+                self.conversation_viewer.tick_spinner();
             }
             Action::LlmSendMessage(msg) => {
                 self.llm_manager.send_message(msg, None);
@@ -1548,6 +1558,20 @@ impl App {
             }
             Action::ConfigPanelToggleSection => {
                 self.config_panel.toggle_section();
+            }
+
+            // Spinner actions (TRC-015)
+            Action::SpinnerTick => {
+                self.spinner_manager.tick();
+            }
+            Action::SpinnerStart(name, label) => {
+                self.spinner_manager.start(SpinnerKey::custom(name), label);
+            }
+            Action::SpinnerStop(name) => {
+                self.spinner_manager.stop(&SpinnerKey::custom(name));
+            }
+            Action::SpinnerSetLabel(name, label) => {
+                self.spinner_manager.set_label(&SpinnerKey::custom(name), label);
             }
             
             _ => {}

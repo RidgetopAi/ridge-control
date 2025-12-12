@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::action::Action;
+use crate::components::spinner::{Spinner, SpinnerStyle};
 use crate::components::Component;
 use crate::config::Theme;
 use crate::streams::{ConnectionState, StreamClient};
@@ -16,6 +17,7 @@ pub struct Menu {
     selected: usize,
     stream_count: usize,
     inner_area: Rect,
+    connecting_spinner: Spinner,
 }
 
 impl Menu {
@@ -24,7 +26,12 @@ impl Menu {
             selected: 0,
             stream_count: 0,
             inner_area: Rect::default(),
+            connecting_spinner: Spinner::new(SpinnerStyle::Braille),
         }
+    }
+    
+    pub fn tick_spinners(&mut self) {
+        self.connecting_spinner.tick();
     }
 
     pub fn set_inner_area(&mut self, area: Rect) {
@@ -113,13 +120,22 @@ impl Menu {
             .iter()
             .enumerate()
             .map(|(i, client)| {
-                let state_icon = client.state().to_string();
-                let state_color = match client.state() {
-                    ConnectionState::Connected => theme.menu.stream_connected.to_color(),
-                    ConnectionState::Connecting => theme.menu.stream_connecting.to_color(),
-                    ConnectionState::Reconnecting { .. } => theme.menu.stream_connecting.to_color(),
-                    ConnectionState::Disconnected => theme.menu.stream_disconnected.to_color(),
-                    ConnectionState::Failed => theme.menu.stream_error.to_color(),
+                let (state_icon, state_color) = match client.state() {
+                    ConnectionState::Connected => {
+                        ("●".to_string(), theme.menu.stream_connected.to_color())
+                    }
+                    ConnectionState::Connecting => {
+                        (self.connecting_spinner.current_frame().to_string(), theme.menu.stream_connecting.to_color())
+                    }
+                    ConnectionState::Reconnecting { attempt } => {
+                        (format!("{} #{}", self.connecting_spinner.current_frame(), attempt), theme.menu.stream_connecting.to_color())
+                    }
+                    ConnectionState::Disconnected => {
+                        ("○".to_string(), theme.menu.stream_disconnected.to_color())
+                    }
+                    ConnectionState::Failed => {
+                        ("✗".to_string(), theme.menu.stream_error.to_color())
+                    }
                 };
 
                 let protocol_str = format!("[{}]", client.protocol());

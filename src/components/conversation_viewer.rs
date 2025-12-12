@@ -8,6 +8,7 @@ use ratatui::{
 };
 
 use crate::action::Action;
+use crate::components::spinner::{Spinner, SpinnerStyle};
 use crate::components::Component;
 use crate::config::Theme;
 use crate::llm::{ContentBlock, Message, Role, ToolUse, ToolResult};
@@ -19,6 +20,7 @@ pub struct ConversationViewer {
     visible_height: u16,
     auto_scroll: bool,
     inner_area: Rect,
+    streaming_spinner: Spinner,
 }
 
 impl ConversationViewer {
@@ -29,7 +31,12 @@ impl ConversationViewer {
             visible_height: 10,
             auto_scroll: true,
             inner_area: Rect::default(),
+            streaming_spinner: Spinner::new(SpinnerStyle::BrailleDots),
         }
+    }
+    
+    pub fn tick_spinner(&mut self) {
+        self.streaming_spinner.tick();
     }
 
     pub fn set_inner_area(&mut self, area: Rect) {
@@ -51,9 +58,9 @@ impl ConversationViewer {
         let title_style = theme.title_style(focused);
 
         let title = if streaming_buffer.is_empty() {
-            " Conversation "
+            " Conversation ".to_string()
         } else {
-            " Conversation (streaming...) "
+            format!(" {} Streaming... ", self.streaming_spinner.current_frame())
         };
 
         let block = Block::default()

@@ -13,6 +13,7 @@ pub struct Theme {
     pub menu: MenuStyle,
     pub command_palette: CommandPaletteStyle,
     pub notifications: NotificationStyle,
+    pub spinner: SpinnerThemeStyle,
 }
 
 impl Default for Theme {
@@ -27,6 +28,7 @@ impl Default for Theme {
             menu: MenuStyle::default(),
             command_palette: CommandPaletteStyle::default(),
             notifications: NotificationStyle::default(),
+            spinner: SpinnerThemeStyle::default(),
         }
     }
 }
@@ -285,6 +287,36 @@ impl Default for NotificationStyle {
             warning_bg: HexColor::new("#e0af68"),
             error_fg: HexColor::new("#c0caf5"),
             error_bg: HexColor::new("#f7768e"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SpinnerThemeStyle {
+    pub default_style: String,
+    pub color: HexColor,
+    pub loading_color: HexColor,
+    pub success_color: HexColor,
+    pub error_color: HexColor,
+    pub progress_filled_color: HexColor,
+    pub progress_empty_color: HexColor,
+    pub progress_filled_char: char,
+    pub progress_empty_char: char,
+}
+
+impl Default for SpinnerThemeStyle {
+    fn default() -> Self {
+        Self {
+            default_style: "braille".to_string(),
+            color: HexColor::new("#7dcfff"),
+            loading_color: HexColor::new("#7aa2f7"),
+            success_color: HexColor::new("#9ece6a"),
+            error_color: HexColor::new("#f7768e"),
+            progress_filled_color: HexColor::new("#7aa2f7"),
+            progress_empty_color: HexColor::new("#3b4261"),
+            progress_filled_char: '█',
+            progress_empty_char: '░',
         }
     }
 }

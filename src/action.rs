@@ -217,5 +217,15 @@ pub enum Action {
     /// Toggle section expand/collapse
     ConfigPanelToggleSection,
 
+    // Spinner/Animation actions (TRC-015)
+    /// Advance all active spinners one frame (called on tick)
+    SpinnerTick,
+    /// Start a named spinner with optional label
+    SpinnerStart(String, Option<String>),
+    /// Stop a named spinner
+    SpinnerStop(String),
+    /// Set spinner label
+    SpinnerSetLabel(String, Option<String>),
+
     None,
 }

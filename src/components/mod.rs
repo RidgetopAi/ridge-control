@@ -6,6 +6,8 @@ pub mod log_viewer;
 pub mod menu;
 pub mod placeholder;
 pub mod process_monitor;
+pub mod spinner;
+pub mod spinner_manager;
 pub mod stream_viewer;
 pub mod terminal;
 
