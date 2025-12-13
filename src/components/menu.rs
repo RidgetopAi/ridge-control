@@ -73,6 +73,8 @@ impl Menu {
             KeyCode::Char('c') => Some(Action::StreamConnect(self.selected)),
             KeyCode::Char('d') => Some(Action::StreamDisconnect(self.selected)),
             KeyCode::Char('r') => Some(Action::StreamRefresh),
+            // TRC-025: Retry failed connection (resets health state)
+            KeyCode::Char('R') => Some(Action::StreamRetry(self.selected)),
             KeyCode::Char('v') => Some(Action::StreamViewerShow(self.selected)),
             _ => None,
         }

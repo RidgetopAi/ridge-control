@@ -687,6 +687,8 @@ impl App {
                     .unwrap_or_else(|| id.clone());
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(ConnectionState::Connected);
+                    // TRC-025: Record successful connection in health
+                    client.health_mut().record_connected();
                 }
                 // TRC-023: Notify on stream connect
                 self.notification_manager.success_with_message("Stream Connected", stream_name);
@@ -695,12 +697,22 @@ impl App {
                 let stream_name = self.stream_manager.get_client(&id)
                     .map(|c| c.name().to_string())
                     .unwrap_or_else(|| id.clone());
+                let should_reconnect = self.stream_manager.get_client(&id)
+                    .map(|c| c.reconnect_enabled() && c.health().should_reconnect())
+                    .unwrap_or(false);
+                
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(ConnectionState::Disconnected);
                 }
-                // TRC-023: Notify on stream disconnect
-                let msg = reason.as_deref().unwrap_or("Disconnected");
-                self.notification_manager.info_with_message("Stream Disconnected", format!("{}: {}", stream_name, msg));
+                
+                // TRC-025: Start auto-reconnect if enabled and was connected before
+                if should_reconnect {
+                    self.stream_manager.start_reconnect(&id);
+                } else {
+                    // TRC-023: Notify on stream disconnect
+                    let msg = reason.as_deref().unwrap_or("Disconnected");
+                    self.notification_manager.info_with_message("Stream Disconnected", format!("{}: {}", stream_name, msg));
+                }
             }
             StreamEvent::Data(id, data) => {
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
@@ -711,16 +723,48 @@ impl App {
                 let stream_name = self.stream_manager.get_client(&id)
                     .map(|c| c.name().to_string())
                     .unwrap_or_else(|| id.clone());
+                let should_reconnect = self.stream_manager.get_client(&id)
+                    .map(|c| c.reconnect_enabled() && c.health().should_reconnect())
+                    .unwrap_or(false);
+                
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(ConnectionState::Failed);
+                    // TRC-025: Record error in health
+                    client.health_mut().record_error(msg.clone());
                 }
-                // TRC-023: Notify on stream error
-                self.notification_manager.error_with_message("Stream Error", format!("{}: {}", stream_name, msg));
+                
+                // TRC-025: Start auto-reconnect if enabled
+                if should_reconnect {
+                    self.stream_manager.start_reconnect(&id);
+                } else {
+                    // TRC-023: Notify on stream error (only if not reconnecting)
+                    self.notification_manager.error_with_message("Stream Error", format!("{}: {}", stream_name, msg));
+                }
             }
             StreamEvent::StateChanged(id, state) => {
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(state);
                 }
+            }
+            StreamEvent::ReconnectAttempt(id, attempt) => {
+                // TRC-025: Notify about reconnection attempt
+                let stream_name = self.stream_manager.get_client(&id)
+                    .map(|c| c.name().to_string())
+                    .unwrap_or_else(|| id.clone());
+                self.notification_manager.info_with_message(
+                    "Reconnecting",
+                    format!("{} (attempt {})", stream_name, attempt)
+                );
+            }
+            StreamEvent::ReconnectGaveUp(id) => {
+                // TRC-025: Notify when reconnection gives up
+                let stream_name = self.stream_manager.get_client(&id)
+                    .map(|c| c.name().to_string())
+                    .unwrap_or_else(|| id.clone());
+                self.notification_manager.warning_with_message(
+                    "Connection Failed",
+                    format!("{}: Max retries reached. Use 'r' to retry manually.", stream_name)
+                );
             }
         }
     }
@@ -1445,6 +1489,22 @@ impl App {
                     self.selected_stream_index = None;
                 } else if self.selected_stream_index.map_or(true, |idx| idx >= count) {
                     self.selected_stream_index = Some(0);
+                }
+            }
+            Action::StreamRetry(idx) => {
+                // TRC-025: Retry connection for failed stream, resetting health
+                let info = self.stream_manager.clients().get(idx)
+                    .map(|c| (c.id().to_string(), c.name().to_string()));
+                if let Some((id, name)) = info {
+                    self.stream_manager.retry(&id);
+                    self.notification_manager.info(format!("Retrying {}...", name));
+                }
+            }
+            Action::StreamCancelReconnect(idx) => {
+                // TRC-025: Cancel ongoing reconnection
+                if let Some(client) = self.stream_manager.clients().get(idx) {
+                    let id = client.id().to_string();
+                    self.stream_manager.cancel_reconnect(&id);
                 }
             }
             Action::StreamViewerShow(idx) => {

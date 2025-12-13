@@ -1,6 +1,6 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -14,7 +14,7 @@ use crate::components::search::{
 };
 use crate::components::Component;
 use crate::config::Theme;
-use crate::streams::{StreamClient, StreamData};
+use crate::streams::{ConnectionState, StreamClient, StreamData};
 
 pub struct StreamViewer {
     scroll_offset: u16,
@@ -163,6 +163,110 @@ impl StreamViewer {
         self.line_count = self.cached_lines.len();
     }
 
+    /// TRC-025: Build lines for graceful degradation display
+    fn build_degraded_state_lines<'a>(&self, stream: &StreamClient, theme: &Theme) -> Vec<Line<'a>> {
+        let mut lines = Vec::new();
+        let muted = Style::default().fg(theme.colors.muted.to_color());
+        let error_style = Style::default().fg(theme.colors.error.to_color());
+        let warning_style = Style::default().fg(theme.colors.warning.to_color());
+        let info_style = Style::default().fg(theme.colors.primary.to_color());
+        let success_style = Style::default().fg(theme.colors.success.to_color());
+
+        match stream.state() {
+            ConnectionState::Disconnected => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("⭘ Disconnected", muted.add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("Endpoint: {}", stream.url()),
+                    muted,
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Press 'c' to connect",
+                    info_style,
+                )));
+            }
+            ConnectionState::Connecting => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("◌ Connecting...", info_style.add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("Endpoint: {}", stream.url()),
+                    muted,
+                )));
+            }
+            ConnectionState::Connected => {
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("● Connected", success_style.add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "No data received yet...",
+                    muted.add_modifier(Modifier::ITALIC),
+                )));
+            }
+            ConnectionState::Reconnecting { attempt } => {
+                let health = stream.health();
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    format!("↻ Reconnecting (attempt {}/{})", 
+                        attempt,
+                        if health.max_reconnect_attempts == 0 { "∞".to_string() } else { health.max_reconnect_attempts.to_string() }
+                    ),
+                    warning_style.add_modifier(Modifier::BOLD),
+                )));
+                lines.push(Line::from(""));
+                if let Some(ref err) = health.last_error {
+                    lines.push(Line::from(Span::styled(
+                        format!("Last error: {}", if err.len() > 60 { format!("{}...", &err[..57]) } else { err.clone() }),
+                        error_style,
+                    )));
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    "Retrying with exponential backoff...",
+                    muted.add_modifier(Modifier::ITALIC),
+                )));
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled(
+                    "Press 'd' to cancel",
+                    muted,
+                )));
+            }
+            ConnectionState::Failed => {
+                let health = stream.health();
+                lines.push(Line::from(""));
+                lines.push(Line::from(Span::styled("✕ Connection Failed", error_style.add_modifier(Modifier::BOLD))));
+                lines.push(Line::from(""));
+                if let Some(ref err) = health.last_error {
+                    lines.push(Line::from(Span::styled(
+                        format!("Error: {}", if err.len() > 60 { format!("{}...", &err[..57]) } else { err.clone() }),
+                        error_style,
+                    )));
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    format!("Endpoint: {}", stream.url()),
+                    muted,
+                )));
+                lines.push(Line::from(""));
+                if health.failure_count > 1 {
+                    lines.push(Line::from(Span::styled(
+                        format!("Failed {} times", health.failure_count),
+                        warning_style,
+                    )));
+                    lines.push(Line::from(""));
+                }
+                lines.push(Line::from(Span::styled(
+                    "Press 'r' to retry  |  'c' to connect  |  'd' to dismiss",
+                    info_style,
+                )));
+            }
+        }
+
+        lines
+    }
+
     pub fn render_stream(&self, frame: &mut Frame, area: Rect, focused: bool, stream: Option<&StreamClient>) {
         let border_color = if focused {
             Color::Cyan
@@ -278,16 +382,21 @@ impl StreamViewer {
             .border_style(border_style);
 
         if stream.is_none() || self.cached_lines.is_empty() {
-            let msg_text = if stream.is_some() {
-                "No data received yet..."
+            // TRC-025: Show graceful degradation messages
+            let lines = if let Some(s) = stream {
+                self.build_degraded_state_lines(s, theme)
             } else {
-                "Select a stream from the menu"
+                vec![
+                    Line::from(Span::styled(
+                        "Select a stream from the menu",
+                        Style::default().fg(theme.colors.muted.to_color()).add_modifier(Modifier::ITALIC),
+                    ))
+                ]
             };
-            let msg = Paragraph::new(Line::from(Span::styled(
-                msg_text,
-                Style::default().fg(theme.colors.muted.to_color()).add_modifier(Modifier::ITALIC),
-            )))
-            .block(block);
+            
+            let msg = Paragraph::new(lines)
+                .block(block)
+                .alignment(Alignment::Center);
             frame.render_widget(msg, stream_area);
             
             if let Some(rect) = bar_area {

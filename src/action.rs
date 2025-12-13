@@ -62,6 +62,10 @@ pub enum Action {
     StreamToggle(usize),
     StreamRefresh,
     StreamData(String, String),
+    /// Retry connection for a failed stream (resets health state)
+    StreamRetry(usize),
+    /// Cancel ongoing reconnection attempts
+    StreamCancelReconnect(usize),
     /// Show stream viewer with selected stream index
     StreamViewerShow(usize),
     /// Hide stream viewer
