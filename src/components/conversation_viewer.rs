@@ -1,13 +1,14 @@
-use crossterm::event::{Event, KeyCode, KeyEvent};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    layout::Rect,
-    style::{Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState, Wrap},
     Frame,
 };
 
 use crate::action::Action;
+use crate::components::search::{SearchState, SearchBar, SearchAction};
 use crate::components::spinner::{Spinner, SpinnerStyle};
 use crate::components::tool_call_widget::{ToolCallManager, ToolCallWidget, ToolStatus};
 use crate::components::Component;
@@ -29,6 +30,10 @@ pub struct ConversationViewer {
     tool_navigation_mode: bool,
     /// Whether thinking blocks are collapsed (TRC-017)
     thinking_collapsed: bool,
+    /// Search state (TRC-021)
+    search_state: SearchState,
+    /// Cached text lines for search
+    cached_text: Vec<String>,
 }
 
 impl ConversationViewer {
@@ -45,6 +50,8 @@ impl ConversationViewer {
             tool_call_manager: ToolCallManager::new(),
             tool_navigation_mode: false,
             thinking_collapsed: false,
+            search_state: SearchState::new(),
+            cached_text: Vec::new(),
         }
     }
     
@@ -129,8 +136,121 @@ impl ConversationViewer {
         self.tool_call_manager.clear();
     }
 
+    /// Search state accessor (TRC-021)
+    pub fn is_search_active(&self) -> bool {
+        self.search_state.is_active()
+    }
+
+    /// Get search state (TRC-021)
+    pub fn search_state(&self) -> &SearchState {
+        &self.search_state
+    }
+
+    /// Get mutable search state (TRC-021)
+    pub fn search_state_mut(&mut self) -> &mut SearchState {
+        &mut self.search_state
+    }
+
+    /// Start search in conversation (TRC-021)
+    pub fn start_search(&mut self) {
+        self.search_state.activate();
+        self.auto_scroll = false;
+    }
+
+    /// Close search (TRC-021)
+    pub fn close_search(&mut self) {
+        self.search_state.deactivate();
+    }
+
+    /// Update search with current cached text (TRC-021)
+    pub fn update_search(&mut self) {
+        self.search_state.search_in_lines(
+            self.cached_text.iter().enumerate().map(|(idx, line)| (idx, line.as_str()))
+        );
+    }
+
+    /// Navigate to next search match (TRC-021)
+    pub fn search_next(&mut self) {
+        self.search_state.next_match();
+        self.scroll_to_current_search_match();
+    }
+
+    /// Navigate to previous search match (TRC-021)
+    pub fn search_prev(&mut self) {
+        self.search_state.prev_match();
+        self.scroll_to_current_search_match();
+    }
+
+    fn scroll_to_current_search_match(&mut self) {
+        if let Some(m) = self.search_state.current_match() {
+            let target_line = m.line_index as u16;
+            if target_line < self.scroll_offset {
+                self.scroll_offset = target_line.saturating_sub(2);
+            } else if target_line >= self.scroll_offset + self.visible_height {
+                self.scroll_offset = target_line.saturating_sub(self.visible_height / 2);
+            }
+        }
+    }
+
+    /// Cache text content for search (TRC-021)
+    fn cache_text_for_search(&mut self, messages: &[Message], streaming_buffer: &str, thinking_buffer: &str) {
+        self.cached_text.clear();
+        
+        for message in messages {
+            let role_text = match message.role {
+                Role::User => "User:",
+                Role::Assistant => "Assistant:",
+            };
+            self.cached_text.push(role_text.to_string());
+            
+            for content_block in &message.content {
+                match content_block {
+                    ContentBlock::Text(text) => {
+                        for line in text.lines() {
+                            self.cached_text.push(line.to_string());
+                        }
+                    }
+                    ContentBlock::Thinking(text) => {
+                        for line in text.lines() {
+                            self.cached_text.push(line.to_string());
+                        }
+                    }
+                    ContentBlock::ToolUse(tool) => {
+                        self.cached_text.push(format!("Tool: {}", tool.name));
+                    }
+                    ContentBlock::ToolResult(result) => {
+                        let content_str = match &result.content {
+                            crate::llm::ToolResultContent::Text(text) => text.clone(),
+                            crate::llm::ToolResultContent::Json(json) => json.to_string(),
+                            crate::llm::ToolResultContent::Image(_) => "[Image]".to_string(),
+                        };
+                        for line in content_str.lines() {
+                            self.cached_text.push(line.to_string());
+                        }
+                    }
+                    ContentBlock::Image(_) => {
+                        self.cached_text.push("[Image]".to_string());
+                    }
+                }
+            }
+        }
+        
+        if !thinking_buffer.is_empty() {
+            for line in thinking_buffer.lines() {
+                self.cached_text.push(line.to_string());
+            }
+        }
+        
+        if !streaming_buffer.is_empty() {
+            for line in streaming_buffer.lines() {
+                self.cached_text.push(line.to_string());
+            }
+        }
+    }
+
     /// Render conversation with messages and current streaming buffers
     /// TRC-017: Now accepts separate thinking_buffer for extended thinking display
+    /// TRC-021: Added search support
     pub fn render_conversation(
         &mut self,
         frame: &mut Frame,
@@ -141,10 +261,25 @@ impl ConversationViewer {
         thinking_buffer: &str,
         theme: &Theme,
     ) {
+        self.cache_text_for_search(messages, streaming_buffer, thinking_buffer);
+
+        let (conversation_area, search_area) = if self.search_state.is_active() {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(SearchBar::height()),
+                ])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
+
         let border_style = theme.border_style(focused);
         let title_style = theme.title_style(focused);
 
-        // Build title with status indicators (TRC-017: include thinking indicator)
+        // Build title with status indicators (TRC-017: include thinking indicator, TRC-021: search)
         let title = self.build_title(streaming_buffer, thinking_buffer);
 
         let block = Block::default()
@@ -153,7 +288,7 @@ impl ConversationViewer {
             .borders(Borders::ALL)
             .border_style(border_style);
 
-        let inner = block.inner(area);
+        let inner = block.inner(conversation_area);
         self.visible_height = inner.height;
 
         // Build lines from conversation
@@ -317,7 +452,7 @@ impl ConversationViewer {
             .wrap(Wrap { trim: false })
             .scroll((self.scroll_offset, 0));
 
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, conversation_area);
 
         // Render scrollbar if content exceeds visible area
         if self.line_count > self.visible_height as usize {
@@ -336,9 +471,16 @@ impl ConversationViewer {
                 &mut scrollbar_state,
             );
         }
+
+        // TRC-021: Render search bar if active
+        if let Some(search_rect) = search_area {
+            let search_bar = SearchBar::new(&self.search_state, theme);
+            search_bar.render(frame, search_rect);
+        }
     }
     
     /// TRC-017: Updated to include thinking buffer indicator
+    /// TRC-021: Added search indicator
     fn build_title(&self, streaming_buffer: &str, thinking_buffer: &str) -> String {
         let mut title_parts = vec![" Conversation".to_string()];
         
@@ -369,6 +511,11 @@ impl ConversationViewer {
         // Add streaming indicator
         if !streaming_buffer.is_empty() {
             title_parts.push(format!(" {} Streaming...", self.streaming_spinner.current_frame()));
+        }
+
+        // TRC-021: Add search indicator
+        if self.search_state.is_active() {
+            title_parts.push(" 󰍉".to_string());
         }
         
         title_parts.push(" ".to_string());
@@ -637,6 +784,19 @@ impl Component for ConversationViewer {
             Action::ToolCallCollapseAll => self.collapse_all_tools(),
             // TRC-017: Handle thinking toggle
             Action::ThinkingToggleCollapse => self.toggle_thinking_collapse(),
+            // TRC-021: Handle search actions
+            Action::ConversationSearchStart => self.start_search(),
+            Action::ConversationSearchClose => self.close_search(),
+            Action::ConversationSearchNext => self.search_next(),
+            Action::ConversationSearchPrev => self.search_prev(),
+            Action::ConversationSearchQuery(query) => {
+                self.search_state.set_query(query.clone());
+                self.update_search();
+            }
+            Action::ConversationSearchToggleCase => {
+                self.search_state.toggle_case_sensitivity();
+                self.update_search();
+            }
             _ => {}
         }
     }
@@ -648,6 +808,26 @@ impl Component for ConversationViewer {
 
 impl ConversationViewer {
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        // TRC-021: Search mode keys
+        if self.search_state.is_active() {
+            match self.search_state.handle_key(key) {
+                SearchAction::Close => {
+                    self.close_search();
+                    return Some(Action::ConversationSearchClose);
+                }
+                SearchAction::NavigateToMatch => {
+                    self.scroll_to_current_search_match();
+                    return None;
+                }
+                SearchAction::RefreshSearch => {
+                    self.update_search();
+                    self.scroll_to_current_search_match();
+                    return None;
+                }
+                SearchAction::None => return None,
+            }
+        }
+
         // Tool navigation mode keys
         if self.tool_navigation_mode {
             match key.code {
@@ -666,6 +846,27 @@ impl ConversationViewer {
         
         // Normal conversation viewer keys
         match key.code {
+            // TRC-021: Start search with '/'
+            KeyCode::Char('/') => {
+                self.start_search();
+                Some(Action::ConversationSearchStart)
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.search_state.match_count() > 0 {
+                    self.search_next();
+                    Some(Action::ConversationSearchNext)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.search_state.match_count() > 0 {
+                    self.search_prev();
+                    Some(Action::ConversationSearchPrev)
+                } else {
+                    None
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown(1)),
             KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp(1)),
             KeyCode::Char('g') => Some(Action::ScrollToTop),

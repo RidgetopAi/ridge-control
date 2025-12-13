@@ -1,6 +1,6 @@
-use crossterm::event::{Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind, MouseButton};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
 use ratatui::{
-    layout::Rect,
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
@@ -9,6 +9,7 @@ use ratatui::{
 use std::collections::VecDeque;
 
 use crate::action::Action;
+use crate::components::search::{SearchState, SearchBar, SearchAction, highlight_matches_in_line};
 use crate::components::Component;
 use crate::config::Theme;
 
@@ -87,6 +88,7 @@ pub struct LogViewer {
     inner_area: Rect,
     auto_scroll: bool,
     filter_level: Option<LogLevel>,
+    search_state: SearchState,
 }
 
 impl LogViewer {
@@ -99,6 +101,7 @@ impl LogViewer {
             inner_area: Rect::default(),
             auto_scroll: true,
             filter_level: None,
+            search_state: SearchState::new(),
         }
     }
 
@@ -219,6 +222,60 @@ impl LogViewer {
         self.scroll_down(self.visible_height.saturating_sub(2).max(1));
     }
 
+    pub fn is_search_active(&self) -> bool {
+        self.search_state.is_active()
+    }
+
+    pub fn search_state(&self) -> &SearchState {
+        &self.search_state
+    }
+
+    pub fn search_state_mut(&mut self) -> &mut SearchState {
+        &mut self.search_state
+    }
+
+    pub fn start_search(&mut self) {
+        self.search_state.activate();
+        self.auto_scroll = false;
+    }
+
+    pub fn close_search(&mut self) {
+        self.search_state.deactivate();
+    }
+
+    pub fn update_search(&mut self) {
+        let lines: Vec<(usize, String)> = self
+            .filtered_entries()
+            .enumerate()
+            .map(|(idx, entry)| (idx, entry.message.clone()))
+            .collect();
+        
+        self.search_state.search_in_lines(
+            lines.iter().map(|(idx, msg)| (*idx, msg.as_str()))
+        );
+    }
+
+    pub fn search_next(&mut self) {
+        self.search_state.next_match();
+        self.scroll_to_current_match();
+    }
+
+    pub fn search_prev(&mut self) {
+        self.search_state.prev_match();
+        self.scroll_to_current_match();
+    }
+
+    fn scroll_to_current_match(&mut self) {
+        if let Some(m) = self.search_state.current_match() {
+            let target_line = m.line_index as u16;
+            if target_line < self.scroll_offset {
+                self.scroll_offset = target_line.saturating_sub(2);
+            } else if target_line >= self.scroll_offset + self.visible_height {
+                self.scroll_offset = target_line.saturating_sub(self.visible_height / 2);
+            }
+        }
+    }
+
     fn filtered_entries(&self) -> impl Iterator<Item = &LogEntry> {
         self.logs.iter().filter(|entry| {
             if let Some(ref level) = self.filter_level {
@@ -248,14 +305,29 @@ impl LogViewer {
     }
 
     fn render_themed(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
+        let (log_area, search_area) = if self.search_state.is_active() {
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Min(3),
+                    Constraint::Length(SearchBar::height()),
+                ])
+                .split(area);
+            (chunks[0], Some(chunks[1]))
+        } else {
+            (area, None)
+        };
+
         let border_style = theme.border_style(focused);
         let title_style = theme.title_style(focused);
 
         let auto_scroll_indicator = if self.auto_scroll { "⏬" } else { "⏸" };
+        let search_indicator = if self.search_state.is_active() { " 󰍉" } else { "" };
         let title = format!(
-            " Logs ({}) {} ",
+            " Logs ({}) {}{} ",
             self.filtered_entries().count(),
-            auto_scroll_indicator
+            auto_scroll_indicator,
+            search_indicator
         );
 
         let block = Block::default()
@@ -272,15 +344,31 @@ impl LogViewer {
                     .add_modifier(Modifier::ITALIC),
             )))
             .block(block);
-            frame.render_widget(msg, area);
+            frame.render_widget(msg, log_area);
+            
+            if let Some(search_rect) = search_area {
+                let search_bar = SearchBar::new(&self.search_state, theme);
+                search_bar.render(frame, search_rect);
+            }
             return;
         }
 
+        let match_style = Style::default()
+            .fg(Color::Black)
+            .bg(theme.colors.warning.to_color())
+            .add_modifier(Modifier::BOLD);
+        let current_match_style = Style::default()
+            .fg(Color::Black)
+            .bg(theme.colors.success.to_color())
+            .add_modifier(Modifier::BOLD);
+        let normal_style = Style::default().fg(theme.colors.foreground.to_color());
+
         let lines: Vec<Line> = self
             .filtered_entries()
+            .enumerate()
             .skip(self.scroll_offset as usize)
             .take(self.visible_height as usize + 1)
-            .map(|entry| {
+            .map(|(line_idx, entry)| {
                 let level_span = Span::styled(
                     format!("{:5}", entry.level.as_str()),
                     Style::default()
@@ -300,12 +388,23 @@ impl LogViewer {
                         .add_modifier(Modifier::DIM),
                 );
 
-                let message_span = Span::styled(
-                    entry.message.clone(),
-                    Style::default().fg(theme.colors.foreground.to_color()),
-                );
+                let message_spans = if self.search_state.is_active() && !self.search_state.query().is_empty() {
+                    highlight_matches_in_line(
+                        &entry.message,
+                        line_idx,
+                        self.search_state.matches(),
+                        self.search_state.current_match_index(),
+                        normal_style,
+                        match_style,
+                        current_match_style,
+                    )
+                } else {
+                    vec![Span::styled(entry.message.clone(), normal_style)]
+                };
 
-                Line::from(vec![timestamp_span, level_span, Span::raw(" "), target_span, message_span])
+                let mut spans = vec![timestamp_span, level_span, Span::raw(" "), target_span];
+                spans.extend(message_spans);
+                Line::from(spans)
             })
             .collect();
 
@@ -313,11 +412,55 @@ impl LogViewer {
             .block(block)
             .wrap(Wrap { trim: false });
 
-        frame.render_widget(paragraph, area);
+        frame.render_widget(paragraph, log_area);
+
+        if let Some(search_rect) = search_area {
+            let search_bar = SearchBar::new(&self.search_state, theme);
+            search_bar.render(frame, search_rect);
+        }
     }
 
     fn handle_key(&mut self, key: KeyEvent) -> Option<Action> {
+        if self.search_state.is_active() {
+            match self.search_state.handle_key(key) {
+                SearchAction::Close => {
+                    self.close_search();
+                    return Some(Action::LogViewerSearchClose);
+                }
+                SearchAction::NavigateToMatch => {
+                    self.scroll_to_current_match();
+                    return None;
+                }
+                SearchAction::RefreshSearch => {
+                    self.update_search();
+                    self.scroll_to_current_match();
+                    return None;
+                }
+                SearchAction::None => return None,
+            }
+        }
+
         match key.code {
+            KeyCode::Char('/') => {
+                self.start_search();
+                Some(Action::LogViewerSearchStart)
+            }
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.search_state.match_count() > 0 {
+                    self.search_next();
+                    Some(Action::LogViewerSearchNext)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                if self.search_state.match_count() > 0 {
+                    self.search_prev();
+                    Some(Action::LogViewerSearchPrev)
+                } else {
+                    None
+                }
+            }
             KeyCode::Char('j') | KeyCode::Down => {
                 self.scroll_down(1);
                 Some(Action::LogViewerScrollDown(1))
@@ -403,6 +546,18 @@ impl Component for LogViewer {
             Action::LogViewerScrollPageDown => self.scroll_page_down(),
             Action::LogViewerToggleAutoScroll => self.toggle_auto_scroll(),
             Action::LogViewerClear => self.clear(),
+            Action::LogViewerSearchStart => self.start_search(),
+            Action::LogViewerSearchClose => self.close_search(),
+            Action::LogViewerSearchNext => self.search_next(),
+            Action::LogViewerSearchPrev => self.search_prev(),
+            Action::LogViewerSearchQuery(query) => {
+                self.search_state.set_query(query.clone());
+                self.update_search();
+            }
+            Action::LogViewerSearchToggleCase => {
+                self.search_state.toggle_case_sensitivity();
+                self.update_search();
+            }
             _ => {}
         }
     }

@@ -261,6 +261,46 @@ pub enum Action {
     /// Select/activate current context menu item
     ContextMenuSelect,
 
+    // Search actions (TRC-021)
+    /// Start search in log viewer
+    LogViewerSearchStart,
+    /// Close search in log viewer
+    LogViewerSearchClose,
+    /// Navigate to next search match
+    LogViewerSearchNext,
+    /// Navigate to previous search match
+    LogViewerSearchPrev,
+    /// Update search query in log viewer
+    LogViewerSearchQuery(String),
+    /// Toggle case sensitivity in log viewer search
+    LogViewerSearchToggleCase,
+
+    /// Start search in stream viewer
+    StreamViewerSearchStart,
+    /// Close search in stream viewer
+    StreamViewerSearchClose,
+    /// Navigate to next search match
+    StreamViewerSearchNext,
+    /// Navigate to previous search match
+    StreamViewerSearchPrev,
+    /// Update search query in stream viewer
+    StreamViewerSearchQuery(String),
+    /// Toggle case sensitivity in stream viewer search
+    StreamViewerSearchToggleCase,
+
+    /// Start search in conversation viewer
+    ConversationSearchStart,
+    /// Close search in conversation viewer
+    ConversationSearchClose,
+    /// Navigate to next search match
+    ConversationSearchNext,
+    /// Navigate to previous search match
+    ConversationSearchPrev,
+    /// Update search query in conversation viewer
+    ConversationSearchQuery(String),
+    /// Toggle case sensitivity in conversation viewer search
+    ConversationSearchToggleCase,
+
     None,
 }
 
