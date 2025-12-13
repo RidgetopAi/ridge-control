@@ -8,7 +8,10 @@ use ratatui::{
 };
 
 use crate::action::Action;
-use crate::components::search::{SearchState, SearchBar, SearchAction, highlight_matches_in_line};
+use crate::components::search::{
+    SearchState, SearchBar, SearchAction, highlight_matches_in_line,
+    FilterState, FilterBar, FilterAction,
+};
 use crate::components::Component;
 use crate::config::Theme;
 use crate::streams::{StreamClient, StreamData};
@@ -19,6 +22,7 @@ pub struct StreamViewer {
     visible_height: u16,
     selected_stream_name: String,
     search_state: SearchState,
+    filter_state: FilterState,
     cached_lines: Vec<String>,
 }
 
@@ -30,6 +34,7 @@ impl StreamViewer {
             visible_height: 10,
             selected_stream_name: String::new(),
             search_state: SearchState::new(),
+            filter_state: FilterState::new(),
             cached_lines: Vec::new(),
         }
     }
@@ -101,6 +106,42 @@ impl StreamViewer {
                 self.scroll_offset = target_line.saturating_sub(self.visible_height / 2);
             }
         }
+    }
+
+    pub fn is_filter_active(&self) -> bool {
+        self.filter_state.is_active()
+    }
+
+    pub fn has_active_filter(&self) -> bool {
+        !self.filter_state.pattern().is_empty()
+    }
+
+    pub fn filter_state(&self) -> &FilterState {
+        &self.filter_state
+    }
+
+    pub fn filter_state_mut(&mut self) -> &mut FilterState {
+        &mut self.filter_state
+    }
+
+    pub fn start_filter(&mut self) {
+        self.filter_state.activate();
+    }
+
+    pub fn close_filter(&mut self) {
+        self.filter_state.deactivate();
+        self.scroll_offset = 0;
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter_state.clear_pattern();
+        self.scroll_offset = 0;
+    }
+
+    fn filtered_lines(&self) -> impl Iterator<Item = (usize, &String)> {
+        self.cached_lines.iter().enumerate().filter(|(_, line)| {
+            self.filter_state.matches_line(line)
+        })
     }
 
     fn update_cached_lines(&mut self, stream: Option<&StreamClient>) {
@@ -192,12 +233,20 @@ impl StreamViewer {
     pub fn render_stream_themed(&mut self, frame: &mut Frame, area: Rect, focused: bool, stream: Option<&StreamClient>, theme: &Theme) {
         self.update_cached_lines(stream);
 
-        let (stream_area, search_area) = if self.search_state.is_active() {
+        let bar_height = if self.search_state.is_active() {
+            SearchBar::height()
+        } else if self.filter_state.is_active() {
+            FilterBar::height()
+        } else {
+            0
+        };
+
+        let (stream_area, bar_area) = if bar_height > 0 {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(SearchBar::height()),
+                    Constraint::Length(bar_height),
                 ])
                 .split(area);
             (chunks[0], Some(chunks[1]))
@@ -209,10 +258,17 @@ impl StreamViewer {
         let title_style = theme.title_style(focused);
 
         let search_indicator = if self.search_state.is_active() { " 󰍉" } else { "" };
-        let title = if let Some(s) = stream {
-            format!(" {} [{}]{} ", s.name(), s.state(), search_indicator)
+        let filter_indicator = if self.has_active_filter() {
+            format!(" 󰈶:{}", self.filter_state.pattern())
+        } else if self.filter_state.is_active() {
+            " 󰈶".to_string()
         } else {
-            format!(" Stream Viewer{} ", search_indicator)
+            String::new()
+        };
+        let title = if let Some(s) = stream {
+            format!(" {} [{}]{}{} ", s.name(), s.state(), search_indicator, filter_indicator)
+        } else {
+            format!(" Stream Viewer{}{} ", search_indicator, filter_indicator)
         };
 
         let block = Block::default()
@@ -234,9 +290,14 @@ impl StreamViewer {
             .block(block);
             frame.render_widget(msg, stream_area);
             
-            if let Some(search_rect) = search_area {
-                let search_bar = SearchBar::new(&self.search_state, theme);
-                search_bar.render(frame, search_rect);
+            if let Some(rect) = bar_area {
+                if self.search_state.is_active() {
+                    let search_bar = SearchBar::new(&self.search_state, theme);
+                    search_bar.render(frame, rect);
+                } else if self.filter_state.is_active() {
+                    let filter_bar = FilterBar::new(&self.filter_state, theme);
+                    filter_bar.render(frame, rect);
+                }
             }
             return;
         }
@@ -251,9 +312,7 @@ impl StreamViewer {
             .add_modifier(Modifier::BOLD);
         let normal_style = Style::default().fg(theme.colors.foreground.to_color());
 
-        let lines: Vec<Line> = self.cached_lines
-            .iter()
-            .enumerate()
+        let lines: Vec<Line> = self.filtered_lines()
             .skip(self.scroll_offset as usize)
             .take(self.visible_height as usize + 1)
             .map(|(line_idx, line_text)| {
@@ -280,9 +339,14 @@ impl StreamViewer {
 
         frame.render_widget(paragraph, stream_area);
 
-        if let Some(search_rect) = search_area {
-            let search_bar = SearchBar::new(&self.search_state, theme);
-            search_bar.render(frame, search_rect);
+        if let Some(rect) = bar_area {
+            if self.search_state.is_active() {
+                let search_bar = SearchBar::new(&self.search_state, theme);
+                search_bar.render(frame, rect);
+            } else if self.filter_state.is_active() {
+                let filter_bar = FilterBar::new(&self.filter_state, theme);
+                filter_bar.render(frame, rect);
+            }
         }
     }
 }
@@ -319,6 +383,32 @@ impl Component for StreamViewer {
                 self.search_state.toggle_case_sensitivity();
                 self.update_search();
             }
+            Action::StreamViewerFilterStart => self.start_filter(),
+            Action::StreamViewerFilterClose => self.close_filter(),
+            Action::StreamViewerFilterApply => {
+                self.filter_state.activate();
+                let _ = self.filter_state.handle_key(crossterm::event::KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::NONE,
+                ));
+            }
+            Action::StreamViewerFilterPattern(pattern) => {
+                self.filter_state.set_pattern(pattern.clone());
+                self.scroll_offset = 0;
+            }
+            Action::StreamViewerFilterToggleCase => {
+                self.filter_state.toggle_case_sensitivity();
+                self.scroll_offset = 0;
+            }
+            Action::StreamViewerFilterToggleRegex => {
+                self.filter_state.toggle_regex();
+                self.scroll_offset = 0;
+            }
+            Action::StreamViewerFilterToggleInvert => {
+                self.filter_state.toggle_inverted();
+                self.scroll_offset = 0;
+            }
+            Action::StreamViewerFilterClear => self.clear_filter(),
             _ => {}
         }
     }
@@ -363,6 +453,23 @@ impl StreamViewer {
             }
         }
 
+        if self.filter_state.is_active() {
+            match self.filter_state.handle_key(key) {
+                FilterAction::Close => {
+                    self.close_filter();
+                    return Some(Action::StreamViewerFilterClose);
+                }
+                FilterAction::Apply => {
+                    return Some(Action::StreamViewerFilterApply);
+                }
+                FilterAction::Refresh => {
+                    self.scroll_offset = 0;
+                    return None;
+                }
+                FilterAction::None => return None,
+            }
+        }
+
         match key.code {
             KeyCode::Char('/') => {
                 self.start_search();
@@ -390,6 +497,14 @@ impl StreamViewer {
             KeyCode::Char('G') => Some(Action::ScrollToBottom),
             KeyCode::PageUp => Some(Action::ScrollPageUp),
             KeyCode::PageDown => Some(Action::ScrollPageDown),
+            KeyCode::Char('f') => {
+                self.start_filter();
+                Some(Action::StreamViewerFilterStart)
+            }
+            KeyCode::Char('F') => {
+                self.clear_filter();
+                Some(Action::StreamViewerFilterClear)
+            }
             _ => None,
         }
     }
@@ -477,5 +592,53 @@ mod tests {
         
         viewer.search_prev();
         assert_eq!(viewer.search_state.current_match_index(), 1);
+    }
+
+    #[test]
+    fn test_stream_viewer_filter_activate() {
+        let mut viewer = StreamViewer::new();
+        assert!(!viewer.is_filter_active());
+        
+        viewer.start_filter();
+        assert!(viewer.is_filter_active());
+        
+        viewer.close_filter();
+        assert!(!viewer.is_filter_active());
+    }
+
+    #[test]
+    fn test_stream_viewer_filter_lines() {
+        let mut viewer = StreamViewer::new();
+        viewer.cached_lines = vec![
+            "Error: something went wrong".to_string(),
+            "Info: all good".to_string(),
+            "Error: another problem".to_string(),
+            "Debug: trace info".to_string(),
+        ];
+        
+        assert_eq!(viewer.filtered_lines().count(), 4);
+        
+        viewer.filter_state.set_pattern("Error".to_string());
+        assert_eq!(viewer.filtered_lines().count(), 2);
+        
+        viewer.filter_state.set_inverted(true);
+        assert_eq!(viewer.filtered_lines().count(), 2);
+        
+        viewer.clear_filter();
+        assert_eq!(viewer.filtered_lines().count(), 4);
+    }
+
+    #[test]
+    fn test_stream_viewer_filter_regex() {
+        let mut viewer = StreamViewer::new();
+        viewer.cached_lines = vec![
+            "Error 123".to_string(),
+            "Warning 456".to_string(),
+            "Info 789".to_string(),
+        ];
+        
+        viewer.filter_state.set_pattern(r"Error|Warning".to_string());
+        viewer.filter_state.set_regex(true);
+        assert_eq!(viewer.filtered_lines().count(), 2);
     }
 }

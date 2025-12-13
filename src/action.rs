@@ -301,6 +301,41 @@ pub enum Action {
     /// Toggle case sensitivity in conversation viewer search
     ConversationSearchToggleCase,
 
+    // Filter/Grep actions (TRC-022)
+    /// Start filter mode in log viewer (shows filter bar)
+    LogViewerFilterStart,
+    /// Close filter mode in log viewer (clears filter)
+    LogViewerFilterClose,
+    /// Apply current filter (hide filter bar but keep filter active)
+    LogViewerFilterApply,
+    /// Update filter pattern in log viewer
+    LogViewerFilterPattern(String),
+    /// Toggle case sensitivity in log viewer filter
+    LogViewerFilterToggleCase,
+    /// Toggle regex mode in log viewer filter
+    LogViewerFilterToggleRegex,
+    /// Toggle inverted (exclude) mode in log viewer filter
+    LogViewerFilterToggleInvert,
+    /// Clear filter in log viewer
+    LogViewerFilterClear,
+
+    /// Start filter mode in stream viewer
+    StreamViewerFilterStart,
+    /// Close filter mode in stream viewer
+    StreamViewerFilterClose,
+    /// Apply current filter in stream viewer
+    StreamViewerFilterApply,
+    /// Update filter pattern in stream viewer
+    StreamViewerFilterPattern(String),
+    /// Toggle case sensitivity in stream viewer filter
+    StreamViewerFilterToggleCase,
+    /// Toggle regex mode in stream viewer filter
+    StreamViewerFilterToggleRegex,
+    /// Toggle inverted mode in stream viewer filter
+    StreamViewerFilterToggleInvert,
+    /// Clear filter in stream viewer
+    StreamViewerFilterClear,
+
     None,
 }
 

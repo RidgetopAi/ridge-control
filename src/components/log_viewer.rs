@@ -9,7 +9,10 @@ use ratatui::{
 use std::collections::VecDeque;
 
 use crate::action::Action;
-use crate::components::search::{SearchState, SearchBar, SearchAction, highlight_matches_in_line};
+use crate::components::search::{
+    SearchState, SearchBar, SearchAction, highlight_matches_in_line,
+    FilterState, FilterBar, FilterAction,
+};
 use crate::components::Component;
 use crate::config::Theme;
 
@@ -89,6 +92,7 @@ pub struct LogViewer {
     auto_scroll: bool,
     filter_level: Option<LogLevel>,
     search_state: SearchState,
+    filter_state: FilterState,
 }
 
 impl LogViewer {
@@ -102,6 +106,7 @@ impl LogViewer {
             auto_scroll: true,
             filter_level: None,
             search_state: SearchState::new(),
+            filter_state: FilterState::new(),
         }
     }
 
@@ -243,6 +248,46 @@ impl LogViewer {
         self.search_state.deactivate();
     }
 
+    pub fn is_filter_active(&self) -> bool {
+        self.filter_state.is_active()
+    }
+
+    pub fn has_active_filter(&self) -> bool {
+        !self.filter_state.pattern().is_empty()
+    }
+
+    pub fn filter_state(&self) -> &FilterState {
+        &self.filter_state
+    }
+
+    pub fn filter_state_mut(&mut self) -> &mut FilterState {
+        &mut self.filter_state
+    }
+
+    pub fn start_filter(&mut self) {
+        self.filter_state.activate();
+        self.auto_scroll = false;
+    }
+
+    pub fn close_filter(&mut self) {
+        self.filter_state.deactivate();
+        self.scroll_offset = 0;
+    }
+
+    pub fn apply_filter(&mut self) {
+        self.filter_state.activate();
+        self.filter_state.handle_key(crossterm::event::KeyEvent::new(
+            KeyCode::Enter,
+            KeyModifiers::NONE,
+        ));
+        self.scroll_offset = 0;
+    }
+
+    pub fn clear_filter(&mut self) {
+        self.filter_state.clear_pattern();
+        self.scroll_offset = 0;
+    }
+
     pub fn update_search(&mut self) {
         let lines: Vec<(usize, String)> = self
             .filtered_entries()
@@ -277,12 +322,53 @@ impl LogViewer {
     }
 
     fn filtered_entries(&self) -> impl Iterator<Item = &LogEntry> {
-        self.logs.iter().filter(|entry| {
-            if let Some(ref level) = self.filter_level {
+        let filter_pattern = self.filter_state.pattern().to_string();
+        let has_pattern = !filter_pattern.is_empty();
+        let filter_case_sensitive = self.filter_state.is_case_sensitive();
+        let filter_use_regex = self.filter_state.is_regex();
+        let filter_inverted = self.filter_state.is_inverted();
+        
+        let regex_pattern = if filter_use_regex && has_pattern {
+            let pat = if filter_case_sensitive {
+                filter_pattern.clone()
+            } else {
+                format!("(?i){}", filter_pattern)
+            };
+            regex::Regex::new(&pat).ok()
+        } else {
+            None
+        };
+        
+        self.logs.iter().filter(move |entry| {
+            let level_ok = if let Some(ref level) = self.filter_level {
                 self.level_includes(&entry.level, level)
             } else {
                 true
+            };
+            
+            if !level_ok {
+                return false;
             }
+            
+            if !has_pattern {
+                return true;
+            }
+            
+            let matches = if filter_use_regex {
+                if let Some(ref re) = regex_pattern {
+                    re.is_match(&entry.message) || re.is_match(&entry.target)
+                } else {
+                    false
+                }
+            } else if filter_case_sensitive {
+                entry.message.contains(&filter_pattern) || entry.target.contains(&filter_pattern)
+            } else {
+                let pattern_lower = filter_pattern.to_lowercase();
+                entry.message.to_lowercase().contains(&pattern_lower)
+                    || entry.target.to_lowercase().contains(&pattern_lower)
+            };
+            
+            if filter_inverted { !matches } else { matches }
         })
     }
 
@@ -305,12 +391,20 @@ impl LogViewer {
     }
 
     fn render_themed(&self, frame: &mut Frame, area: Rect, focused: bool, theme: &Theme) {
-        let (log_area, search_area) = if self.search_state.is_active() {
+        let bar_height = if self.search_state.is_active() {
+            SearchBar::height()
+        } else if self.filter_state.is_active() {
+            FilterBar::height()
+        } else {
+            0
+        };
+
+        let (log_area, bar_area) = if bar_height > 0 {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(3),
-                    Constraint::Length(SearchBar::height()),
+                    Constraint::Length(bar_height),
                 ])
                 .split(area);
             (chunks[0], Some(chunks[1]))
@@ -323,11 +417,19 @@ impl LogViewer {
 
         let auto_scroll_indicator = if self.auto_scroll { "⏬" } else { "⏸" };
         let search_indicator = if self.search_state.is_active() { " 󰍉" } else { "" };
+        let filter_indicator = if self.has_active_filter() {
+            format!(" 󰈶:{}", self.filter_state.pattern())
+        } else if self.filter_state.is_active() {
+            " 󰈶".to_string()
+        } else {
+            String::new()
+        };
         let title = format!(
-            " Logs ({}) {}{} ",
+            " Logs ({}) {}{}{} ",
             self.filtered_entries().count(),
             auto_scroll_indicator,
-            search_indicator
+            search_indicator,
+            filter_indicator
         );
 
         let block = Block::default()
@@ -346,9 +448,14 @@ impl LogViewer {
             .block(block);
             frame.render_widget(msg, log_area);
             
-            if let Some(search_rect) = search_area {
-                let search_bar = SearchBar::new(&self.search_state, theme);
-                search_bar.render(frame, search_rect);
+            if let Some(rect) = bar_area {
+                if self.search_state.is_active() {
+                    let search_bar = SearchBar::new(&self.search_state, theme);
+                    search_bar.render(frame, rect);
+                } else if self.filter_state.is_active() {
+                    let filter_bar = FilterBar::new(&self.filter_state, theme);
+                    filter_bar.render(frame, rect);
+                }
             }
             return;
         }
@@ -414,9 +521,14 @@ impl LogViewer {
 
         frame.render_widget(paragraph, log_area);
 
-        if let Some(search_rect) = search_area {
-            let search_bar = SearchBar::new(&self.search_state, theme);
-            search_bar.render(frame, search_rect);
+        if let Some(rect) = bar_area {
+            if self.search_state.is_active() {
+                let search_bar = SearchBar::new(&self.search_state, theme);
+                search_bar.render(frame, rect);
+            } else if self.filter_state.is_active() {
+                let filter_bar = FilterBar::new(&self.filter_state, theme);
+                filter_bar.render(frame, rect);
+            }
         }
     }
 
@@ -437,6 +549,23 @@ impl LogViewer {
                     return None;
                 }
                 SearchAction::None => return None,
+            }
+        }
+
+        if self.filter_state.is_active() {
+            match self.filter_state.handle_key(key) {
+                FilterAction::Close => {
+                    self.close_filter();
+                    return Some(Action::LogViewerFilterClose);
+                }
+                FilterAction::Apply => {
+                    return Some(Action::LogViewerFilterApply);
+                }
+                FilterAction::Refresh => {
+                    self.scroll_offset = 0;
+                    return None;
+                }
+                FilterAction::None => return None,
             }
         }
 
@@ -492,6 +621,14 @@ impl LogViewer {
             KeyCode::Char('c') => {
                 self.clear();
                 Some(Action::LogViewerClear)
+            }
+            KeyCode::Char('f') => {
+                self.start_filter();
+                Some(Action::LogViewerFilterStart)
+            }
+            KeyCode::Char('F') => {
+                self.clear_filter();
+                Some(Action::LogViewerFilterClear)
             }
             KeyCode::Esc | KeyCode::Char('q') => Some(Action::LogViewerHide),
             _ => None,
@@ -558,6 +695,32 @@ impl Component for LogViewer {
                 self.search_state.toggle_case_sensitivity();
                 self.update_search();
             }
+            Action::LogViewerFilterStart => self.start_filter(),
+            Action::LogViewerFilterClose => self.close_filter(),
+            Action::LogViewerFilterApply => {
+                self.filter_state.activate();
+                self.filter_state.handle_key(crossterm::event::KeyEvent::new(
+                    KeyCode::Enter,
+                    KeyModifiers::NONE,
+                ));
+            }
+            Action::LogViewerFilterPattern(pattern) => {
+                self.filter_state.set_pattern(pattern.clone());
+                self.scroll_offset = 0;
+            }
+            Action::LogViewerFilterToggleCase => {
+                self.filter_state.toggle_case_sensitivity();
+                self.scroll_offset = 0;
+            }
+            Action::LogViewerFilterToggleRegex => {
+                self.filter_state.toggle_regex();
+                self.scroll_offset = 0;
+            }
+            Action::LogViewerFilterToggleInvert => {
+                self.filter_state.toggle_inverted();
+                self.scroll_offset = 0;
+            }
+            Action::LogViewerFilterClear => self.clear_filter(),
             _ => {}
         }
     }
@@ -673,5 +836,89 @@ mod tests {
         
         viewer.set_filter_level(None);
         assert_eq!(viewer.filtered_entries().count(), 4);
+    }
+
+    #[test]
+    fn test_text_filter_basic() {
+        let mut viewer = LogViewer::new();
+        viewer.push_info("test", "Hello world");
+        viewer.push_info("test", "Error occurred");
+        viewer.push_info("test", "Another error here");
+        viewer.push_info("test", "Normal message");
+        
+        assert_eq!(viewer.filtered_entries().count(), 4);
+        
+        viewer.filter_state.set_pattern("error".to_string());
+        assert_eq!(viewer.filtered_entries().count(), 2);
+        
+        viewer.filter_state.set_pattern("Hello".to_string());
+        assert_eq!(viewer.filtered_entries().count(), 1);
+        
+        viewer.clear_filter();
+        assert_eq!(viewer.filtered_entries().count(), 4);
+    }
+
+    #[test]
+    fn test_text_filter_case_sensitive() {
+        let mut viewer = LogViewer::new();
+        viewer.push_info("test", "Error message");
+        viewer.push_info("test", "error message");
+        viewer.push_info("test", "ERROR message");
+        
+        viewer.filter_state.set_pattern("Error".to_string());
+        assert_eq!(viewer.filtered_entries().count(), 3);
+        
+        viewer.filter_state.set_case_sensitive(true);
+        assert_eq!(viewer.filtered_entries().count(), 1);
+    }
+
+    #[test]
+    fn test_text_filter_regex() {
+        let mut viewer = LogViewer::new();
+        viewer.push_info("test", "Error 123");
+        viewer.push_info("test", "Warning 456");
+        viewer.push_info("test", "Info 789");
+        
+        viewer.filter_state.set_pattern(r"Error|Warning".to_string());
+        viewer.filter_state.set_regex(true);
+        assert_eq!(viewer.filtered_entries().count(), 2);
+    }
+
+    #[test]
+    fn test_text_filter_inverted() {
+        let mut viewer = LogViewer::new();
+        viewer.push_info("test", "Error message");
+        viewer.push_info("test", "Normal message");
+        viewer.push_info("test", "Another normal");
+        
+        viewer.filter_state.set_pattern("Error".to_string());
+        assert_eq!(viewer.filtered_entries().count(), 1);
+        
+        viewer.filter_state.set_inverted(true);
+        assert_eq!(viewer.filtered_entries().count(), 2);
+    }
+
+    #[test]
+    fn test_filter_activate_deactivate() {
+        let mut viewer = LogViewer::new();
+        assert!(!viewer.is_filter_active());
+        
+        viewer.start_filter();
+        assert!(viewer.is_filter_active());
+        
+        viewer.close_filter();
+        assert!(!viewer.is_filter_active());
+    }
+
+    #[test]
+    fn test_has_active_filter() {
+        let mut viewer = LogViewer::new();
+        assert!(!viewer.has_active_filter());
+        
+        viewer.filter_state.set_pattern("test".to_string());
+        assert!(viewer.has_active_filter());
+        
+        viewer.clear_filter();
+        assert!(!viewer.has_active_filter());
     }
 }
