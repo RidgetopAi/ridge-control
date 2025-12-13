@@ -306,8 +306,8 @@ impl CommandPalette {
         }
 
         // Calculate dialog size (centered, 60% width, 50% height)
-        let dialog_width = (area.width * 60 / 100).max(50).min(100);
-        let dialog_height = (area.height * 50 / 100).max(10).min(30);
+        let dialog_width = (area.width * 60 / 100).clamp(50, 100);
+        let dialog_height = (area.height * 50 / 100).clamp(10, 30);
 
         let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;
         let dialog_y = (area.height.saturating_sub(dialog_height)) / 2;

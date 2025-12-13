@@ -136,7 +136,7 @@ impl GeminiProvider {
             generation_config["temperature"] = json!(temp);
         }
 
-        if generation_config.as_object().map_or(false, |o| !o.is_empty()) {
+        if generation_config.as_object().is_some_and(|o| !o.is_empty()) {
             body["generationConfig"] = generation_config;
         }
 
@@ -317,18 +317,18 @@ async fn parse_stream(
 fn extract_json_object(buffer: &mut String) -> Option<String> {
     let trimmed = buffer.trim_start();
 
-    if trimmed.starts_with('[') {
-        *buffer = trimmed[1..].to_string();
+    if let Some(stripped) = trimmed.strip_prefix('[') {
+        *buffer = stripped.to_string();
         return extract_json_object(buffer);
     }
 
-    if trimmed.starts_with(',') {
-        *buffer = trimmed[1..].to_string();
+    if let Some(stripped) = trimmed.strip_prefix(',') {
+        *buffer = stripped.to_string();
         return extract_json_object(buffer);
     }
 
-    if trimmed.starts_with(']') {
-        *buffer = trimmed[1..].to_string();
+    if let Some(stripped) = trimmed.strip_prefix(']') {
+        *buffer = stripped.to_string();
         return None;
     }
 

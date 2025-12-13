@@ -67,7 +67,7 @@ impl ConfirmDialog {
         };
         
         // Calculate dialog size (centered, 60% width, adaptive height)
-        let dialog_width = (area.width * 60 / 100).max(40).min(80);
+        let dialog_width = (area.width * 60 / 100).clamp(40, 80);
         let dialog_height = 12;
         
         let dialog_x = (area.width.saturating_sub(dialog_width)) / 2;

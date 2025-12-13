@@ -318,8 +318,8 @@ impl ToolExecutor {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         
         for pattern in &policy.allowed_paths {
-            let expanded = if pattern.starts_with("~/") {
-                home_dir.join(&pattern[2..])
+            let expanded = if let Some(stripped) = pattern.strip_prefix("~/") {
+                home_dir.join(stripped)
             } else {
                 PathBuf::from(pattern)
             };
@@ -537,8 +537,8 @@ impl ToolExecutor {
     fn resolve_path(&self, path: &str) -> PathBuf {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         
-        if path.starts_with("~/") {
-            home_dir.join(&path[2..])
+        if let Some(stripped) = path.strip_prefix("~/") {
+            home_dir.join(stripped)
         } else if path.starts_with('/') {
             PathBuf::from(path)
         } else {

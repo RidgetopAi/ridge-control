@@ -254,6 +254,7 @@ impl ConversationViewer {
     /// Render conversation with messages and current streaming buffers
     /// TRC-017: Now accepts separate thinking_buffer for extended thinking display
     /// TRC-021: Added search support
+    #[allow(clippy::too_many_arguments)] // Parameters are semantically distinct
     pub fn render_conversation(
         &mut self,
         frame: &mut Frame,
