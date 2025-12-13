@@ -213,11 +213,7 @@ impl<'a> TabBar<'a> {
 
         // Index indicator (for keyboard shortcuts Alt+1 through Alt+9)
         if self.show_indices && index < 9 {
-            let idx_style = if is_active {
-                base_style.add_modifier(Modifier::DIM)
-            } else {
-                base_style.add_modifier(Modifier::DIM)
-            };
+            let idx_style = base_style.add_modifier(Modifier::DIM);
             spans.push(Span::styled(format!("{}:", index + 1), idx_style));
         }
 
@@ -269,7 +265,7 @@ impl<'a> TabBar<'a> {
 
         for (index, tab) in self.tabs.iter().enumerate() {
             // Calculate width of this tab
-            let icon_width = if tab.is_main() { 2 } else { 2 };
+            let icon_width = 2;
             let index_width = if self.show_indices && index < 9 { 2 } else { 0 };
             let name_width = tab.name().chars().count();
             let activity_width = if tab.has_activity() && index != self.active_index { 2 } else { 0 };

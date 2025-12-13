@@ -104,7 +104,7 @@ impl ConnectionHealth {
 
     /// Calculate backoff delay with exponential backoff and jitter
     pub fn backoff_delay(&self, base_delay_ms: u64) -> Duration {
-        let attempt = self.reconnect_attempt.min(10) as u32;
+        let attempt = self.reconnect_attempt.min(10);
         let exponential_delay = base_delay_ms * (2_u64.pow(attempt));
         let max_delay = 60_000; // Cap at 60 seconds
         let delay = exponential_delay.min(max_delay);
