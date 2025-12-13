@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::net::UnixStream;
+use tokio::net::{TcpStream, UnixStream};
 use tokio::sync::mpsc;
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
@@ -308,6 +308,11 @@ impl StreamManager {
                         Self::unix_socket_connect(definition, event_tx).await;
                     });
                 }
+                StreamProtocol::Tcp => {
+                    tokio::spawn(async move {
+                        Self::tcp_connect(definition, event_tx).await;
+                    });
+                }
                 _ => {
                     let _ = event_tx.send(StreamEvent::Error(
                         id.to_string(),
@@ -469,12 +474,58 @@ impl StreamManager {
         }
     }
 
+    async fn tcp_connect(definition: StreamDefinition, event_tx: mpsc::UnboundedSender<StreamEvent>) {
+        let id = definition.id.clone();
+        let addr = &definition.url;
+
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                let _ = event_tx.send(StreamEvent::StateChanged(id.clone(), ConnectionState::Connected));
+                let _ = event_tx.send(StreamEvent::Connected(id.clone()));
+
+                let (read_half, _write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut line = String::new();
+
+                loop {
+                    match reader.read_line(&mut line).await {
+                        Ok(0) => {
+                            let _ = event_tx.send(StreamEvent::Disconnected(
+                                id.clone(),
+                                Some("TCP connection closed (EOF)".to_string()),
+                            ));
+                            break;
+                        }
+                        Ok(_) => {
+                            let data = std::mem::take(&mut line);
+                            let trimmed = data.trim_end_matches('\n').to_string();
+                            if !trimmed.is_empty() {
+                                let _ = event_tx.send(StreamEvent::Data(id.clone(), StreamData::Text(trimmed)));
+                            }
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(StreamEvent::Error(id.clone(), e.to_string()));
+                            break;
+                        }
+                    }
+                }
+
+                let _ = event_tx.send(StreamEvent::StateChanged(id, ConnectionState::Disconnected));
+            }
+            Err(e) => {
+                let _ = event_tx.send(StreamEvent::StateChanged(id.clone(), ConnectionState::Failed));
+                let _ = event_tx.send(StreamEvent::Error(id, e.to_string()));
+            }
+        }
+    }
+
     fn spawn_reconnect(protocol: StreamProtocol, definition: StreamDefinition, event_tx: mpsc::UnboundedSender<StreamEvent>, delay: Duration) {
         tokio::spawn(async move {
             tokio::time::sleep(delay).await;
             match protocol {
                 StreamProtocol::WebSocket => Self::websocket_connect(definition, event_tx).await,
                 StreamProtocol::Unix => Self::unix_socket_connect(definition, event_tx).await,
+                StreamProtocol::Tcp => Self::tcp_connect(definition, event_tx).await,
                 _ => {}
             }
         });
@@ -696,5 +747,132 @@ mod tests {
         
         let relative_path = PathBuf::from("./local.sock");
         assert!(relative_path.to_str().unwrap().contains("local.sock"));
+    }
+
+    #[test]
+    fn test_stream_client_tcp_socket() {
+        let def = StreamDefinition {
+            id: "tcp-test".to_string(),
+            name: "TCP Socket Test".to_string(),
+            protocol: StreamProtocol::Tcp,
+            url: "127.0.0.1:9000".to_string(),
+            auto_connect: false,
+            reconnect: true,
+            reconnect_delay_ms: 1000,
+            headers: Default::default(),
+        };
+        
+        let client = StreamClient::new(def);
+        assert_eq!(client.id(), "tcp-test");
+        assert_eq!(client.name(), "TCP Socket Test");
+        assert_eq!(client.protocol(), StreamProtocol::Tcp);
+        assert_eq!(client.url(), "127.0.0.1:9000");
+        assert!(matches!(client.state(), ConnectionState::Disconnected));
+    }
+
+    #[test]
+    fn test_stream_manager_load_tcp_streams() {
+        use crate::streams::config::StreamsConfig;
+        
+        let mut manager = StreamManager::new();
+        
+        let config = StreamsConfig {
+            streams: vec![
+                StreamDefinition {
+                    id: "ws-stream".to_string(),
+                    name: "WebSocket".to_string(),
+                    protocol: StreamProtocol::WebSocket,
+                    url: "wss://example.com".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 1000,
+                    headers: Default::default(),
+                },
+                StreamDefinition {
+                    id: "tcp-stream".to_string(),
+                    name: "TCP Socket".to_string(),
+                    protocol: StreamProtocol::Tcp,
+                    url: "192.168.1.100:8080".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 3000,
+                    headers: Default::default(),
+                },
+            ],
+        };
+        
+        manager.load_streams(&config);
+        
+        assert_eq!(manager.clients().len(), 2);
+        
+        let ws_client = manager.get_client("ws-stream").unwrap();
+        assert_eq!(ws_client.protocol(), StreamProtocol::WebSocket);
+        
+        let tcp_client = manager.get_client("tcp-stream").unwrap();
+        assert_eq!(tcp_client.protocol(), StreamProtocol::Tcp);
+        assert_eq!(tcp_client.url(), "192.168.1.100:8080");
+        assert_eq!(tcp_client.reconnect_delay_ms(), 3000);
+    }
+
+    #[test]
+    fn test_tcp_address_formats() {
+        let ipv4_port = "127.0.0.1:9000";
+        assert!(ipv4_port.contains(':'));
+        assert!(ipv4_port.split(':').count() == 2);
+        
+        let hostname_port = "localhost:8080";
+        assert!(hostname_port.split(':').count() == 2);
+        
+        let ipv6_port = "[::1]:9000";
+        assert!(ipv6_port.starts_with('['));
+    }
+
+    #[test]
+    fn test_stream_manager_load_mixed_protocols() {
+        use crate::streams::config::StreamsConfig;
+        
+        let mut manager = StreamManager::new();
+        
+        let config = StreamsConfig {
+            streams: vec![
+                StreamDefinition {
+                    id: "ws".to_string(),
+                    name: "WS".to_string(),
+                    protocol: StreamProtocol::WebSocket,
+                    url: "wss://example.com".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 1000,
+                    headers: Default::default(),
+                },
+                StreamDefinition {
+                    id: "unix".to_string(),
+                    name: "Unix".to_string(),
+                    protocol: StreamProtocol::Unix,
+                    url: "/tmp/app.sock".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 1000,
+                    headers: Default::default(),
+                },
+                StreamDefinition {
+                    id: "tcp".to_string(),
+                    name: "TCP".to_string(),
+                    protocol: StreamProtocol::Tcp,
+                    url: "10.0.0.1:5000".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 1000,
+                    headers: Default::default(),
+                },
+            ],
+        };
+        
+        manager.load_streams(&config);
+        
+        assert_eq!(manager.clients().len(), 3);
+        assert_eq!(manager.get_client("ws").unwrap().protocol(), StreamProtocol::WebSocket);
+        assert_eq!(manager.get_client("unix").unwrap().protocol(), StreamProtocol::Unix);
+        assert_eq!(manager.get_client("tcp").unwrap().protocol(), StreamProtocol::Tcp);
     }
 }

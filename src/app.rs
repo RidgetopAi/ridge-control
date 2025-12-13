@@ -1480,16 +1480,8 @@ impl App {
                 }
             }
             Action::StreamRefresh => {
-                let config = StreamsConfig::load();
-                self.stream_manager.load_streams(&config);
-                let count = self.stream_manager.clients().len();
-                self.menu.set_stream_count(count);
-                // Reset selected_stream_index if out of bounds or no streams
-                if count == 0 {
-                    self.selected_stream_index = None;
-                } else if self.selected_stream_index.map_or(true, |idx| idx >= count) {
-                    self.selected_stream_index = Some(0);
-                }
+                // TRC-028: Use centralized reload method for consistency
+                self.reload_streams_from_config();
             }
             Action::StreamRetry(idx) => {
                 // TRC-025: Retry connection for failed stream, resetting health
@@ -1657,6 +1649,11 @@ impl App {
             Action::ConfigChanged(path) => {
                 tracing::info!("Config file changed: {}", path.display());
                 self.config_manager.reload_file(&path);
+                
+                // TRC-028: Handle streams.toml changes - dynamically regenerate menu from config
+                if path.file_name().and_then(|n| n.to_str()) == Some("streams.toml") {
+                    self.reload_streams_from_config();
+                }
             }
             Action::ConfigReload => {
                 tracing::info!("Reloading all configuration files");
@@ -2087,6 +2084,41 @@ impl App {
     
     pub fn config(&self) -> &ConfigManager {
         &self.config_manager
+    }
+    
+    /// TRC-028: Reload streams from configuration file and update menu
+    /// This is called when streams.toml changes (hot-reload) or when StreamRefresh is triggered
+    fn reload_streams_from_config(&mut self) {
+        let config = StreamsConfig::load();
+        let old_count = self.stream_manager.clients().len();
+        
+        self.stream_manager.load_streams(&config);
+        let new_count = self.stream_manager.clients().len();
+        
+        // Update menu stream count
+        self.menu.set_stream_count(new_count);
+        
+        // Reset selected_stream_index if out of bounds or no streams
+        if new_count == 0 {
+            self.selected_stream_index = None;
+        } else if self.selected_stream_index.map_or(true, |idx| idx >= new_count) {
+            self.selected_stream_index = Some(0);
+        }
+        
+        // Notify user of the reload
+        if old_count != new_count {
+            self.notification_manager.info(format!(
+                "Streams reloaded: {} → {} configured",
+                old_count, new_count
+            ));
+        } else {
+            self.notification_manager.info(format!(
+                "Streams reloaded: {} configured",
+                new_count
+            ));
+        }
+        
+        tracing::info!("TRC-028: Reloaded {} streams from config", new_count);
     }
     
     /// TRC-020: Build context menu items based on target
