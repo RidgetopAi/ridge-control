@@ -234,39 +234,6 @@ impl ProcessMonitor {
         }
     }
 
-    fn header_spans(&self) -> Vec<Span<'static>> {
-        let cols = [
-            (SortColumn::Pid, "PID"),
-            (SortColumn::Name, "NAME"),
-            (SortColumn::Cpu, "CPU%"),
-            (SortColumn::Memory, "MEM"),
-            (SortColumn::State, "STATE"),
-        ];
-
-        cols.iter()
-            .map(|(col, name)| {
-                let indicator = if *col == self.sort_column {
-                    match self.sort_order {
-                        SortOrder::Ascending => " ▲",
-                        SortOrder::Descending => " ▼",
-                    }
-                } else {
-                    ""
-                };
-
-                let style = if *col == self.sort_column {
-                    Style::default()
-                        .fg(Color::Yellow)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::White)
-                };
-
-                Span::styled(format!("{}{}", name, indicator), style)
-            })
-            .collect()
-    }
-
     fn header_spans_themed(&self, theme: &Theme) -> Vec<Span<'static>> {
         let cols = [
             (SortColumn::Pid, "PID"),

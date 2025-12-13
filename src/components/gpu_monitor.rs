@@ -1,3 +1,6 @@
+// TRC-019: GPU monitor - some fields for future display
+#![allow(dead_code)]
+
 use std::process::Command;
 use std::time::{Duration, Instant};
 

@@ -1,3 +1,6 @@
+// TRC-016: Tool call widget - some methods for future use
+#![allow(dead_code)]
+
 use ratatui::{
     style::{Color, Modifier, Style},
     text::{Line, Span},

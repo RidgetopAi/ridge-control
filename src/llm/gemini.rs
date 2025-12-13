@@ -1,3 +1,6 @@
+// TRC-007: Google Gemini provider - fully implemented but not yet used in main app
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use reqwest::Client;
@@ -364,7 +367,7 @@ fn extract_json_object(buffer: &mut String) -> Option<String> {
 
 fn parse_json_chunk(
     json_str: &str,
-    model: &str,
+    _model: &str,
     sent_start: &mut bool,
     block_index: &mut usize,
     in_function_call: &mut bool,

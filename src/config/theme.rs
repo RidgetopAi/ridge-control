@@ -1,3 +1,6 @@
+// Theme system - some presets for future use
+#![allow(dead_code)]
+
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, Serialize};
 

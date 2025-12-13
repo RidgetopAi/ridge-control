@@ -1,9 +1,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::time::Duration;
-use std::thread;
 
-use notify::{RecommendedWatcher, RecursiveMode, Watcher, Config as NotifyConfig};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use crate::error::{RidgeError, Result};
 

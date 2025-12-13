@@ -1,3 +1,6 @@
+// TRC-012: Session persistence - fully implemented but not yet triggered
+#![allow(dead_code)]
+
 //! Session Persistence for Ridge-Control
 //!
 //! Implements TRC-012: Save/restore tabs on startup

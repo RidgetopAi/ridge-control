@@ -1,3 +1,6 @@
+// Tab bar - some types for future theming options
+#![allow(dead_code)]
+
 //! Tab Bar Widget
 //!
 //! Renders the tab bar at the top of the screen with:

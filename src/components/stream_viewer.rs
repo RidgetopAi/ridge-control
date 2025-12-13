@@ -1,3 +1,6 @@
+// Stream viewer - some fields for future state tracking
+#![allow(dead_code)]
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},

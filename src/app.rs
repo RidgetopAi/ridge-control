@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -59,6 +61,7 @@ pub struct App {
     /// Current content block type being streamed (TRC-017)
     current_block_type: Option<BlockType>,
     /// Whether to show thinking blocks collapsed by default (TRC-017)
+    #[allow(dead_code)]
     collapse_thinking: bool,
     clipboard: Option<Clipboard>,
     last_tick: Instant,
@@ -291,15 +294,6 @@ impl App {
         self.tool_executor.set_dangerous_mode(enabled);
     }
     
-    /// Check if dangerous mode is enabled (TRC-018)
-    pub fn is_dangerous_mode(&self) -> bool {
-        self.dangerous_mode
-    }
-
-    pub fn configure_llm(&mut self, api_key: impl Into<String>) {
-        self.llm_manager.register_anthropic(api_key);
-    }
-
     fn calculate_terminal_size(area: Rect) -> (usize, usize) {
         let terminal_width = (area.width * 2 / 3).saturating_sub(2);
         let terminal_height = area.height.saturating_sub(2);
@@ -1312,7 +1306,6 @@ impl App {
         
         // Main layout: 67% left, 33% right
         let left_width = (content_area.width * 67) / 100;
-        let right_x = left_width;
         
         // Right side: 50% top (process monitor), 50% bottom (menu)
         let right_top_height = content_height / 2;
@@ -2105,11 +2098,6 @@ impl App {
         &self.thinking_buffer
     }
     
-    /// Check if thinking blocks should be collapsed (TRC-017)
-    pub fn is_thinking_collapsed(&self) -> bool {
-        self.collapse_thinking
-    }
-    
     /// Toggle thinking block collapse state (TRC-017)
     pub fn toggle_thinking_collapse(&mut self) {
         self.collapse_thinking = !self.collapse_thinking;
@@ -2159,7 +2147,6 @@ impl App {
         match target {
             ContextMenuTarget::Tab(tab_index) => {
                 let tab_count = self.tab_manager.count();
-                let is_active = *tab_index == self.tab_manager.active_index();
                 
                 let mut items = vec![
                     ContextMenuItem::new("New Tab", Action::TabCreate)
@@ -2255,7 +2242,7 @@ impl App {
                     .map(|s| s.terminal().has_selection())
                     .unwrap_or(false);
                 
-                let mut items = vec![
+                vec![
                     if has_selection {
                         ContextMenuItem::new("Copy", Action::Copy).with_shortcut("Ctrl+C")
                     } else {
@@ -2266,9 +2253,7 @@ impl App {
                     ContextMenuItem::new("Clear Scrollback", Action::ScrollToTop),
                     ContextMenuItem::separator(),
                     ContextMenuItem::new("New Tab", Action::TabCreate).with_shortcut("Ctrl+T"),
-                ];
-                
-                items
+                ]
             }
             
             ContextMenuTarget::LogViewer => {

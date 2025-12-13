@@ -1,7 +1,10 @@
+// TRC-021/TRC-022: Search and filter - some methods for future use
+#![allow(dead_code)]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
     Frame,
@@ -623,6 +626,7 @@ pub fn highlight_matches_in_line(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ratatui::style::Color;
 
     #[test]
     fn test_search_state_new() {

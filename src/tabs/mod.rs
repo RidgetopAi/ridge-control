@@ -1,3 +1,6 @@
+// Tab manager - some methods for future tab features
+#![allow(dead_code)]
+
 //! Tab System for Ridge-Control
 //!
 //! Manages multiple terminal tabs with independent PTY sessions.
@@ -14,7 +17,7 @@ mod pty_session;
 mod tab_bar;
 
 pub use pty_session::PtySession;
-pub use tab_bar::{TabBar, TabBarStyle};
+pub use tab_bar::TabBar;
 
 use std::collections::HashMap;
 use std::time::Instant;

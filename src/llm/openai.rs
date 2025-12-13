@@ -1,3 +1,6 @@
+// TRC-006: OpenAI provider - fully implemented but not yet used in main app
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use reqwest::Client;
@@ -491,12 +494,9 @@ fn parse_sse_data(
     }
 
     // Check for usage in top-level (stream_options include_usage)
-    if let Some(usage_obj) = json["usage"].as_object() {
-        if !chunks.iter().any(|c| matches!(c, StreamChunk::Stop { .. })) {
-            // Don't emit usage separately if we already have a Stop chunk
-            // This is just final usage data from OpenAI
-        }
-    }
+    // Usage data is present but we don't currently use it separately
+    // since we already emit Stop chunks with the final message
+    let _has_usage = json["usage"].as_object().is_some();
 
     if chunks.is_empty() {
         None

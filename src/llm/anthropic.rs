@@ -1,3 +1,6 @@
+// Anthropic provider - some response types for non-streaming mode
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use reqwest::Client;

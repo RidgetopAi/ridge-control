@@ -1,3 +1,6 @@
+// Provider trait and types - some fields/methods for future use
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::Arc;

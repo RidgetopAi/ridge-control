@@ -1,3 +1,6 @@
+// LLM types - some variants are for provider compatibility, not all used yet
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};

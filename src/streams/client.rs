@@ -1,3 +1,6 @@
+// Stream client - some methods for future status tracking
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncBufReadExt, BufReader};

@@ -1,3 +1,6 @@
+// TRC-013/TRC-022: Log viewer with search/filter - some LogLevel variants not used yet
+#![allow(dead_code)]
+
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},

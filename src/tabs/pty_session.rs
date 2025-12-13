@@ -1,3 +1,6 @@
+// PTY session - some methods for future use
+#![allow(dead_code)]
+
 //! Per-Tab PTY Session Management
 //!
 //! Each tab gets its own isolated PTY session with independent:
@@ -15,7 +18,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use crate::components::terminal::TerminalWidget;
-use crate::error::{Result, RidgeError};
+use crate::error::Result;
 use crate::event::PtyEvent;
 use crate::pty::PtyHandle;
 use crate::tabs::TabId;

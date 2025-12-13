@@ -1,9 +1,12 @@
+// LLM Manager - some methods for future UI integration
+#![allow(dead_code)]
+
 use std::sync::Arc;
 
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::config::{KeyId, KeyStore, SecretString};
+use crate::config::{KeyId, KeyStore};
 
 use super::anthropic::AnthropicProvider;
 use super::gemini::GeminiProvider;

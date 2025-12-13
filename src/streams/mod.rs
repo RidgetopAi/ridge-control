@@ -1,5 +1,8 @@
+// Streams module - some types for future use
+#![allow(dead_code)]
+
 pub mod client;
 pub mod config;
 
-pub use client::{ConnectionHealth, StreamClient, StreamData, StreamEvent, StreamManager};
-pub use config::{ConnectionState, StreamDefinition, StreamProtocol, StreamsConfig};
+pub use client::{StreamClient, StreamData, StreamEvent, StreamManager};
+pub use config::{ConnectionState, StreamsConfig};

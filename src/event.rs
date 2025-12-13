@@ -1,3 +1,6 @@
+// Event types - scaffolding for async event system
+#![allow(dead_code)]
+
 use std::path::PathBuf;
 use crossterm::event::Event as CrosstermEvent;
 

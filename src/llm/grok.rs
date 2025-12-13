@@ -1,3 +1,6 @@
+// TRC-008: xAI Grok provider - fully implemented but not yet used in main app
+#![allow(dead_code)]
+
 use async_trait::async_trait;
 use futures::{Stream, StreamExt};
 use reqwest::Client;

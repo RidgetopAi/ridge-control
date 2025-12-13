@@ -1,8 +1,11 @@
+// Terminal widget - some methods for future scroll display features
+#![allow(dead_code)]
+
 use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::{Color, Modifier, Style},
+    style::Modifier,
     widgets::{Block, Borders, Widget},
     Frame,
 };

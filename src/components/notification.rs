@@ -1,8 +1,11 @@
+// TRC-023: Notification system - some convenience methods for future use
+#![allow(dead_code)]
+
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},

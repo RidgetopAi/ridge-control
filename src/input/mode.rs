@@ -1,3 +1,6 @@
+// Input modes - some variants for future mode types
+#![allow(dead_code)]
+
 /// Input mode state machine per RIDGE-CONTROL-MASTER.md Section 1.3
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum InputMode {

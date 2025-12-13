@@ -1,3 +1,6 @@
+// PTY module - some methods for future features
+#![allow(dead_code)]
+
 pub mod grid;
 
 use std::io::{self, Read, Write};

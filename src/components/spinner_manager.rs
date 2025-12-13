@@ -1,3 +1,6 @@
+// TRC-015: Spinner manager - some key variants for future use
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use ratatui::style::Color;

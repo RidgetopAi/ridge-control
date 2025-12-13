@@ -1,3 +1,6 @@
+// Tool execution - some types for future features
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;

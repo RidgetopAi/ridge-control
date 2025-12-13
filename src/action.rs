@@ -19,12 +19,15 @@ pub enum SortOrder {
     Descending,
 }
 
+// Many Action variants have handlers but no triggers yet - this is intentional
+// scaffolding per CONTRACT.md for features like LLM streaming, key management,
+// session persistence, and config hot-reload.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum Action {
     Quit,
     ForceQuit,
     Tick,
-    Render,
 
     EnterPtyMode,
     EnterNormalMode,
@@ -38,7 +41,6 @@ pub enum Action {
     PtyInput(Vec<u8>),
     PtyOutput(Vec<u8>),
     PtyResize { cols: u16, rows: u16 },
-    PtyExited(i32),
 
     ScrollUp(u16),
     ScrollDown(u16),
@@ -408,6 +410,7 @@ pub enum PaneBorder {
 
 /// Target type for context menus (TRC-020)
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ContextMenuTarget {
     /// Right-clicked on a tab (includes tab index)
     Tab(usize),

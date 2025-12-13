@@ -267,7 +267,7 @@ impl ConfigPanel {
             .enumerate()
             .skip(self.scroll_offset as usize)
             .take(self.visible_height as usize + 1)
-            .map(|(idx, line)| {
+            .map(|(_idx, line)| {
                 if line.is_header {
                     let is_selected = line.section_idx == Some(self.selected_section);
                     let expanded = line.section_idx.map(|i| self.expanded_sections[i]).unwrap_or(false);

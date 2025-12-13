@@ -1,8 +1,11 @@
+// Command palette - some methods reserved for dynamic command registration
+#![allow(dead_code)]
+
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use nucleo::{Config, Matcher, Utf32String};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
     Frame,

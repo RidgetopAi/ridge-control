@@ -1,3 +1,6 @@
+// CONTRACT.md 4.7: Helix-style keybindings - fully implemented but config loading not yet wired
+#![allow(dead_code)]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
