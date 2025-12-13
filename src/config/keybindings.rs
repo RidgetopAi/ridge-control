@@ -326,6 +326,35 @@ impl Default for KeybindingsConfig {
             "N".to_string(),
             ActionBinding { action: "notify_dismiss_all".to_string(), args: vec![] },
         );
+        // Pane resizing (TRC-024)
+        normal.bindings.insert(
+            "C-right".to_string(),
+            ActionBinding { action: "pane_resize_main_grow".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-left".to_string(),
+            ActionBinding { action: "pane_resize_main_shrink".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-up".to_string(),
+            ActionBinding { action: "pane_resize_right_grow".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-down".to_string(),
+            ActionBinding { action: "pane_resize_right_shrink".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "A-up".to_string(),
+            ActionBinding { action: "pane_resize_left_grow".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "A-down".to_string(),
+            ActionBinding { action: "pane_resize_left_shrink".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "C-0".to_string(),
+            ActionBinding { action: "pane_reset_layout".to_string(), args: vec![] },
+        );
         
         let mut pty_raw = ModeBindings::default();
         pty_raw.bindings.insert(
@@ -454,6 +483,14 @@ impl KeybindingsConfig {
             // Notification actions (TRC-023)
             "notify_dismiss" => Some(Action::NotifyDismiss),
             "notify_dismiss_all" => Some(Action::NotifyDismissAll),
+            // Pane resize actions (TRC-024)
+            "pane_resize_main_grow" => Some(Action::PaneResizeMainGrow),
+            "pane_resize_main_shrink" => Some(Action::PaneResizeMainShrink),
+            "pane_resize_right_grow" => Some(Action::PaneResizeRightGrow),
+            "pane_resize_right_shrink" => Some(Action::PaneResizeRightShrink),
+            "pane_resize_left_grow" => Some(Action::PaneResizeLeftGrow),
+            "pane_resize_left_shrink" => Some(Action::PaneResizeLeftShrink),
+            "pane_reset_layout" => Some(Action::PaneResetLayout),
             _ => None,
         }
     }

@@ -358,7 +358,40 @@ pub enum Action {
     /// Dismiss all notifications
     NotifyDismissAll,
 
+    // Pane resize actions (TRC-024)
+    /// Resize the main (left/right) split - grow left pane
+    PaneResizeMainGrow,
+    /// Resize the main (left/right) split - shrink left pane
+    PaneResizeMainShrink,
+    /// Resize the right (top/bottom) split - grow top pane
+    PaneResizeRightGrow,
+    /// Resize the right (top/bottom) split - shrink top pane
+    PaneResizeRightShrink,
+    /// Resize the left (terminal/conversation) split - grow top pane
+    PaneResizeLeftGrow,
+    /// Resize the left (terminal/conversation) split - shrink top pane
+    PaneResizeLeftShrink,
+    /// Reset all panes to default sizes
+    PaneResetLayout,
+    /// Start mouse drag on a border
+    PaneStartDrag(PaneBorder),
+    /// Continue mouse drag
+    PaneDrag { x: u16, y: u16 },
+    /// End mouse drag
+    PaneEndDrag,
+
     None,
+}
+
+/// Border types for pane resizing (TRC-024)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaneBorder {
+    /// Vertical border between left and right panes
+    MainVertical,
+    /// Horizontal border in right pane (between process monitor and menu)
+    RightHorizontal,
+    /// Horizontal border in left pane (between terminal and conversation)
+    LeftHorizontal,
 }
 
 /// Target type for context menus (TRC-020)

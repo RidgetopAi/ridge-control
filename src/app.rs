@@ -15,7 +15,7 @@ use ratatui::{
 };
 use tokio::sync::mpsc;
 
-use crate::action::{Action, ContextMenuTarget};
+use crate::action::{Action, ContextMenuTarget, PaneBorder};
 use crate::cli::Cli;
 use crate::components::command_palette::CommandPalette;
 use crate::components::config_panel::ConfigPanel;
@@ -25,6 +25,7 @@ use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::log_viewer::LogViewer;
 use crate::components::menu::Menu;
 use crate::components::notification::NotificationManager;
+use crate::components::pane_layout::{PaneLayout, DragState, ResizableBorder, ResizeDirection};
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::spinner_manager::{SpinnerManager, SpinnerKey};
 use crate::components::stream_viewer::StreamViewer;
@@ -107,6 +108,10 @@ pub struct App {
     context_menu: ContextMenu,
     // Notification system (TRC-023)
     notification_manager: NotificationManager,
+    // Pane layout for resizable splits (TRC-024)
+    pane_layout: PaneLayout,
+    drag_state: DragState,
+    content_area: Rect,
 }
 
 impl App {
@@ -236,6 +241,9 @@ impl App {
             dangerous_mode: false,
             context_menu: ContextMenu::new(),
             notification_manager: NotificationManager::new(),
+            pane_layout: PaneLayout::new(),
+            drag_state: DragState::default(),
+            content_area: Rect::default(),
         })
     }
 
@@ -742,16 +750,19 @@ impl App {
         // Pre-calculate tab bar area for mouse hit-testing (TRC-010)
         let term_size = self.terminal.size().unwrap_or_default();
         let term_rect = Rect::new(0, 0, term_size.width, term_size.height);
-        let computed_tab_bar_area = if show_tabs {
+        let show_status_bar_pre = show_tabs || self.dangerous_mode;
+        let (computed_tab_bar_area, computed_content_area) = if show_status_bar_pre {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Length(1), Constraint::Min(0)])
                 .split(term_rect);
-            chunks[0]
+            (chunks[0], chunks[1])
         } else {
-            Rect::default()
+            (Rect::default(), term_rect)
         };
         self.tab_bar_area = computed_tab_bar_area;
+        // TRC-024: Store content area for pane resize mouse hit-testing
+        self.content_area = computed_content_area;
 
         self.terminal
             .draw(|frame| {
@@ -780,15 +791,16 @@ impl App {
                     frame.render_widget(tab_bar, tab_bar_area);
                 }
 
+                // TRC-024: Store content area for mouse hit-testing
                 // Main layout: left (terminal or terminal+conversation) and right (process monitor + menu)
                 let main_chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints([Constraint::Percentage(67), Constraint::Percentage(33)])
+                    .constraints(self.pane_layout.main_constraints())
                     .split(content_area);
 
                 let right_chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                    .constraints(self.pane_layout.right_constraints())
                     .split(main_chunks[1]);
 
                 // Left area: split between terminal and conversation if conversation is visible
@@ -796,7 +808,7 @@ impl App {
                 if show_conversation {
                     let left_chunks = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+                        .constraints(self.pane_layout.left_constraints())
                         .split(main_chunks[0]);
 
                     if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
@@ -1135,6 +1147,30 @@ impl App {
                 }
                 // Click was in tab bar but not on a tab - consume event
                 return None;
+            }
+            
+            // TRC-024: Check for clicks on pane borders for resize
+            let show_conv = self.show_conversation || !self.llm_response_buffer.is_empty() || !self.thinking_buffer.is_empty();
+            if let Some(border) = self.pane_layout.hit_test_border(mouse.column, mouse.row, self.content_area, show_conv) {
+                let pan_border = match border {
+                    ResizableBorder::MainVertical => PaneBorder::MainVertical,
+                    ResizableBorder::RightHorizontal => PaneBorder::RightHorizontal,
+                    ResizableBorder::LeftHorizontal => PaneBorder::LeftHorizontal,
+                };
+                return Some(Action::PaneStartDrag(pan_border));
+            }
+        }
+        
+        // TRC-024: Handle drag events for pane resizing
+        if self.drag_state.is_dragging() {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    return Some(Action::PaneDrag { x: mouse.column, y: mouse.row });
+                }
+                MouseEventKind::Up(MouseButton::Left) => {
+                    return Some(Action::PaneEndDrag);
+                }
+                _ => {}
             }
         }
         
@@ -1920,6 +1956,45 @@ impl App {
             }
             Action::NotifyDismissAll => {
                 self.notification_manager.dismiss_all();
+            }
+            
+            // TRC-024: Pane resize actions
+            Action::PaneResizeMainGrow => {
+                self.pane_layout.resize_main(ResizeDirection::Grow);
+            }
+            Action::PaneResizeMainShrink => {
+                self.pane_layout.resize_main(ResizeDirection::Shrink);
+            }
+            Action::PaneResizeRightGrow => {
+                self.pane_layout.resize_right(ResizeDirection::Grow);
+            }
+            Action::PaneResizeRightShrink => {
+                self.pane_layout.resize_right(ResizeDirection::Shrink);
+            }
+            Action::PaneResizeLeftGrow => {
+                self.pane_layout.resize_left(ResizeDirection::Grow);
+            }
+            Action::PaneResizeLeftShrink => {
+                self.pane_layout.resize_left(ResizeDirection::Shrink);
+            }
+            Action::PaneResetLayout => {
+                self.pane_layout.reset_to_defaults();
+            }
+            Action::PaneStartDrag(border) => {
+                let rb = match border {
+                    PaneBorder::MainVertical => ResizableBorder::MainVertical,
+                    PaneBorder::RightHorizontal => ResizableBorder::RightHorizontal,
+                    PaneBorder::LeftHorizontal => ResizableBorder::LeftHorizontal,
+                };
+                self.drag_state.start(rb);
+            }
+            Action::PaneDrag { x, y } => {
+                if let Some(border) = self.drag_state.border() {
+                    self.pane_layout.handle_mouse_drag(x, y, self.content_area, border, self.show_conversation);
+                }
+            }
+            Action::PaneEndDrag => {
+                self.drag_state.stop();
             }
             
             _ => {}

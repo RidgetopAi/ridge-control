@@ -7,6 +7,7 @@ pub mod gpu_monitor;
 pub mod log_viewer;
 pub mod menu;
 pub mod notification;
+pub mod pane_layout;
 pub mod placeholder;
 pub mod process_monitor;
 pub mod search;
