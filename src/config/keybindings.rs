@@ -317,6 +317,15 @@ impl Default for KeybindingsConfig {
             "C-l".to_string(),
             ActionBinding { action: "conversation_toggle".to_string(), args: vec![] },
         );
+        // Notification management (TRC-023)
+        normal.bindings.insert(
+            "n".to_string(),
+            ActionBinding { action: "notify_dismiss".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "N".to_string(),
+            ActionBinding { action: "notify_dismiss_all".to_string(), args: vec![] },
+        );
         
         let mut pty_raw = ModeBindings::default();
         pty_raw.bindings.insert(
@@ -442,6 +451,9 @@ impl KeybindingsConfig {
             }
             "conversation_scroll_to_top" => Some(Action::ConversationScrollToTop),
             "conversation_scroll_to_bottom" => Some(Action::ConversationScrollToBottom),
+            // Notification actions (TRC-023)
+            "notify_dismiss" => Some(Action::NotifyDismiss),
+            "notify_dismiss_all" => Some(Action::NotifyDismissAll),
             _ => None,
         }
     }

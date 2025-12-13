@@ -336,6 +336,28 @@ pub enum Action {
     /// Clear filter in stream viewer
     StreamViewerFilterClear,
 
+    // Notification actions (TRC-023)
+    /// Show an info notification
+    NotifyInfo(String),
+    /// Show an info notification with message body
+    NotifyInfoMessage(String, String),
+    /// Show a success notification
+    NotifySuccess(String),
+    /// Show a success notification with message body
+    NotifySuccessMessage(String, String),
+    /// Show a warning notification
+    NotifyWarning(String),
+    /// Show a warning notification with message body
+    NotifyWarningMessage(String, String),
+    /// Show an error notification
+    NotifyError(String),
+    /// Show an error notification with message body
+    NotifyErrorMessage(String, String),
+    /// Dismiss the first (oldest) notification
+    NotifyDismiss,
+    /// Dismiss all notifications
+    NotifyDismissAll,
+
     None,
 }
 

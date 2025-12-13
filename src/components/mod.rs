@@ -6,6 +6,7 @@ pub mod conversation_viewer;
 pub mod gpu_monitor;
 pub mod log_viewer;
 pub mod menu;
+pub mod notification;
 pub mod placeholder;
 pub mod process_monitor;
 pub mod search;

@@ -24,6 +24,7 @@ use crate::components::context_menu::{ContextMenu, ContextMenuItem};
 use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::log_viewer::LogViewer;
 use crate::components::menu::Menu;
+use crate::components::notification::NotificationManager;
 use crate::components::process_monitor::ProcessMonitor;
 use crate::components::spinner_manager::{SpinnerManager, SpinnerKey};
 use crate::components::stream_viewer::StreamViewer;
@@ -104,6 +105,8 @@ pub struct App {
     dangerous_mode: bool,
     // Context menu (TRC-020)
     context_menu: ContextMenu,
+    // Notification system (TRC-023)
+    notification_manager: NotificationManager,
 }
 
 impl App {
@@ -232,6 +235,7 @@ impl App {
             spinner_manager: SpinnerManager::new(),
             dangerous_mode: false,
             context_menu: ContextMenu::new(),
+            notification_manager: NotificationManager::new(),
         })
     }
 
@@ -385,17 +389,29 @@ impl App {
                         self.tab_manager.set_tab_activity(tab_id, true);
                     }
                 }
-                PtyEvent::Exited(_code) => {
+                PtyEvent::Exited(code) => {
                     self.tab_manager.mark_pty_dead(tab_id);
                     // If main tab (id 0) dies, quit the app
                     if tab_id == 0 {
                         self.should_quit = true;
+                    } else {
+                        // TRC-023: Notify on background tab shell exit
+                        self.notification_manager.info_with_message(
+                            "Shell Exited",
+                            format!("Tab {} exited with code {}", tab_id, code)
+                        );
                     }
                 }
-                PtyEvent::Error(_) => {
+                PtyEvent::Error(err) => {
                     self.tab_manager.mark_pty_dead(tab_id);
                     if tab_id == 0 {
                         self.should_quit = true;
+                    } else {
+                        // TRC-023: Notify on background tab shell error
+                        self.notification_manager.error_with_message(
+                            "Shell Error",
+                            format!("Tab {}: {}", tab_id, err)
+                        );
                     }
                 }
             }
@@ -569,7 +585,9 @@ impl App {
                 self.thinking_buffer.clear();
                 self.current_block_type = None;
             }
-            LLMEvent::Error(_err) => {
+            LLMEvent::Error(err) => {
+                // TRC-023: Notify on LLM error
+                self.notification_manager.error_with_message("LLM Error", err.to_string());
                 self.llm_response_buffer.clear();
                 self.thinking_buffer.clear();
                 self.current_block_type = None;
@@ -656,24 +674,40 @@ impl App {
     fn handle_stream_event(&mut self, event: StreamEvent) {
         match event {
             StreamEvent::Connected(id) => {
+                let stream_name = self.stream_manager.get_client(&id)
+                    .map(|c| c.name().to_string())
+                    .unwrap_or_else(|| id.clone());
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(ConnectionState::Connected);
                 }
+                // TRC-023: Notify on stream connect
+                self.notification_manager.success_with_message("Stream Connected", stream_name);
             }
-            StreamEvent::Disconnected(id, _reason) => {
+            StreamEvent::Disconnected(id, reason) => {
+                let stream_name = self.stream_manager.get_client(&id)
+                    .map(|c| c.name().to_string())
+                    .unwrap_or_else(|| id.clone());
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(ConnectionState::Disconnected);
                 }
+                // TRC-023: Notify on stream disconnect
+                let msg = reason.as_deref().unwrap_or("Disconnected");
+                self.notification_manager.info_with_message("Stream Disconnected", format!("{}: {}", stream_name, msg));
             }
             StreamEvent::Data(id, data) => {
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.push_data(data);
                 }
             }
-            StreamEvent::Error(id, _msg) => {
+            StreamEvent::Error(id, msg) => {
+                let stream_name = self.stream_manager.get_client(&id)
+                    .map(|c| c.name().to_string())
+                    .unwrap_or_else(|| id.clone());
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
                     client.set_state(ConnectionState::Failed);
                 }
+                // TRC-023: Notify on stream error
+                self.notification_manager.error_with_message("Stream Error", format!("{}: {}", stream_name, msg));
             }
             StreamEvent::StateChanged(id, state) => {
                 if let Some(client) = self.stream_manager.get_client_mut(&id) {
@@ -689,6 +723,7 @@ impl App {
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
         let show_context_menu = self.context_menu.is_visible();
+        let has_notifications = self.notification_manager.has_notifications();
         let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
         let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty() || !self.thinking_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
@@ -923,6 +958,11 @@ impl App {
                 // TRC-020: Context menu overlay (highest z-index)
                 if show_context_menu {
                     self.context_menu.render(frame, size, &theme);
+                }
+                
+                // TRC-023: Notifications overlay (top-right, highest z-index)
+                if has_notifications {
+                    self.notification_manager.render(frame, size, &theme);
                 }
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
@@ -1421,6 +1461,8 @@ impl App {
                 self.menu.tick_spinners();
                 // Tick conversation viewer spinner for LLM streaming
                 self.conversation_viewer.tick_spinner();
+                // Tick notifications to expire old ones (TRC-023)
+                self.notification_manager.tick();
             }
             Action::LlmSendMessage(msg) => {
                 self.llm_manager.send_message(msg, None);
@@ -1486,8 +1528,19 @@ impl App {
             }
             Action::ToolResult(result) => {
                 // Update tool state in conversation viewer (TRC-016)
+                let tool_name = self.pending_tool.as_ref()
+                    .map(|p| p.tool_name().to_string())
+                    .unwrap_or_else(|| "Tool".to_string());
                 if let Some(ref pending) = self.pending_tool {
                     self.conversation_viewer.complete_tool(&pending.tool.id, result.clone());
+                }
+                
+                // TRC-023: Notify on tool completion
+                if result.is_error {
+                    self.notification_manager.warning_with_message(
+                        format!("{} failed", tool_name),
+                        "See conversation for details".to_string()
+                    );
                 }
                 
                 // Tool execution completed, send result back to LLM
@@ -1540,6 +1593,11 @@ impl App {
                 // Spawn PTY for the new tab
                 if let Err(e) = self.spawn_pty_for_tab(new_tab_id) {
                     tracing::error!("Failed to spawn PTY for new tab {}: {}", new_tab_id, e);
+                    // TRC-023: Notify on PTY spawn failure
+                    self.notification_manager.error_with_message("Tab Error", format!("Failed to spawn shell: {}", e));
+                } else {
+                    // TRC-023: Notify tab creation
+                    self.notification_manager.info(format!("Tab {} created", self.tab_manager.count()));
                 }
             }
             Action::TabClose => {
@@ -1830,6 +1888,38 @@ impl App {
             }
             Action::ContextMenuSelect => {
                 // Selection is handled internally by context_menu.handle_event()
+            }
+            
+            // TRC-023: Notification actions
+            Action::NotifyInfo(title) => {
+                self.notification_manager.info(title);
+            }
+            Action::NotifyInfoMessage(title, message) => {
+                self.notification_manager.info_with_message(title, message);
+            }
+            Action::NotifySuccess(title) => {
+                self.notification_manager.success(title);
+            }
+            Action::NotifySuccessMessage(title, message) => {
+                self.notification_manager.success_with_message(title, message);
+            }
+            Action::NotifyWarning(title) => {
+                self.notification_manager.warning(title);
+            }
+            Action::NotifyWarningMessage(title, message) => {
+                self.notification_manager.warning_with_message(title, message);
+            }
+            Action::NotifyError(title) => {
+                self.notification_manager.error(title);
+            }
+            Action::NotifyErrorMessage(title, message) => {
+                self.notification_manager.error_with_message(title, message);
+            }
+            Action::NotifyDismiss => {
+                self.notification_manager.dismiss_first();
+            }
+            Action::NotifyDismissAll => {
+                self.notification_manager.dismiss_all();
             }
             
             _ => {}
