@@ -1,4 +1,7 @@
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 use futures::{SinkExt, StreamExt};
 use tokio_tungstenite::{connect_async, tungstenite::Message as WsMessage};
@@ -300,6 +303,11 @@ impl StreamManager {
                         Self::websocket_connect(definition, event_tx).await;
                     });
                 }
+                StreamProtocol::Unix => {
+                    tokio::spawn(async move {
+                        Self::unix_socket_connect(definition, event_tx).await;
+                    });
+                }
                 _ => {
                     let _ = event_tx.send(StreamEvent::Error(
                         id.to_string(),
@@ -343,6 +351,7 @@ impl StreamManager {
             
             client.set_state(ConnectionState::Reconnecting { attempt });
             
+            let protocol = client.protocol();
             let definition = client.definition().clone();
             let event_tx = self.event_tx.clone();
             let stream_id = id.to_string();
@@ -350,10 +359,7 @@ impl StreamManager {
             // Notify about reconnect attempt
             let _ = event_tx.send(StreamEvent::ReconnectAttempt(stream_id.clone(), attempt));
 
-            tokio::spawn(async move {
-                tokio::time::sleep(delay).await;
-                Self::websocket_connect(definition, event_tx).await;
-            });
+            Self::spawn_reconnect(protocol, definition, event_tx, delay);
         }
     }
 
@@ -416,6 +422,62 @@ impl StreamManager {
                 let _ = event_tx.send(StreamEvent::Error(id, e.to_string()));
             }
         }
+    }
+
+    async fn unix_socket_connect(definition: StreamDefinition, event_tx: mpsc::UnboundedSender<StreamEvent>) {
+        let id = definition.id.clone();
+        let socket_path = PathBuf::from(&definition.url);
+
+        match UnixStream::connect(&socket_path).await {
+            Ok(stream) => {
+                let _ = event_tx.send(StreamEvent::StateChanged(id.clone(), ConnectionState::Connected));
+                let _ = event_tx.send(StreamEvent::Connected(id.clone()));
+
+                let (read_half, _write_half) = stream.into_split();
+                let mut reader = BufReader::new(read_half);
+                let mut line = String::new();
+
+                loop {
+                    match reader.read_line(&mut line).await {
+                        Ok(0) => {
+                            let _ = event_tx.send(StreamEvent::Disconnected(
+                                id.clone(),
+                                Some("Socket closed (EOF)".to_string()),
+                            ));
+                            break;
+                        }
+                        Ok(_) => {
+                            let data = std::mem::take(&mut line);
+                            let trimmed = data.trim_end_matches('\n').to_string();
+                            if !trimmed.is_empty() {
+                                let _ = event_tx.send(StreamEvent::Data(id.clone(), StreamData::Text(trimmed)));
+                            }
+                        }
+                        Err(e) => {
+                            let _ = event_tx.send(StreamEvent::Error(id.clone(), e.to_string()));
+                            break;
+                        }
+                    }
+                }
+
+                let _ = event_tx.send(StreamEvent::StateChanged(id, ConnectionState::Disconnected));
+            }
+            Err(e) => {
+                let _ = event_tx.send(StreamEvent::StateChanged(id.clone(), ConnectionState::Failed));
+                let _ = event_tx.send(StreamEvent::Error(id, e.to_string()));
+            }
+        }
+    }
+
+    fn spawn_reconnect(protocol: StreamProtocol, definition: StreamDefinition, event_tx: mpsc::UnboundedSender<StreamEvent>, delay: Duration) {
+        tokio::spawn(async move {
+            tokio::time::sleep(delay).await;
+            match protocol {
+                StreamProtocol::WebSocket => Self::websocket_connect(definition, event_tx).await,
+                StreamProtocol::Unix => Self::unix_socket_connect(definition, event_tx).await,
+                _ => {}
+            }
+        });
     }
 }
 
@@ -559,5 +621,80 @@ mod tests {
         let manager = StreamManager::new();
         assert!(manager.clients.is_empty());
         assert!(manager.event_rx.is_some());
+    }
+
+    #[test]
+    fn test_stream_client_unix_socket() {
+        let def = StreamDefinition {
+            id: "unix-test".to_string(),
+            name: "Unix Socket Test".to_string(),
+            protocol: StreamProtocol::Unix,
+            url: "/tmp/test.sock".to_string(),
+            auto_connect: false,
+            reconnect: true,
+            reconnect_delay_ms: 1000,
+            headers: Default::default(),
+        };
+        
+        let client = StreamClient::new(def);
+        assert_eq!(client.id(), "unix-test");
+        assert_eq!(client.name(), "Unix Socket Test");
+        assert_eq!(client.protocol(), StreamProtocol::Unix);
+        assert_eq!(client.url(), "/tmp/test.sock");
+        assert!(matches!(client.state(), ConnectionState::Disconnected));
+    }
+
+    #[test]
+    fn test_stream_manager_load_unix_streams() {
+        use crate::streams::config::StreamsConfig;
+        
+        let mut manager = StreamManager::new();
+        
+        let config = StreamsConfig {
+            streams: vec![
+                StreamDefinition {
+                    id: "ws-stream".to_string(),
+                    name: "WebSocket".to_string(),
+                    protocol: StreamProtocol::WebSocket,
+                    url: "wss://example.com".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 1000,
+                    headers: Default::default(),
+                },
+                StreamDefinition {
+                    id: "unix-stream".to_string(),
+                    name: "Unix Socket".to_string(),
+                    protocol: StreamProtocol::Unix,
+                    url: "/var/run/app.sock".to_string(),
+                    auto_connect: false,
+                    reconnect: true,
+                    reconnect_delay_ms: 2000,
+                    headers: Default::default(),
+                },
+            ],
+        };
+        
+        manager.load_streams(&config);
+        
+        assert_eq!(manager.clients().len(), 2);
+        
+        let ws_client = manager.get_client("ws-stream").unwrap();
+        assert_eq!(ws_client.protocol(), StreamProtocol::WebSocket);
+        
+        let unix_client = manager.get_client("unix-stream").unwrap();
+        assert_eq!(unix_client.protocol(), StreamProtocol::Unix);
+        assert_eq!(unix_client.url(), "/var/run/app.sock");
+        assert_eq!(unix_client.reconnect_delay_ms(), 2000);
+    }
+
+    #[test]
+    fn test_unix_socket_path_parsing() {
+        let path_str = "/var/run/myapp/socket.sock";
+        let path = PathBuf::from(path_str);
+        assert_eq!(path.to_str().unwrap(), path_str);
+        
+        let relative_path = PathBuf::from("./local.sock");
+        assert!(relative_path.to_str().unwrap().contains("local.sock"));
     }
 }
