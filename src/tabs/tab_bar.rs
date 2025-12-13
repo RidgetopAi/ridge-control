@@ -118,6 +118,8 @@ pub struct TabBar<'a> {
     show_close_buttons: bool,
     /// TRC-018: Show dangerous mode warning indicator
     dangerous_mode: bool,
+    /// TRC-029: Inline rename buffer (if renaming active tab)
+    rename_buffer: Option<&'a str>,
 }
 
 impl<'a> TabBar<'a> {
@@ -130,6 +132,7 @@ impl<'a> TabBar<'a> {
             show_indices: true,
             show_close_buttons: true,
             dangerous_mode: false,
+            rename_buffer: manager.rename_buffer(),
         }
     }
 
@@ -142,6 +145,7 @@ impl<'a> TabBar<'a> {
             show_indices: true,
             show_close_buttons: true,
             dangerous_mode: false,
+            rename_buffer: manager.rename_buffer(),
         }
     }
 
@@ -154,6 +158,7 @@ impl<'a> TabBar<'a> {
             show_indices: true,
             show_close_buttons: true,
             dangerous_mode: false,
+            rename_buffer: None,
         }
     }
     
@@ -213,8 +218,21 @@ impl<'a> TabBar<'a> {
             spans.push(Span::styled(format!("{}:", index + 1), idx_style));
         }
 
-        // Tab name
-        spans.push(Span::styled(tab.name().to_string(), base_style));
+        // TRC-029: Show rename input for active tab when renaming
+        if is_active && self.rename_buffer.is_some() {
+            let rename_text = self.rename_buffer.unwrap_or("");
+            // Use a distinct style for the input field
+            let input_style = Style::default()
+                .fg(Color::Rgb(205, 214, 244))  // Bright text
+                .bg(Color::Rgb(49, 50, 68))     // Slightly different bg
+                .add_modifier(Modifier::UNDERLINED);
+            
+            // Show the rename buffer with cursor indicator
+            spans.push(Span::styled(format!("{}_", rename_text), input_style));
+        } else {
+            // Tab name (normal display)
+            spans.push(Span::styled(tab.name().to_string(), base_style));
+        }
 
         // Activity indicator for inactive tabs
         if !is_active && tab.has_activity() {
@@ -224,8 +242,8 @@ impl<'a> TabBar<'a> {
             ));
         }
 
-        // Close button (not for main tab)
-        if self.show_close_buttons && !tab.is_main() {
+        // Close button (not for main tab) - hide during rename
+        if self.show_close_buttons && !tab.is_main() && !(is_active && self.rename_buffer.is_some()) {
             let close_style = if is_active {
                 base_style.add_modifier(Modifier::DIM)
             } else {

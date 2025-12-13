@@ -101,6 +101,10 @@ pub struct TabManager {
     pty_sessions: HashMap<TabId, PtySession>,
     /// Terminal size for new PTY sessions
     terminal_size: (u16, u16),
+    /// TRC-029: Inline rename state - buffer for editing tab name
+    rename_buffer: Option<String>,
+    /// TRC-029: Original name before rename started (for cancel/revert)
+    rename_original: Option<String>,
 }
 
 impl std::fmt::Debug for TabManager {
@@ -130,6 +134,8 @@ impl TabManager {
             next_id: 1, // 0 is reserved for main tab
             pty_sessions: HashMap::new(),
             terminal_size: (80, 24), // Default, will be set properly on first resize
+            rename_buffer: None,
+            rename_original: None,
         }
     }
 
@@ -373,6 +379,61 @@ impl TabManager {
     }
 
     // ───────────────────────────────────────────────────────────────────────
+    // Inline Tab Rename Support (TRC-029)
+    // ───────────────────────────────────────────────────────────────────────
+
+    /// Start inline rename mode for the active tab
+    /// Initializes the rename buffer with the current tab name
+    pub fn start_rename(&mut self) {
+        let current_name = self.tabs[self.active_index].name().to_string();
+        self.rename_original = Some(current_name.clone());
+        self.rename_buffer = Some(current_name);
+    }
+
+    /// Check if inline rename mode is active
+    pub fn is_renaming(&self) -> bool {
+        self.rename_buffer.is_some()
+    }
+
+    /// Get the current rename buffer content (for display)
+    pub fn rename_buffer(&self) -> Option<&str> {
+        self.rename_buffer.as_deref()
+    }
+
+    /// Add a character to the rename buffer
+    pub fn rename_input(&mut self, c: char) {
+        if let Some(ref mut buffer) = self.rename_buffer {
+            buffer.push(c);
+        }
+    }
+
+    /// Delete the last character from the rename buffer
+    pub fn rename_backspace(&mut self) {
+        if let Some(ref mut buffer) = self.rename_buffer {
+            buffer.pop();
+        }
+    }
+
+    /// Confirm the rename - apply the buffer content as the new tab name
+    /// Returns true if rename was successful
+    pub fn confirm_rename(&mut self) -> bool {
+        if let Some(buffer) = self.rename_buffer.take() {
+            self.rename_original = None;
+            if !buffer.is_empty() {
+                self.tabs[self.active_index].set_name(buffer);
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Cancel the rename - revert to the original name
+    pub fn cancel_rename(&mut self) {
+        self.rename_buffer = None;
+        self.rename_original = None;
+    }
+
+    // ───────────────────────────────────────────────────────────────────────
     // Session Persistence Support (TRC-012)
     // ───────────────────────────────────────────────────────────────────────
 
@@ -521,5 +582,89 @@ mod tests {
         // Active index should still be 1 (Tab 1)
         assert_eq!(tm.active_index(), 1);
         assert_eq!(tm.count(), 3);
+    }
+
+    // TRC-029: Inline rename tests
+    #[test]
+    fn test_inline_rename_start() {
+        let mut tm = TabManager::new();
+        tm.create_tab("Original Name");
+
+        // Start rename mode
+        tm.start_rename();
+        assert!(tm.is_renaming());
+        assert_eq!(tm.rename_buffer(), Some("Original Name"));
+    }
+
+    #[test]
+    fn test_inline_rename_input() {
+        let mut tm = TabManager::new();
+        tm.create_tab("Tab");
+        tm.start_rename();
+
+        // Add characters
+        tm.rename_input('!');
+        tm.rename_input('!');
+        assert_eq!(tm.rename_buffer(), Some("Tab!!"));
+
+        // Backspace
+        tm.rename_backspace();
+        assert_eq!(tm.rename_buffer(), Some("Tab!"));
+    }
+
+    #[test]
+    fn test_inline_rename_confirm() {
+        let mut tm = TabManager::new();
+        tm.create_tab("Old Name");
+        tm.start_rename();
+
+        // Clear and type new name
+        for _ in 0.."Old Name".len() {
+            tm.rename_backspace();
+        }
+        for c in "New Name".chars() {
+            tm.rename_input(c);
+        }
+
+        // Confirm
+        assert!(tm.confirm_rename());
+        assert!(!tm.is_renaming());
+        assert_eq!(tm.active_tab().name(), "New Name");
+    }
+
+    #[test]
+    fn test_inline_rename_cancel() {
+        let mut tm = TabManager::new();
+        tm.create_tab("Original Name");
+        tm.start_rename();
+
+        // Type something
+        tm.rename_input('X');
+        assert_eq!(tm.rename_buffer(), Some("Original NameX"));
+
+        // Cancel
+        tm.cancel_rename();
+        assert!(!tm.is_renaming());
+        assert_eq!(tm.rename_buffer(), None);
+        // Original name should be unchanged
+        assert_eq!(tm.active_tab().name(), "Original Name");
+    }
+
+    #[test]
+    fn test_inline_rename_empty_name_rejected() {
+        let mut tm = TabManager::new();
+        tm.create_tab("Tab Name");
+        tm.start_rename();
+
+        // Clear all characters
+        for _ in 0.."Tab Name".len() {
+            tm.rename_backspace();
+        }
+        assert_eq!(tm.rename_buffer(), Some(""));
+
+        // Confirm with empty name should fail and keep original
+        assert!(!tm.confirm_rename());
+        // Note: the original name stays but we're exiting rename mode
+        // The tab name remains unchanged because we didn't actually rename
     }
 }

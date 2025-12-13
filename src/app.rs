@@ -1146,7 +1146,24 @@ impl App {
                     }
                 }
             }
-            InputMode::Insert { .. } => {
+            InputMode::Insert { ref target } => {
+                // TRC-029: Handle inline tab rename input
+                if matches!(target, crate::input::mode::InsertTarget::TabRename) {
+                    match key.code {
+                        KeyCode::Esc => return Some(Action::TabCancelRename),
+                        KeyCode::Enter => {
+                            // Confirm rename and exit insert mode
+                            self.tab_manager.confirm_rename();
+                            self.input_mode = InputMode::Normal;
+                            return None;
+                        }
+                        KeyCode::Backspace => return Some(Action::TabRenameBackspace),
+                        KeyCode::Char(c) => return Some(Action::TabRenameInput(c)),
+                        _ => {}
+                    }
+                }
+                
+                // Fall back to configurable keybindings for other insert targets
                 if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
                     return Some(action);
                 }
@@ -1724,6 +1741,22 @@ impl App {
                 self.tab_manager.move_tab(from, to);
             }
             
+            // TRC-029: Inline tab rename actions
+            Action::TabStartRename => {
+                self.tab_manager.start_rename();
+                self.input_mode = InputMode::Insert { target: crate::input::mode::InsertTarget::TabRename };
+            }
+            Action::TabCancelRename => {
+                self.tab_manager.cancel_rename();
+                self.input_mode = InputMode::Normal;
+            }
+            Action::TabRenameInput(c) => {
+                self.tab_manager.rename_input(c);
+            }
+            Action::TabRenameBackspace => {
+                self.tab_manager.rename_backspace();
+            }
+            
             // Key storage actions (TRC-011)
             Action::KeyStore(key_id, secret) => {
                 if let Some(ref mut ks) = self.keystore {
@@ -2164,7 +2197,7 @@ impl App {
                 }
                 
                 items.push(ContextMenuItem::separator());
-                items.push(ContextMenuItem::new("Rename...", Action::OpenCommandPalette));
+                items.push(ContextMenuItem::new("Rename...", Action::TabStartRename).with_shortcut("F2"));
                 
                 items
             }

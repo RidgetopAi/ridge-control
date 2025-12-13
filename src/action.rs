@@ -162,6 +162,14 @@ pub enum Action {
     TabRename(String),
     /// Move tab from one position to another
     TabMove { from: usize, to: usize },
+    /// TRC-029: Start inline rename mode for active tab
+    TabStartRename,
+    /// TRC-029: Cancel inline rename mode (revert to original name)
+    TabCancelRename,
+    /// TRC-029: Update rename buffer (while typing)
+    TabRenameInput(char),
+    /// TRC-029: Delete character from rename buffer
+    TabRenameBackspace,
 
     // Session persistence actions (TRC-012)
     /// Save current session (tabs, layout) to disk

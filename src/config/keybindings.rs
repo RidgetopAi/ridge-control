@@ -312,6 +312,11 @@ impl Default for KeybindingsConfig {
             "C-S-tab".to_string(),
             ActionBinding { action: "tab_prev".to_string(), args: vec![] },
         );
+        // TRC-029: Inline tab rename with F2
+        normal.bindings.insert(
+            "f2".to_string(),
+            ActionBinding { action: "tab_start_rename".to_string(), args: vec![] },
+        );
         // Conversation viewer
         normal.bindings.insert(
             "C-l".to_string(),
@@ -468,6 +473,9 @@ impl KeybindingsConfig {
                 let name = args.first().cloned().unwrap_or_default();
                 Some(Action::TabRename(name))
             }
+            // TRC-029: Inline tab rename
+            "tab_start_rename" => Some(Action::TabStartRename),
+            "tab_cancel_rename" => Some(Action::TabCancelRename),
             "config_reload" => Some(Action::ConfigReload),
             "conversation_toggle" => Some(Action::ConversationToggle),
             "conversation_scroll_up" => {
