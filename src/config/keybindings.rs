@@ -198,19 +198,11 @@ pub struct ActionBinding {
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ModeBindings {
     #[serde(default)]
     pub bindings: HashMap<String, ActionBinding>,
-}
-
-impl Default for ModeBindings {
-    fn default() -> Self {
-        Self {
-            bindings: HashMap::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

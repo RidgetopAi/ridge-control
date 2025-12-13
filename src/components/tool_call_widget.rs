@@ -247,7 +247,7 @@ impl<'a> ToolCallWidget<'a> {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!("{}", self.tool_call.tool_name()),
+                self.tool_call.tool_name().to_string(),
                 Style::default()
                     .fg(self.theme.colors.accent.to_color())
                     .bg(header_bg),

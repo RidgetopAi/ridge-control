@@ -22,10 +22,8 @@ fn set_nonblocking(fd: RawFd) -> io::Result<()> {
         if flags < 0 {
             return Err(io::Error::last_os_error());
         }
-        if flags & O_NONBLOCK == 0 {
-            if fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 {
-                return Err(io::Error::last_os_error());
-            }
+        if flags & O_NONBLOCK == 0 && fcntl(fd, F_SETFL, flags | O_NONBLOCK) < 0 {
+            return Err(io::Error::last_os_error());
         }
     }
     Ok(())

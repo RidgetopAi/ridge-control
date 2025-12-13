@@ -25,21 +25,12 @@ const KEYBINDINGS_FILE: &str = "keybindings.toml";
 const THEME_FILE: &str = "theme.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 #[serde(default)]
 pub struct AppConfig {
     pub general: GeneralConfig,
     pub terminal: TerminalConfig,
     pub process_monitor: ProcessMonitorConfig,
-}
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            general: GeneralConfig::default(),
-            terminal: TerminalConfig::default(),
-            process_monitor: ProcessMonitorConfig::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

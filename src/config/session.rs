@@ -230,7 +230,7 @@ mod tests {
 
     #[test]
     fn test_session_from_tabs() {
-        let tabs = vec![
+        let tabs = [
             ("Ridge-Control", true),
             ("Dev", false),
             ("Build", false),
@@ -250,7 +250,7 @@ mod tests {
     fn test_session_save_and_load() {
         let (manager, _temp_dir) = temp_session_manager();
 
-        let tabs = vec![
+        let tabs = [
             ("Ridge-Control", true),
             ("Test Tab", false),
         ];
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn test_session_serialization_format() {
-        let tabs = vec![
+        let tabs = [
             ("Ridge-Control", true),
             ("Dev", false),
         ];

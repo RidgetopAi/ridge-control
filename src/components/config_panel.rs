@@ -110,7 +110,7 @@ impl ConfigPanel {
                     }
                     ConfigSection::Terminal => {
                         self.add_setting("Scrollback Lines", &config.terminal.scrollback_lines.to_string());
-                        self.add_setting("Shell", &config.terminal.shell.as_ref().map(|s| s.as_str()).unwrap_or("default"));
+                        self.add_setting("Shell", config.terminal.shell.as_deref().unwrap_or("default"));
                         self.add_setting("Shell Args", &if config.terminal.shell_args.is_empty() { "none".to_string() } else { config.terminal.shell_args.join(" ") });
                         self.add_setting("TERM Env", &config.terminal.term_env);
                     }

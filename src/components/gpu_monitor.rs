@@ -145,7 +145,7 @@ impl GpuMonitor {
         let stdout = String::from_utf8_lossy(&output.stdout);
         self.gpus = stdout
             .lines()
-            .filter_map(|line| Self::parse_nvidia_line(line))
+            .filter_map(Self::parse_nvidia_line)
             .collect();
     }
 

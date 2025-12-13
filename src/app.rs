@@ -565,11 +565,9 @@ impl App {
                     }
                     StreamChunk::Stop { reason, .. } => {
                         // If stop reason is ToolUse, the tool was already handled in BlockStop
-                        if reason != StopReason::ToolUse {
-                            if !self.llm_response_buffer.is_empty() {
-                                self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-                                self.llm_response_buffer.clear();
-                            }
+                        if reason != StopReason::ToolUse && !self.llm_response_buffer.is_empty() {
+                            self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+                            self.llm_response_buffer.clear();
                         }
                         // TRC-017: Clear thinking buffer on stop (it's already been displayed during streaming)
                         self.thinking_buffer.clear();
@@ -1758,18 +1756,15 @@ impl App {
                         Ok(()) => {
                             tracing::info!("Stored API key for {}", key_id);
                             // Re-register provider with new key
-                            match ks.get(&key_id) {
-                                Ok(Some(s)) => {
-                                    match key_id {
-                                        KeyId::Anthropic => self.llm_manager.register_anthropic(s.expose()),
-                                        KeyId::OpenAI => self.llm_manager.register_openai(s.expose()),
-                                        KeyId::Gemini => self.llm_manager.register_gemini(s.expose()),
-                                        KeyId::Grok => self.llm_manager.register_grok(s.expose()),
-                                        KeyId::Groq => self.llm_manager.register_groq(s.expose()),
-                                        KeyId::Custom(_) => {}
-                                    }
+                            if let Ok(Some(s)) = ks.get(&key_id) {
+                                match key_id {
+                                    KeyId::Anthropic => self.llm_manager.register_anthropic(s.expose()),
+                                    KeyId::OpenAI => self.llm_manager.register_openai(s.expose()),
+                                    KeyId::Gemini => self.llm_manager.register_gemini(s.expose()),
+                                    KeyId::Grok => self.llm_manager.register_grok(s.expose()),
+                                    KeyId::Groq => self.llm_manager.register_groq(s.expose()),
+                                    KeyId::Custom(_) => {}
                                 }
-                                _ => {}
                             }
                         }
                         Err(e) => tracing::error!("Failed to store API key: {}", e),

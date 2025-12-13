@@ -596,8 +596,10 @@ mod tests {
 
     #[test]
     fn test_connection_health_backoff_delay() {
-        let mut health = ConnectionHealth::default();
-        health.reconnect_attempt = 0;
+        let mut health = ConnectionHealth {
+            reconnect_attempt: 0,
+            ..Default::default()
+        };
         
         // Base delay = 1000ms
         let delay0 = health.backoff_delay(1000);

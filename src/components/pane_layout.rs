@@ -243,16 +243,11 @@ impl PaneLayout {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DragState {
+    #[default]
     None,
     Dragging(ResizableBorder),
-}
-
-impl Default for DragState {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl DragState {
