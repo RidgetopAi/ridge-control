@@ -18,6 +18,7 @@ use ratatui::{
 };
 
 use crate::config::Theme;
+use crate::input::mode::InputMode;
 use super::{Tab, TabManager};
 
 /// Visual style configuration for the tab bar
@@ -123,6 +124,8 @@ pub struct TabBar<'a> {
     dangerous_mode: bool,
     /// TRC-029: Inline rename buffer (if renaming active tab)
     rename_buffer: Option<&'a str>,
+    /// Current input mode for status indicator
+    input_mode: InputMode,
 }
 
 impl<'a> TabBar<'a> {
@@ -136,6 +139,7 @@ impl<'a> TabBar<'a> {
             show_close_buttons: true,
             dangerous_mode: false,
             rename_buffer: manager.rename_buffer(),
+            input_mode: InputMode::Normal,
         }
     }
 
@@ -149,6 +153,7 @@ impl<'a> TabBar<'a> {
             show_close_buttons: true,
             dangerous_mode: false,
             rename_buffer: manager.rename_buffer(),
+            input_mode: InputMode::Normal,
         }
     }
 
@@ -162,12 +167,19 @@ impl<'a> TabBar<'a> {
             show_close_buttons: true,
             dangerous_mode: false,
             rename_buffer: None,
+            input_mode: InputMode::Normal,
         }
     }
     
     /// Set dangerous mode indicator (TRC-018)
     pub fn dangerous_mode(mut self, enabled: bool) -> Self {
         self.dangerous_mode = enabled;
+        self
+    }
+
+    /// Set input mode for status indicator
+    pub fn input_mode(mut self, mode: InputMode) -> Self {
+        self.input_mode = mode;
         self
     }
 
@@ -211,7 +223,7 @@ impl<'a> TabBar<'a> {
         };
         spans.push(Span::styled(icon.to_string(), base_style));
 
-        // Index indicator (for keyboard shortcuts Alt+1 through Alt+9)
+        // Index indicator (for keyboard shortcuts F1 through F9)
         if self.show_indices && index < 9 {
             let idx_style = base_style.add_modifier(Modifier::DIM);
             spans.push(Span::styled(format!("{}:", index + 1), idx_style));
@@ -317,27 +329,55 @@ impl Widget for TabBar<'_> {
             spans.extend(self.build_tab_spans(tab, index, is_active));
         }
 
-        // TRC-018: Add dangerous mode warning indicator on the right side
-        if self.dangerous_mode {
-            // Calculate used width for tabs
-            let tabs_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-            
-            // Add spacing to push warning to the right
-            let warning_text = " ⚠ DANGEROUS MODE ";
-            let warning_width = warning_text.chars().count();
-            let available = area.width as usize;
-            
-            if tabs_width + warning_width + 2 < available {
-                let padding = available.saturating_sub(tabs_width + warning_width + 1);
-                spans.push(Span::styled(
-                    " ".repeat(padding),
-                    Style::default().bg(self.style.background),
-                ));
+        // Mode indicator and dangerous mode warning on the right side
+        let tabs_width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        let available = area.width as usize;
+
+        // Build right-side indicators
+        let mode_text = match &self.input_mode {
+            InputMode::Normal => " NORMAL ",
+            InputMode::PtyRaw => " PTY ",
+            InputMode::CommandPalette => " CMD ",
+            InputMode::Insert { .. } => " INSERT ",
+            InputMode::Confirm { .. } => " CONFIRM ",
+        };
+        let mode_style = match &self.input_mode {
+            InputMode::Normal => Style::default()
+                .fg(Color::Rgb(0, 0, 0))
+                .bg(Color::Rgb(137, 180, 250)) // Blue
+                .add_modifier(Modifier::BOLD),
+            InputMode::PtyRaw => Style::default()
+                .fg(Color::Rgb(0, 0, 0))
+                .bg(Color::Rgb(166, 227, 161)) // Green
+                .add_modifier(Modifier::BOLD),
+            _ => Style::default()
+                .fg(Color::Rgb(0, 0, 0))
+                .bg(Color::Rgb(203, 166, 247)) // Purple
+                .add_modifier(Modifier::BOLD),
+        };
+
+        let warning_text = if self.dangerous_mode { " ⚠ DANGEROUS MODE " } else { "" };
+        let warning_width = warning_text.chars().count();
+        let mode_width = mode_text.chars().count();
+        let total_right_width = mode_width + warning_width;
+
+        if tabs_width + total_right_width + 2 < available {
+            let padding = available.saturating_sub(tabs_width + total_right_width + 1);
+            spans.push(Span::styled(
+                " ".repeat(padding),
+                Style::default().bg(self.style.background),
+            ));
+
+            // Mode indicator
+            spans.push(Span::styled(mode_text.to_string(), mode_style));
+
+            // TRC-018: Dangerous mode warning
+            if self.dangerous_mode {
                 spans.push(Span::styled(
                     warning_text.to_string(),
                     Style::default()
-                        .fg(Color::Rgb(0, 0, 0)) // Black text
-                        .bg(Color::Rgb(255, 100, 100)) // Red background
+                        .fg(Color::Rgb(0, 0, 0))
+                        .bg(Color::Rgb(255, 100, 100))
                         .add_modifier(Modifier::BOLD),
                 ));
             }

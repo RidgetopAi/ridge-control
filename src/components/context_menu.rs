@@ -63,6 +63,8 @@ pub struct ContextMenu {
     selected: usize,
     target: ContextMenuTarget,
     max_width: u16,
+    /// Cached menu rect from last render for hit-detection
+    cached_menu_rect: Option<Rect>,
 }
 
 impl ContextMenu {
@@ -74,6 +76,7 @@ impl ContextMenu {
             selected: 0,
             target: ContextMenuTarget::Generic,
             max_width: 30,
+            cached_menu_rect: None,
         }
     }
 
@@ -92,6 +95,7 @@ impl ContextMenu {
         self.visible = false;
         self.items.clear();
         self.selected = 0;
+        self.cached_menu_rect = None;
     }
 
     pub fn is_visible(&self) -> bool {
@@ -246,18 +250,19 @@ impl ContextMenu {
     fn handle_mouse(&mut self, mouse: &MouseEvent) -> Option<Action> {
         match mouse.kind {
             MouseEventKind::Down(MouseButton::Left) => {
-                // Check if click is inside menu
-                let menu_rect = self.calculate_menu_rect(Rect::new(0, 0, 200, 50)); // Approximate
-                if menu_rect.contains((mouse.column, mouse.row).into()) {
-                    let relative_y = mouse.row.saturating_sub(menu_rect.y + 1) as usize;
-                    if relative_y < self.items.len() {
-                        self.selected = relative_y;
-                        return self.confirm_selection();
+                // Use cached menu rect from last render for accurate hit-detection
+                if let Some(menu_rect) = self.cached_menu_rect {
+                    if menu_rect.contains((mouse.column, mouse.row).into()) {
+                        let relative_y = mouse.row.saturating_sub(menu_rect.y + 1) as usize;
+                        if relative_y < self.items.len() {
+                            self.selected = relative_y;
+                            return self.confirm_selection();
+                        }
+                    } else {
+                        // Click outside menu - close it
+                        self.hide();
+                        return Some(Action::ContextMenuClose);
                     }
-                } else {
-                    // Click outside menu - close it
-                    self.hide();
-                    return Some(Action::ContextMenuClose);
                 }
                 None
             }
@@ -278,12 +283,13 @@ impl ContextMenu {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, screen: Rect, theme: &Theme) {
+    pub fn render(&mut self, frame: &mut Frame, screen: Rect, theme: &Theme) {
         if !self.visible || self.items.is_empty() {
             return;
         }
 
         let menu_rect = self.calculate_menu_rect(screen);
+        self.cached_menu_rect = Some(menu_rect);
         
         // Clear background
         frame.render_widget(Clear, menu_rect);
@@ -500,6 +506,7 @@ mod tests {
             selected: 0,
             target: ContextMenuTarget::Generic,
             max_width: 30,
+            cached_menu_rect: None,
         };
         
         let screen = Rect::new(0, 0, 100, 50);
@@ -520,6 +527,7 @@ mod tests {
             selected: 0,
             target: ContextMenuTarget::Generic,
             max_width: 30,
+            cached_menu_rect: None,
         };
         
         let screen = Rect::new(0, 0, 100, 50);
@@ -542,6 +550,7 @@ mod tests {
             selected: 0,
             target: ContextMenuTarget::Generic,
             max_width: 30,
+            cached_menu_rect: None,
         };
         
         let screen = Rect::new(0, 0, 100, 50);

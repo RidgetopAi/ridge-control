@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -64,7 +65,7 @@ enum ConfirmState {
 pub struct ProcessMonitor {
     processes: Vec<ProcessInfo>,
     prev_stats: HashMap<i32, u64>,
-    table_state: TableState,
+    table_state: RefCell<TableState>,
     sort_column: SortColumn,
     sort_order: SortOrder,
     filter: String,
@@ -84,7 +85,7 @@ impl ProcessMonitor {
         let mut monitor = Self {
             processes: Vec::new(),
             prev_stats: HashMap::new(),
-            table_state: TableState::default(),
+            table_state: RefCell::new(TableState::default()),
             sort_column: SortColumn::Cpu,
             sort_order: SortOrder::Descending,
             filter: String::new(),
@@ -102,6 +103,13 @@ impl ProcessMonitor {
 
     pub fn gpu_available(&self) -> bool {
         self.gpu_monitor.is_available()
+    }
+
+    /// Ensure a row is selected when gaining focus
+    pub fn ensure_selection(&mut self) {
+        if self.table_state.borrow().selected().is_none() && !self.filtered_processes().is_empty() {
+            self.table_state.borrow_mut().select(Some(0));
+        }
     }
 
     pub fn refresh_processes(&mut self) {
@@ -184,6 +192,7 @@ impl ProcessMonitor {
     fn selected_pid(&self) -> Option<i32> {
         let filtered = self.filtered_processes();
         self.table_state
+            .borrow()
             .selected()
             .and_then(|idx| filtered.get(idx))
             .map(|p| p.pid)
@@ -192,29 +201,29 @@ impl ProcessMonitor {
     fn select_next(&mut self) {
         let count = self.filtered_processes().len();
         if count == 0 {
-            self.table_state.select(None);
+            self.table_state.borrow_mut().select(None);
             return;
         }
-        
-        let new_idx = match self.table_state.selected() {
+
+        let new_idx = match self.table_state.borrow().selected() {
             Some(idx) => (idx + 1).min(count - 1),
             None => 0,
         };
-        self.table_state.select(Some(new_idx));
+        self.table_state.borrow_mut().select(Some(new_idx));
     }
 
     fn select_prev(&mut self) {
         let count = self.filtered_processes().len();
         if count == 0 {
-            self.table_state.select(None);
+            self.table_state.borrow_mut().select(None);
             return;
         }
-        
-        let new_idx = match self.table_state.selected() {
+
+        let new_idx = match self.table_state.borrow().selected() {
             Some(idx) => idx.saturating_sub(1),
             None => 0,
         };
-        self.table_state.select(Some(new_idx));
+        self.table_state.borrow_mut().select(Some(new_idx));
     }
 
     fn kill_process(&self, pid: i32) -> bool {
@@ -336,11 +345,16 @@ impl Component for ProcessMonitor {
 
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        let row_in_table = y.saturating_sub(self.inner_area.y + 1);
+                        // Offset: GPU area (3) + table header (1) = 4
+                        let row_in_table = y.saturating_sub(self.inner_area.y + 4);
+
+                        // Add scroll offset to convert visual row to actual list index
+                        let scroll_offset = self.table_state.borrow().offset();
+                        let actual_row_index = (row_in_table as usize) + scroll_offset;
                         let filtered_count = self.filtered_processes().len();
-                        
-                        if (row_in_table as usize) < filtered_count {
-                            self.table_state.select(Some(row_in_table as usize));
+
+                        if actual_row_index < filtered_count {
+                            self.table_state.borrow_mut().select(Some(actual_row_index));
                         }
                         None
                     }
@@ -377,7 +391,7 @@ impl Component for ProcessMonitor {
             }
             Action::ProcessSetFilter(f) => {
                 self.filter = f.clone();
-                self.table_state.select(if self.filtered_processes().is_empty() {
+                self.table_state.borrow_mut().select(if self.filtered_processes().is_empty() {
                     None
                 } else {
                     Some(0)
@@ -385,7 +399,7 @@ impl Component for ProcessMonitor {
             }
             Action::ProcessClearFilter => {
                 self.filter.clear();
-                self.table_state.select(if self.processes.is_empty() {
+                self.table_state.borrow_mut().select(if self.processes.is_empty() {
                     None
                 } else {
                     Some(0)
@@ -463,7 +477,7 @@ impl Component for ProcessMonitor {
             .iter()
             .enumerate()
             .map(|(idx, proc)| {
-                let is_selected = self.table_state.selected() == Some(idx);
+                let is_selected = self.table_state.borrow().selected() == Some(idx);
                 
                 let cpu_color = theme.cpu_color(proc.cpu_percent as f32, 10.0, 50.0);
                 
@@ -529,7 +543,7 @@ impl Component for ProcessMonitor {
                 Style::default()
             });
 
-        frame.render_stateful_widget(table, table_area, &mut self.table_state.clone());
+        frame.render_stateful_widget(table, table_area, &mut *self.table_state.borrow_mut());
     }
 }
 

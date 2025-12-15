@@ -81,13 +81,13 @@ impl CommandRegistry {
             // Tab commands
             Command::new("tab_new", "New Tab", "Create a new tab (Ctrl+T)", Action::TabCreate),
             Command::new("tab_close", "Close Tab", "Close current tab (Ctrl+W)", Action::TabClose),
-            Command::new("tab_next", "Next Tab", "Switch to next tab (Ctrl+Tab)", Action::TabNext),
-            Command::new("tab_prev", "Previous Tab", "Switch to previous tab (Ctrl+Shift+Tab)", Action::TabPrev),
-            Command::new("tab_1", "Tab 1", "Switch to tab 1 (Alt+1)", Action::TabSelect(0)),
-            Command::new("tab_2", "Tab 2", "Switch to tab 2 (Alt+2)", Action::TabSelect(1)),
-            Command::new("tab_3", "Tab 3", "Switch to tab 3 (Alt+3)", Action::TabSelect(2)),
-            Command::new("tab_4", "Tab 4", "Switch to tab 4 (Alt+4)", Action::TabSelect(3)),
-            Command::new("tab_5", "Tab 5", "Switch to tab 5 (Alt+5)", Action::TabSelect(4)),
+            Command::new("tab_next", "Next Tab", "Switch to next tab (])", Action::TabNext),
+            Command::new("tab_prev", "Previous Tab", "Switch to previous tab ([)", Action::TabPrev),
+            Command::new("tab_1", "Tab 1", "Switch to tab 1 (F1)", Action::TabSelect(0)),
+            Command::new("tab_2", "Tab 2", "Switch to tab 2 (F2)", Action::TabSelect(1)),
+            Command::new("tab_3", "Tab 3", "Switch to tab 3 (F3)", Action::TabSelect(2)),
+            Command::new("tab_4", "Tab 4", "Switch to tab 4 (F4)", Action::TabSelect(3)),
+            Command::new("tab_5", "Tab 5", "Switch to tab 5 (F5)", Action::TabSelect(4)),
         ]
     }
 

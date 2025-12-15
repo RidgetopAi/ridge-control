@@ -503,7 +503,18 @@ impl App {
                 let event = event::read().map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
                 if let Some(action) = self.handle_event(event) {
+                    // Track if this action came from command palette
+                    let was_in_palette = matches!(self.input_mode, InputMode::CommandPalette);
+
+                    // Dispatch the action
                     self.dispatch(action)?;
+
+                    // POST-DISPATCH HOOK: Reset mode after palette actions complete
+                    // If we started in CommandPalette and are still there (action didn't
+                    // explicitly set a different mode), reset to Normal
+                    if was_in_palette && matches!(self.input_mode, InputMode::CommandPalette) {
+                        self.input_mode = InputMode::Normal;
+                    }
                 }
             }
 
@@ -768,7 +779,7 @@ impl App {
         let show_palette = self.command_palette.is_visible();
         let show_context_menu = self.context_menu.is_visible();
         let has_notifications = self.notification_manager.has_notifications();
-        let show_tabs = self.tab_manager.count() > 1; // Only show tab bar with multiple tabs
+        let _show_tabs = self.tab_manager.count() > 1; // Kept for potential future use
         let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty() || !self.thinking_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
         let show_log_viewer = self.show_log_viewer;
@@ -786,7 +797,8 @@ impl App {
         // Pre-calculate tab bar area for mouse hit-testing (TRC-010)
         let term_size = self.terminal.size().unwrap_or_default();
         let term_rect = Rect::new(0, 0, term_size.width, term_size.height);
-        let show_status_bar_pre = show_tabs || self.dangerous_mode;
+        // Always show status bar for mode indicator
+        let show_status_bar_pre = true;
         let (computed_tab_bar_area, computed_content_area) = if show_status_bar_pre {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
@@ -804,8 +816,8 @@ impl App {
             .draw(|frame| {
                 let size = frame.area();
 
-                // TRC-018: Show status bar if dangerous mode enabled OR multiple tabs
-                let show_status_bar = show_tabs || self.dangerous_mode;
+                // Always show status bar for mode indicator
+                let show_status_bar = true;
                 
                 // Split: optional tab/status bar at top, then main content
                 let (tab_bar_area, content_area) = if show_status_bar {
@@ -823,7 +835,8 @@ impl App {
                 // TRC-018: Pass dangerous_mode to show warning indicator
                 if show_status_bar {
                     let tab_bar = TabBar::from_manager_themed(&self.tab_manager, &theme)
-                        .dangerous_mode(self.dangerous_mode);
+                        .dangerous_mode(self.dangerous_mode)
+                        .input_mode(self.input_mode.clone());
                     frame.render_widget(tab_bar, tab_bar_area);
                 }
 
@@ -932,16 +945,21 @@ impl App {
                 
                 // Render overlays (in order of z-index)
                 
-                // Stream viewer overlay - takes right half of screen when visible
+                // Stream viewer overlay - centered modal dialog
                 if show_stream_viewer {
-                    let stream_area = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                        .split(size)[1];
-                    
+                    // Calculate centered dialog size (70% width, 70% height for stream content)
+                    let dialog_width = (size.width * 70 / 100).clamp(60, 120);
+                    let dialog_height = (size.height * 70 / 100).clamp(20, 40);
+                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                    let stream_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                    // Clear the area behind for readability
+                    frame.render_widget(ratatui::widgets::Clear, stream_area);
+
                     let selected_stream = selected_stream_idx
                         .and_then(|idx| streams.get(idx));
-                    
+
                     self.stream_viewer.render_stream_themed(
                         frame,
                         stream_area,
@@ -951,20 +969,25 @@ impl App {
                     );
                 }
                 
-                // Log viewer overlay (TRC-013) - takes right half of screen when visible
+                // Log viewer overlay (TRC-013) - centered modal dialog
                 if show_log_viewer {
-                    let log_area = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                        .split(size)[1];
-                    
+                    // Calculate centered dialog size (70% width, 70% height for log content)
+                    let dialog_width = (size.width * 70 / 100).clamp(60, 120);
+                    let dialog_height = (size.height * 70 / 100).clamp(20, 40);
+                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                    let log_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                    // Clear the area behind for readability
+                    frame.render_widget(ratatui::widgets::Clear, log_area);
+
                     self.log_viewer.render(
                         frame,
                         log_area,
                         focus.is_focused(FocusArea::LogViewer),
                         &theme,
                     );
-                    
+
                     let log_inner = {
                         let block = ratatui::widgets::Block::default()
                             .borders(ratatui::widgets::Borders::ALL);
@@ -973,20 +996,25 @@ impl App {
                     self.log_viewer.set_inner_area(log_inner);
                 }
                 
-                // Config panel overlay (TRC-014) - takes right half of screen when visible
+                // Config panel overlay (TRC-014) - centered modal dialog
                 if show_config_panel {
-                    let config_area = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-                        .split(size)[1];
-                    
+                    // Calculate centered dialog size (60% width, 60% height, clamped)
+                    let dialog_width = (size.width * 60 / 100).clamp(50, 100);
+                    let dialog_height = (size.height * 60 / 100).clamp(15, 35);
+                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                    let config_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                    // Clear the area behind for readability
+                    frame.render_widget(ratatui::widgets::Clear, config_area);
+
                     self.config_panel.render(
                         frame,
                         config_area,
                         focus.is_focused(FocusArea::ConfigPanel),
                         &theme,
                     );
-                    
+
                     let config_inner = {
                         let block = ratatui::widgets::Block::default()
                             .borders(ratatui::widgets::Borders::ALL);
@@ -1050,7 +1078,12 @@ impl App {
                 if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
                     return Some(action);
                 }
-                
+
+                // Esc exits PTY mode (like vim's Esc to exit insert mode)
+                if key.code == KeyCode::Esc {
+                    return Some(Action::EnterNormalMode);
+                }
+
                 // Copy with selection (special handling) - use active tab's terminal (TRC-005)
                 if key.code == KeyCode::Char('c')
                     && key.modifiers.contains(KeyModifiers::CONTROL)
@@ -1072,24 +1105,8 @@ impl App {
                 None
             }
             InputMode::Normal => {
-                // First check configurable keybindings for global actions
-                let binding_action = self.config_manager.keybindings().get_action(&self.input_mode, &key);
-                #[cfg(debug_assertions)]
-                tracing::debug!("Normal mode keybinding lookup result: {:?}", binding_action);
-                if let Some(action) = binding_action {
-                    return Some(action);
-                }
-                
-                // Alt+1 through Alt+9 for direct tab selection (hardcoded for convenience)
-                if let KeyCode::Char(c @ '1'..='9') = key.code {
-                    if key.modifiers.contains(KeyModifiers::ALT) {
-                        let idx = (c as usize) - ('1' as usize);
-                        return Some(Action::TabSelect(idx));
-                    }
-                }
-
-                // Focus-specific key handling
-                match self.focus.current() {
+                // Focus-specific key handling FIRST (so j/k work per-pane)
+                let focus_action = match self.focus.current() {
                     FocusArea::Terminal => {
                         // Enter key should enter PTY mode when terminal is focused
                         // This is a hardcoded fallback in case keybinding lookup fails
@@ -1136,7 +1153,22 @@ impl App {
                             _ => None,
                         }
                     }
+                };
+
+                // If focus-specific handler returned an action, use it
+                if focus_action.is_some() {
+                    return focus_action;
                 }
+
+                // F1 through F9 for direct tab selection (hardcoded for convenience)
+                if let KeyCode::F(n @ 1..=9) = key.code {
+                    if key.modifiers.is_empty() {
+                        return Some(Action::TabSelect((n - 1) as usize));
+                    }
+                }
+
+                // Fall back to global keybindings (scroll, quit, etc.)
+                self.config_manager.keybindings().get_action(&self.input_mode, &key)
             }
             InputMode::Insert { ref target } => {
                 // TRC-029: Handle inline tab rename input
@@ -1379,12 +1411,21 @@ impl App {
             }
             Action::FocusNext => {
                 self.focus.next();
+                if self.focus.current() == FocusArea::ProcessMonitor {
+                    self.process_monitor.ensure_selection();
+                }
             }
             Action::FocusPrev => {
                 self.focus.prev();
+                if self.focus.current() == FocusArea::ProcessMonitor {
+                    self.process_monitor.ensure_selection();
+                }
             }
             Action::FocusArea(area) => {
                 self.focus.focus(area);
+                if area == FocusArea::ProcessMonitor {
+                    self.process_monitor.ensure_selection();
+                }
             }
             Action::PtyInput(data) => {
                 // Write to active tab's PTY (TRC-005)
@@ -2179,7 +2220,7 @@ impl App {
                 }
                 
                 items.push(ContextMenuItem::separator());
-                items.push(ContextMenuItem::new("Rename...", Action::TabStartRename).with_shortcut("F2"));
+                items.push(ContextMenuItem::new("Rename...", Action::TabStartRename).with_shortcut("Ctrl+R"));
                 
                 items
             }

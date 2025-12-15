@@ -43,3 +43,6 @@ tarpaulin-report.html
 tmp/
 temp/
 *.tmp
+
+# Debug output
+debug-images/

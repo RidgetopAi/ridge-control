@@ -221,9 +221,21 @@ impl<'a> Widget for GridWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let (cursor_x, cursor_y) = self.grid.cursor();
         let scroll_offset = self.grid.scroll_offset();
+        let area_height = area.height as usize;
 
-        for y in 0..area.height as usize {
-            let line = match self.grid.get_visible_line(y) {
+        // Calculate view offset to keep cursor visible when it's beyond the render area.
+        // This handles cases where grid rows exceed render area (e.g., after fullscreen
+        // programs exit and terminal content shifts).
+        let view_offset = if scroll_offset == 0 && cursor_y >= area_height {
+            cursor_y - area_height + 1
+        } else {
+            0
+        };
+
+        for y in 0..area_height {
+            // Adjust the grid row by view_offset to shift content up when cursor is below visible area
+            let grid_row = y + view_offset;
+            let line = match self.grid.get_visible_line(grid_row) {
                 Some(line) => line,
                 None => continue,
             };
@@ -239,15 +251,18 @@ impl<'a> Widget for GridWidget<'a> {
 
                 let mut style = cell.style;
 
-                if self.grid.is_position_selected(x, y) {
+                if self.grid.is_position_selected(x, grid_row) {
                     style = self.theme.selection_style()
                         .remove_modifier(Modifier::REVERSED);
                 }
 
+                // Cursor position check uses grid_row (adjusted for view_offset)
+                // Also respect cursor visibility state from escape sequences (CSI ?25l/h)
                 let is_cursor = self.show_cursor
+                    && self.grid.cursor_visible()
                     && scroll_offset == 0
                     && x == cursor_x
-                    && y == cursor_y;
+                    && grid_row == cursor_y;
 
                 if is_cursor {
                     style = style

@@ -231,7 +231,7 @@ impl Default for KeybindingsConfig {
             ActionBinding { action: "focus_next".to_string(), args: vec![] },
         );
         normal.bindings.insert(
-            "S-tab".to_string(),
+            "S-backtab".to_string(),
             ActionBinding { action: "focus_prev".to_string(), args: vec![] },
         );
         normal.bindings.insert(
@@ -300,16 +300,16 @@ impl Default for KeybindingsConfig {
             ActionBinding { action: "tab_close".to_string(), args: vec![] },
         );
         normal.bindings.insert(
-            "C-tab".to_string(),
+            "]".to_string(),
             ActionBinding { action: "tab_next".to_string(), args: vec![] },
         );
         normal.bindings.insert(
-            "C-S-tab".to_string(),
+            "[".to_string(),
             ActionBinding { action: "tab_prev".to_string(), args: vec![] },
         );
-        // TRC-029: Inline tab rename with F2
+        // TRC-029: Inline tab rename with Ctrl+R
         normal.bindings.insert(
-            "f2".to_string(),
+            "C-r".to_string(),
             ActionBinding { action: "tab_start_rename".to_string(), args: vec![] },
         );
         // Conversation viewer
@@ -365,7 +365,16 @@ impl Default for KeybindingsConfig {
             "C-v".to_string(),
             ActionBinding { action: "paste".to_string(), args: vec![] },
         );
-        
+        // Alt+D/U for page scroll in PtyRaw mode (Ctrl+D/U pass through to shell)
+        pty_raw.bindings.insert(
+            "A-d".to_string(),
+            ActionBinding { action: "scroll_page_down".to_string(), args: vec![] },
+        );
+        pty_raw.bindings.insert(
+            "A-u".to_string(),
+            ActionBinding { action: "scroll_page_up".to_string(), args: vec![] },
+        );
+
         let mut command_palette = ModeBindings::default();
         command_palette.bindings.insert(
             "esc".to_string(),

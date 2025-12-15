@@ -133,6 +133,7 @@ struct GridPerformer {
     current_style: Style,
     scrollback: RingBuffer,
     scrollback_size: usize,
+    cursor_visible: bool,
 }
 
 impl GridPerformer {
@@ -286,8 +287,9 @@ impl Perform for GridPerformer {
 
     fn osc_dispatch(&mut self, _params: &[&[u8]], _bell_terminated: bool) {}
 
-    fn csi_dispatch(&mut self, params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
+    fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let params: Vec<u16> = params.iter().map(|p| p[0]).collect();
+        let is_private_mode = intermediates.contains(&b'?');
 
         match action {
             'H' | 'f' => {
@@ -511,6 +513,22 @@ impl Perform for GridPerformer {
             }
             'u' => {
             }
+            // DECSET - Set private mode
+            'h' if is_private_mode => {
+                for &param in &params {
+                    if param == 25 {
+                        self.cursor_visible = true; // Show cursor
+                    }
+                }
+            }
+            // DECRST - Reset private mode
+            'l' if is_private_mode => {
+                for &param in &params {
+                    if param == 25 {
+                        self.cursor_visible = false; // Hide cursor
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -542,6 +560,7 @@ impl Grid {
                 current_style: Style::default(),
                 scrollback: RingBuffer::new(scrollback_size),
                 scrollback_size,
+                cursor_visible: true,
             },
             parser: Parser::new(),
             scroll_offset: 0,
@@ -574,6 +593,10 @@ impl Grid {
 
     pub fn cursor(&self) -> (usize, usize) {
         (self.performer.cursor_x, self.performer.cursor_y)
+    }
+
+    pub fn cursor_visible(&self) -> bool {
+        self.performer.cursor_visible
     }
 
     pub fn size(&self) -> (usize, usize) {
