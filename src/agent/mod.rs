@@ -21,7 +21,7 @@ pub mod engine;
 
 pub use models::{ModelInfo, ModelCatalog, TokenizerKind};
 pub use tokens::{TokenCounter, DefaultTokenCounter};
-pub use context::{ContextSegment, SegmentKind, ContextManager, BuildContextParams, BuiltContext};
+pub use context::{ContextSegment, SegmentKind, ContextManager, BuildContextParams, BuiltContext, ContextStats};
 pub use prompt::{SystemPromptBuilder, PlatformInfo, RepoContextInfo};
 pub use thread::{AgentThread, ThreadStore, InMemoryThreadStore};
 pub use tools::ToolExecutor;

@@ -44,6 +44,7 @@ use crate::llm::{
 };
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
 use crate::tabs::{TabId, TabManager, TabBar};
+use crate::agent::{ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats};
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -117,6 +118,9 @@ pub struct App {
     pane_layout: PaneLayout,
     drag_state: DragState,
     content_area: Rect,
+    // Phase 3: Context indicator - token counting infrastructure
+    model_catalog: std::sync::Arc<ModelCatalog>,
+    token_counter: std::sync::Arc<dyn TokenCounter>,
 }
 
 impl App {
@@ -194,6 +198,10 @@ impl App {
         let mut tab_manager = TabManager::new();
         tab_manager.set_terminal_size(term_cols as u16, term_rows as u16);
 
+        // Phase 3: Initialize token counting infrastructure
+        let model_catalog = std::sync::Arc::new(ModelCatalog::new());
+        let token_counter: std::sync::Arc<dyn TokenCounter> = std::sync::Arc::new(DefaultTokenCounter::new(model_catalog.clone()));
+
         // Initialize session manager (TRC-012)
         let session_manager = match SessionManager::new() {
             Ok(sm) => Some(sm),
@@ -250,6 +258,8 @@ impl App {
             pane_layout: PaneLayout::new(),
             drag_state: DragState::default(),
             content_area: Rect::default(),
+            model_catalog,
+            token_counter,
         })
     }
 
@@ -889,6 +899,24 @@ impl App {
                             Some((provider, model))
                         }
                     };
+
+                    // Phase 3: Compute context stats for header display
+                    let context_stats = {
+                        let model = self.llm_manager.current_model();
+                        if model.is_empty() || messages.is_empty() {
+                            None
+                        } else {
+                            let model_info = self.model_catalog.info_for(model);
+                            let tokens_used = self.token_counter.count_messages(model, &messages);
+                            // Budget = context window - default output tokens - 2% safety
+                            let safety = model_info.max_context_tokens / 50; // 2%
+                            let budget = model_info.max_context_tokens
+                                .saturating_sub(model_info.default_max_output_tokens)
+                                .saturating_sub(safety);
+                            Some(ContextStats::new(tokens_used, budget, false, messages.len()))
+                        }
+                    };
+
                     self.conversation_viewer.render_conversation(
                         frame,
                         conv_chunks[0],
@@ -898,6 +926,7 @@ impl App {
                         &thinking_buffer,
                         &theme,
                         model_info,
+                        context_stats.as_ref(),
                     );
 
                     // Render chat input at bottom of conversation area

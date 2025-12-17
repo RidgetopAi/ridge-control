@@ -11,6 +11,7 @@ use ratatui::{
 };
 
 use crate::action::Action;
+use crate::agent::ContextStats;
 use crate::components::search::{SearchState, SearchBar, SearchAction};
 use crate::components::spinner::{Spinner, SpinnerStyle};
 use crate::components::tool_call_widget::{ToolCallManager, ToolCallWidget, ToolStatus};
@@ -254,6 +255,7 @@ impl ConversationViewer {
     /// Render conversation with messages and current streaming buffers
     /// TRC-017: Now accepts separate thinking_buffer for extended thinking display
     /// TRC-021: Added search support
+    /// Phase 3: Added context_stats for token usage display
     /// model_info: Optional (provider, model) tuple for header display
     #[allow(clippy::too_many_arguments)] // Parameters are semantically distinct
     pub fn render_conversation(
@@ -266,6 +268,7 @@ impl ConversationViewer {
         thinking_buffer: &str,
         theme: &Theme,
         model_info: Option<(&str, &str)>,
+        context_stats: Option<&ContextStats>,
     ) {
         self.cache_text_for_search(messages, streaming_buffer, thinking_buffer);
 
@@ -285,8 +288,8 @@ impl ConversationViewer {
         let border_style = theme.border_style(focused);
         let title_style = theme.title_style(focused);
 
-        // Build title with status indicators (TRC-017: include thinking indicator, TRC-021: search)
-        let title = self.build_title(streaming_buffer, thinking_buffer, model_info);
+        // Build title with status indicators (TRC-017: include thinking indicator, TRC-021: search, Phase 3: context stats)
+        let title = self.build_title(streaming_buffer, thinking_buffer, model_info, context_stats);
 
         let block = Block::default()
             .title(title)
@@ -487,8 +490,15 @@ impl ConversationViewer {
     
     /// TRC-017: Updated to include thinking buffer indicator
     /// TRC-021: Added search indicator
+    /// Phase 3: Added context_stats for token usage display
     /// model_info: Optional (provider, model) for display in header
-    fn build_title(&self, streaming_buffer: &str, thinking_buffer: &str, model_info: Option<(&str, &str)>) -> String {
+    fn build_title(
+        &self,
+        streaming_buffer: &str,
+        thinking_buffer: &str,
+        model_info: Option<(&str, &str)>,
+        context_stats: Option<&ContextStats>,
+    ) -> String {
         let mut title_parts = vec![" Conversation".to_string()];
         
         // Add model/provider indicator if available
@@ -496,6 +506,14 @@ impl ConversationViewer {
             if !provider.is_empty() && !model.is_empty() {
                 let short_model = Self::abbreviate_model_name(model);
                 title_parts.push(format!(" [{}:{}]", provider, short_model));
+            }
+        }
+
+        // Phase 3: Add context/token stats
+        if let Some(stats) = context_stats {
+            if stats.tokens_budget > 0 {
+                let truncated_indicator = if stats.truncated { "↓" } else { "" };
+                title_parts.push(format!(" 󰊤{}{}", stats.format_compact(), truncated_indicator));
             }
         }
         

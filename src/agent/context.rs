@@ -96,6 +96,63 @@ pub struct BuiltContext {
     pub segments_dropped: usize,
 }
 
+/// Lightweight stats for UI display (Phase 3: Context indicator)
+#[derive(Debug, Clone, Default)]
+pub struct ContextStats {
+    /// Tokens used in current context
+    pub tokens_used: u32,
+    /// Maximum tokens available (context budget)
+    pub tokens_budget: u32,
+    /// Whether context was truncated
+    pub truncated: bool,
+    /// Number of messages in conversation
+    pub message_count: usize,
+}
+
+impl ContextStats {
+    pub fn new(tokens_used: u32, tokens_budget: u32, truncated: bool, message_count: usize) -> Self {
+        Self {
+            tokens_used,
+            tokens_budget,
+            truncated,
+            message_count,
+        }
+    }
+
+    /// Calculate usage percentage (0-100)
+    pub fn usage_percent(&self) -> u8 {
+        if self.tokens_budget == 0 {
+            0
+        } else {
+            ((self.tokens_used as f64 / self.tokens_budget as f64) * 100.0).min(100.0) as u8
+        }
+    }
+
+    /// Format tokens for display (e.g., "12.3k" or "1.2M")
+    pub fn format_tokens(tokens: u32) -> String {
+        if tokens >= 1_000_000 {
+            format!("{:.1}M", tokens as f64 / 1_000_000.0)
+        } else if tokens >= 1_000 {
+            format!("{:.1}k", tokens as f64 / 1_000.0)
+        } else {
+            tokens.to_string()
+        }
+    }
+
+    /// Format as compact string for header display
+    pub fn format_compact(&self) -> String {
+        let used = Self::format_tokens(self.tokens_used);
+        let budget = Self::format_tokens(self.tokens_budget);
+        let percent = self.usage_percent();
+        
+        if self.truncated {
+            format!("{}↓/{}({}%)", used, budget, percent)
+        } else {
+            format!("{}/{}({}%)", used, budget, percent)
+        }
+    }
+}
+
 /// Manages context window budget and builds optimized requests
 pub struct ContextManager {
     catalog: Arc<ModelCatalog>,
@@ -301,5 +358,39 @@ mod tests {
         let built = manager.build_request(params);
         assert!(!built.truncated);
         assert!(built.total_tokens < built.budget);
+    }
+
+    #[test]
+    fn test_context_stats_format_tokens() {
+        assert_eq!(ContextStats::format_tokens(500), "500");
+        assert_eq!(ContextStats::format_tokens(1000), "1.0k");
+        assert_eq!(ContextStats::format_tokens(12345), "12.3k");
+        assert_eq!(ContextStats::format_tokens(1_000_000), "1.0M");
+        assert_eq!(ContextStats::format_tokens(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn test_context_stats_usage_percent() {
+        let stats = ContextStats::new(5000, 100000, false, 10);
+        assert_eq!(stats.usage_percent(), 5);
+
+        let stats = ContextStats::new(50000, 100000, false, 10);
+        assert_eq!(stats.usage_percent(), 50);
+
+        let stats = ContextStats::new(100000, 100000, false, 10);
+        assert_eq!(stats.usage_percent(), 100);
+
+        // Zero budget edge case
+        let stats = ContextStats::new(1000, 0, false, 10);
+        assert_eq!(stats.usage_percent(), 0);
+    }
+
+    #[test]
+    fn test_context_stats_format_compact() {
+        let stats = ContextStats::new(5000, 100000, false, 10);
+        assert_eq!(stats.format_compact(), "5.0k/100.0k(5%)");
+
+        let stats = ContextStats::new(5000, 100000, true, 10);
+        assert_eq!(stats.format_compact(), "5.0k↓/100.0k(5%)");
     }
 }
