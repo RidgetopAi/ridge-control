@@ -254,6 +254,7 @@ impl ConversationViewer {
     /// Render conversation with messages and current streaming buffers
     /// TRC-017: Now accepts separate thinking_buffer for extended thinking display
     /// TRC-021: Added search support
+    /// model_info: Optional (provider, model) tuple for header display
     #[allow(clippy::too_many_arguments)] // Parameters are semantically distinct
     pub fn render_conversation(
         &mut self,
@@ -264,6 +265,7 @@ impl ConversationViewer {
         streaming_buffer: &str,
         thinking_buffer: &str,
         theme: &Theme,
+        model_info: Option<(&str, &str)>,
     ) {
         self.cache_text_for_search(messages, streaming_buffer, thinking_buffer);
 
@@ -284,7 +286,7 @@ impl ConversationViewer {
         let title_style = theme.title_style(focused);
 
         // Build title with status indicators (TRC-017: include thinking indicator, TRC-021: search)
-        let title = self.build_title(streaming_buffer, thinking_buffer);
+        let title = self.build_title(streaming_buffer, thinking_buffer, model_info);
 
         let block = Block::default()
             .title(title)
@@ -485,8 +487,17 @@ impl ConversationViewer {
     
     /// TRC-017: Updated to include thinking buffer indicator
     /// TRC-021: Added search indicator
-    fn build_title(&self, streaming_buffer: &str, thinking_buffer: &str) -> String {
+    /// model_info: Optional (provider, model) for display in header
+    fn build_title(&self, streaming_buffer: &str, thinking_buffer: &str, model_info: Option<(&str, &str)>) -> String {
         let mut title_parts = vec![" Conversation".to_string()];
+        
+        // Add model/provider indicator if available
+        if let Some((provider, model)) = model_info {
+            if !provider.is_empty() && !model.is_empty() {
+                let short_model = Self::abbreviate_model_name(model);
+                title_parts.push(format!(" [{}:{}]", provider, short_model));
+            }
+        }
         
         // Add tool status indicators
         let tool_count = self.tool_call_manager.len();
@@ -524,6 +535,47 @@ impl ConversationViewer {
         
         title_parts.push(" ".to_string());
         title_parts.join("")
+    }
+    
+    /// Abbreviate long model names for display
+    fn abbreviate_model_name(model: &str) -> String {
+        // Extract the core model name, remove date suffixes and provider prefixes
+        // e.g., "claude-sonnet-4-20250514" -> "sonnet-4"
+        // e.g., "gpt-4o-2024-08-06" -> "gpt-4o"
+        // e.g., "gemini-2.0-flash" -> "gemini-2.0-flash"
+        
+        let model = model.to_lowercase();
+        
+        // Remove common date patterns (YYYYMMDD or YYYY-MM-DD at end)
+        let without_date = if let Some(pos) = model.rfind(['-', '_']) {
+            let suffix = &model[pos + 1..];
+            if suffix.len() >= 8 && suffix.chars().all(|c| c.is_ascii_digit() || c == '-') {
+                &model[..pos]
+            } else {
+                model.as_str()
+            }
+        } else {
+            model.as_str()
+        };
+        
+        // For Claude models, simplify to key parts
+        if without_date.contains("claude") {
+            if without_date.contains("opus") {
+                return "opus-4".to_string();
+            } else if without_date.contains("sonnet") {
+                return "sonnet-4".to_string();
+            } else if without_date.contains("haiku") {
+                return "haiku-3".to_string();
+            }
+        }
+        
+        // For other models, just return without date, capped at reasonable length
+        let result = without_date.to_string();
+        if result.len() > 20 {
+            format!("{}…", &result[..19])
+        } else {
+            result
+        }
     }
     
     /// TRC-017: Render a thinking block (collapsible)

@@ -19,6 +19,7 @@ use tokio::sync::mpsc;
 
 use crate::action::{Action, ContextMenuTarget, PaneBorder};
 use crate::cli::Cli;
+use crate::components::chat_input::ChatInput;
 use crate::components::command_palette::CommandPalette;
 use crate::components::config_panel::ConfigPanel;
 use crate::components::confirm_dialog::ConfirmDialog;
@@ -86,6 +87,7 @@ pub struct App {
     pty_receivers: Vec<mpsc::UnboundedReceiver<(TabId, PtyEvent)>>,
     // LLM conversation display
     conversation_viewer: ConversationViewer,
+    chat_input: ChatInput,
     show_conversation: bool,
     // Stream viewer
     stream_viewer: StreamViewer,
@@ -229,6 +231,7 @@ impl App {
             tab_manager,
             pty_receivers: Vec::new(),
             conversation_viewer: ConversationViewer::new(),
+            chat_input: ChatInput::new(),
             show_conversation: false,
             stream_viewer: StreamViewer::new(),
             show_stream_viewer: false,
@@ -869,14 +872,39 @@ impl App {
                         );
                     }
 
+                    // Split conversation area: messages on top, chat input at bottom
+                    let conv_chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([Constraint::Min(5), Constraint::Length(6)])
+                        .split(left_chunks[1]);
+
                     // TRC-017: Pass thinking_buffer for extended thinking display
+                    // Pass model info for header display
+                    let model_info = {
+                        let provider = self.llm_manager.current_provider();
+                        let model = self.llm_manager.current_model();
+                        if provider.is_empty() || model.is_empty() {
+                            None
+                        } else {
+                            Some((provider, model))
+                        }
+                    };
                     self.conversation_viewer.render_conversation(
                         frame,
-                        left_chunks[1],
-                        focus.is_focused(FocusArea::StreamViewer), // Reuse StreamViewer focus for now
+                        conv_chunks[0],
+                        focus.is_focused(FocusArea::StreamViewer), // Conversation history focus
                         &messages,
                         &streaming_buffer,
                         &thinking_buffer,
+                        &theme,
+                        model_info,
+                    );
+
+                    // Render chat input at bottom of conversation area
+                    self.chat_input.render(
+                        frame,
+                        conv_chunks[1],
+                        focus.is_focused(FocusArea::ChatInput),
                         &theme,
                     );
 
@@ -892,7 +920,7 @@ impl App {
                     let conv_inner = {
                         let block = ratatui::widgets::Block::default()
                             .borders(ratatui::widgets::Borders::ALL);
-                        block.inner(left_chunks[1])
+                        block.inner(conv_chunks[0])
                     };
                     self.conversation_viewer.set_inner_area(conv_inner);
                 } else {
@@ -1122,7 +1150,12 @@ impl App {
                         self.menu.handle_event(&CrosstermEvent::Key(key))
                     }
                     FocusArea::StreamViewer => {
-                        // Handle StreamViewer key events
+                        // Handle StreamViewer key events (also used for conversation history)
+                        // 'i' focuses chat input when conversation is visible
+                        if self.show_conversation && (key.code == KeyCode::Char('i') || key.code == KeyCode::Tab) {
+                            self.focus.focus(FocusArea::ChatInput);
+                            return None;
+                        }
                         match key.code {
                             KeyCode::Char('j') | KeyCode::Down => Some(Action::StreamViewerScrollDown(1)),
                             KeyCode::Char('k') | KeyCode::Up => Some(Action::StreamViewerScrollUp(1)),
@@ -1152,6 +1185,15 @@ impl App {
                             KeyCode::Esc | KeyCode::Char('q') => Some(Action::LogViewerHide),
                             _ => None,
                         }
+                    }
+                    FocusArea::ChatInput => {
+                        // Handle ChatInput key events - delegate to component
+                        // Escape returns focus to conversation viewer
+                        if key.code == KeyCode::Esc {
+                            self.focus.focus(FocusArea::StreamViewer);
+                            return None;
+                        }
+                        self.chat_input.handle_event(&CrosstermEvent::Key(key))
                     }
                 };
 
@@ -1302,6 +1344,10 @@ impl App {
                     _ => None,
                 }
             }
+            FocusArea::ChatInput => {
+                // ChatInput doesn't handle mouse events currently
+                None
+            }
         }
     }
     
@@ -1410,13 +1456,15 @@ impl App {
                 self.input_mode = InputMode::Normal;
             }
             Action::FocusNext => {
-                self.focus.next();
+                let skip_chat = !self.show_conversation;
+                self.focus.next_skip_chat(skip_chat);
                 if self.focus.current() == FocusArea::ProcessMonitor {
                     self.process_monitor.ensure_selection();
                 }
             }
             Action::FocusPrev => {
-                self.focus.prev();
+                let skip_chat = !self.show_conversation;
+                self.focus.prev_skip_chat(skip_chat);
                 if self.focus.current() == FocusArea::ProcessMonitor {
                     self.process_monitor.ensure_selection();
                 }
@@ -1602,6 +1650,10 @@ impl App {
                 self.notification_manager.tick();
             }
             Action::LlmSendMessage(msg) => {
+                // Ensure conversation is visible when sending a message
+                if !self.show_conversation {
+                    self.show_conversation = true;
+                }
                 self.llm_manager.send_message(msg, None);
             }
             Action::LlmCancel => {
@@ -1715,6 +1767,13 @@ impl App {
             // Conversation viewer actions
             Action::ConversationToggle => {
                 self.show_conversation = !self.show_conversation;
+                // When opening conversation, focus the chat input for typing
+                if self.show_conversation {
+                    self.focus.focus(FocusArea::ChatInput);
+                } else {
+                    // When closing, return focus to terminal
+                    self.focus.focus(FocusArea::Terminal);
+                }
             }
             Action::ConversationScrollUp(n) => {
                 self.conversation_viewer.scroll_up(n);

@@ -84,6 +84,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"  # File logging
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Token Counting (Agent SDK)
+# ─────────────────────────────────────────────────────────────────────────────
+tiktoken-rs = "0.6"  # OpenAI tokenizer (cl100k_base for GPT-4)
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Utilities
 # ─────────────────────────────────────────────────────────────────────────────
 regex = "1"  # Pattern matching for filtering/grep (TRC-022)

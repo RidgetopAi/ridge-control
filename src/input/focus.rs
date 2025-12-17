@@ -14,28 +14,53 @@ pub enum FocusArea {
     ConfigPanel,
     /// When log viewer is open (overlay) - TRC-013
     LogViewer,
+    /// When chat input is focused (in conversation view)
+    ChatInput,
 }
 
 impl FocusArea {
     /// Focus ring for Tab cycling (excludes overlay areas)
+    /// ChatInput is conditionally included when conversation is visible
     pub const RING: &'static [FocusArea] = &[
         FocusArea::Terminal,
         FocusArea::ProcessMonitor,
         FocusArea::Menu,
+        FocusArea::ChatInput,
     ];
 
-    pub fn next(&self) -> FocusArea {
+    /// Get next focus area, optionally skipping ChatInput
+    pub fn next_with_skip(&self, skip_chat: bool) -> FocusArea {
         let idx = Self::RING.iter().position(|f| f == self).unwrap_or(0);
-        Self::RING[(idx + 1) % Self::RING.len()]
+        let mut next_idx = (idx + 1) % Self::RING.len();
+        
+        if skip_chat && Self::RING[next_idx] == FocusArea::ChatInput {
+            next_idx = (next_idx + 1) % Self::RING.len();
+        }
+        
+        Self::RING[next_idx]
     }
 
-    pub fn prev(&self) -> FocusArea {
+    /// Get previous focus area, optionally skipping ChatInput
+    pub fn prev_with_skip(&self, skip_chat: bool) -> FocusArea {
         let idx = Self::RING.iter().position(|f| f == self).unwrap_or(0);
-        if idx == 0 {
-            Self::RING[Self::RING.len() - 1]
-        } else {
-            Self::RING[idx - 1]
+        let ring_len = Self::RING.len();
+        let mut prev_idx = if idx == 0 { ring_len - 1 } else { idx - 1 };
+        
+        if skip_chat && Self::RING[prev_idx] == FocusArea::ChatInput {
+            prev_idx = if prev_idx == 0 { ring_len - 1 } else { prev_idx - 1 };
         }
+        
+        Self::RING[prev_idx]
+    }
+
+    #[allow(dead_code)]
+    pub fn next(&self) -> FocusArea {
+        self.next_with_skip(false)
+    }
+
+    #[allow(dead_code)]
+    pub fn prev(&self) -> FocusArea {
+        self.prev_with_skip(false)
     }
 }
 
@@ -59,12 +84,22 @@ impl FocusManager {
         self.current = area;
     }
 
+    #[allow(dead_code)]
     pub fn next(&mut self) {
         self.current = self.current.next();
     }
 
+    #[allow(dead_code)]
     pub fn prev(&mut self) {
         self.current = self.current.prev();
+    }
+
+    pub fn next_skip_chat(&mut self, skip_chat: bool) {
+        self.current = self.current.next_with_skip(skip_chat);
+    }
+
+    pub fn prev_skip_chat(&mut self, skip_chat: bool) {
+        self.current = self.current.prev_with_skip(skip_chat);
     }
 
     pub fn is_focused(&self, area: FocusArea) -> bool {
