@@ -121,6 +121,27 @@ impl ModelCatalog {
         self.models.keys().map(|s| s.as_str()).collect()
     }
 
+    /// List all unique provider names
+    pub fn providers(&self) -> Vec<&str> {
+        let mut providers: Vec<&str> = self.models.values()
+            .map(|m| m.provider.as_str())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        providers.sort();
+        providers
+    }
+
+    /// List all models for a specific provider
+    pub fn models_for_provider(&self, provider: &str) -> Vec<&str> {
+        let mut models: Vec<&str> = self.models.values()
+            .filter(|m| m.provider == provider)
+            .map(|m| m.name.as_str())
+            .collect();
+        models.sort();
+        models
+    }
+
     fn seed_defaults(&mut self) {
         // ─────────────────────────────────────────────────────────────────────
         // Anthropic Claude Models
@@ -263,5 +284,26 @@ mod tests {
         let catalog = ModelCatalog::new();
         let info = catalog.get("gemini-1.5-pro").unwrap();
         assert_eq!(info.max_context_tokens, 1_000_000);
+    }
+
+    #[test]
+    fn test_catalog_providers() {
+        let catalog = ModelCatalog::new();
+        let providers = catalog.providers();
+        assert!(providers.contains(&"anthropic"));
+        assert!(providers.contains(&"openai"));
+        assert!(providers.contains(&"gemini"));
+        assert!(providers.contains(&"grok"));
+        assert!(providers.contains(&"groq"));
+    }
+
+    #[test]
+    fn test_catalog_models_for_provider() {
+        let catalog = ModelCatalog::new();
+        let anthropic_models = catalog.models_for_provider("anthropic");
+        assert!(anthropic_models.iter().any(|m| m.contains("claude")));
+        
+        let openai_models = catalog.models_for_provider("openai");
+        assert!(openai_models.iter().any(|m| m.contains("gpt")));
     }
 }

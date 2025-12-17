@@ -1477,6 +1477,15 @@ impl App {
                 }
             }
             Action::OpenCommandPalette => {
+                // Populate dynamic provider/model commands before showing
+                let providers = self.model_catalog.providers();
+                let current_provider = self.llm_manager.current_provider();
+                self.command_palette.set_providers(&providers, current_provider);
+                
+                let models = self.model_catalog.models_for_provider(current_provider);
+                let current_model = self.llm_manager.current_model();
+                self.command_palette.set_models(&models, current_model);
+                
                 self.command_palette.show();
                 self.input_mode = InputMode::CommandPalette;
             }

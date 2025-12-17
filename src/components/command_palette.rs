@@ -18,18 +18,23 @@ use crate::config::Theme;
 #[derive(Debug, Clone)]
 pub struct Command {
     /// Unique identifier for the command
-    pub id: &'static str,
+    pub id: String,
     /// Display name shown in palette
-    pub name: &'static str,
+    pub name: String,
     /// Brief description
-    pub description: &'static str,
+    pub description: String,
     /// The action to dispatch when selected
     pub action: Action,
 }
 
 impl Command {
-    pub const fn new(id: &'static str, name: &'static str, description: &'static str, action: Action) -> Self {
-        Self { id, name, description, action }
+    pub fn new(id: impl Into<String>, name: impl Into<String>, description: impl Into<String>, action: Action) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            description: description.into(),
+            action,
+        }
     }
 }
 
@@ -98,6 +103,55 @@ impl CommandRegistry {
     pub fn add_command(&mut self, cmd: Command) {
         self.commands.push(cmd);
     }
+
+    /// Remove all commands with IDs starting with the given prefix
+    pub fn remove_commands_with_prefix(&mut self, prefix: &str) {
+        self.commands.retain(|c| !c.id.starts_with(prefix));
+    }
+
+    /// Set available providers (removes old provider commands and adds new ones)
+    pub fn set_providers(&mut self, providers: &[&str], current_provider: &str) {
+        self.remove_commands_with_prefix("provider:");
+        
+        for provider in providers {
+            let is_current = *provider == current_provider;
+            let name = if is_current {
+                format!("Provider: {} ✓", provider)
+            } else {
+                format!("Provider: {}", provider)
+            };
+            let description = format!("Switch to {} provider", provider);
+            
+            self.commands.push(Command::new(
+                format!("provider:{}", provider),
+                name,
+                description,
+                Action::LlmSelectProvider(provider.to_string()),
+            ));
+        }
+    }
+
+    /// Set available models for current provider (removes old model commands and adds new ones)
+    pub fn set_models(&mut self, models: &[&str], current_model: &str) {
+        self.remove_commands_with_prefix("model:");
+        
+        for model in models {
+            let is_current = *model == current_model;
+            let name = if is_current {
+                format!("Model: {} ✓", model)
+            } else {
+                format!("Model: {}", model)
+            };
+            let description = format!("Switch to {} model", model);
+            
+            self.commands.push(Command::new(
+                format!("model:{}", model),
+                name,
+                description,
+                Action::LlmSelectModel(model.to_string()),
+            ));
+        }
+    }
 }
 
 impl Default for CommandRegistry {
@@ -150,6 +204,16 @@ impl CommandPalette {
         }
     }
 
+    /// Set available providers in the command palette
+    pub fn set_providers(&mut self, providers: &[&str], current_provider: &str) {
+        self.registry.set_providers(providers, current_provider);
+    }
+
+    /// Set available models in the command palette
+    pub fn set_models(&mut self, models: &[&str], current_model: &str) {
+        self.registry.set_models(models, current_model);
+    }
+
     pub fn hide(&mut self) {
         self.visible = false;
         self.query.clear();
@@ -183,8 +247,8 @@ impl CommandPalette {
 
             for (idx, cmd) in self.registry.commands().iter().enumerate() {
                 // Match against both name and description
-                let name_utf32: Utf32String = cmd.name.into();
-                let desc_utf32: Utf32String = cmd.description.into();
+                let name_utf32: Utf32String = cmd.name.as_str().into();
+                let desc_utf32: Utf32String = cmd.description.as_str().into();
 
                 let mut indices = Vec::new();
                 let name_score = pattern.indices(
@@ -388,7 +452,7 @@ impl CommandPalette {
         // Highlight matched characters in name
         if indices.is_empty() {
             name_spans.push(Span::styled(
-                cmd.name,
+                cmd.name.clone(),
                 Style::default().fg(theme.command_palette.item_fg.to_color()),
             ));
         } else {
