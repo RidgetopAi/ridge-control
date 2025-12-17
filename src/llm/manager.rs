@@ -294,6 +294,62 @@ impl LLMManager {
         }
     }
 
+    /// Send a pre-built LLMRequest (for AgentEngine to use with ContextManager-built requests).
+    /// Unlike send_message(), this does NOT modify internal conversation state.
+    /// The caller (AgentEngine) is responsible for managing conversation history via AgentThread.
+    pub fn send_request(&mut self, request: LLMRequest) {
+        // Use provider from request model, or fall back to current
+        let provider = match self.registry.get(&self.current_provider) {
+            Some(p) => p,
+            None => {
+                let _ = self.event_tx.send(LLMEvent::Error(LLMError::ProviderError {
+                    status: 0,
+                    message: "No provider configured".to_string(),
+                }));
+                return;
+            }
+        };
+
+        let event_tx = self.event_tx.clone();
+        let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
+        self.cancel_tx = Some(cancel_tx);
+
+        tokio::spawn(async move {
+            match provider.stream(request).await {
+                Ok(mut stream) => {
+                    loop {
+                        tokio::select! {
+                            chunk = stream.next() => {
+                                match chunk {
+                                    Some(Ok(c)) => {
+                                        if event_tx.send(LLMEvent::Chunk(c)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                    Some(Err(e)) => {
+                                        let _ = event_tx.send(LLMEvent::Error(e));
+                                        break;
+                                    }
+                                    None => {
+                                        let _ = event_tx.send(LLMEvent::Complete);
+                                        break;
+                                    }
+                                }
+                            }
+                            _ = cancel_rx.recv() => {
+                                let _ = event_tx.send(LLMEvent::Error(LLMError::StreamInterrupted));
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    let _ = event_tx.send(LLMEvent::Error(e));
+                }
+            }
+        });
+    }
+
     pub fn send_message(&mut self, user_message: String, system_prompt: Option<String>) {
         self.add_user_message(user_message);
 
