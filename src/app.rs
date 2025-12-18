@@ -96,6 +96,8 @@ pub struct App {
     selected_stream_index: Option<usize>,
     // Layout areas for mouse hit-testing (TRC-010)
     tab_bar_area: Rect,
+    // Conversation area for mouse hit-testing (scroll routing)
+    conversation_area: Rect,
     // Secure key storage (TRC-011)
     keystore: Option<KeyStore>,
     // Session persistence (TRC-012)
@@ -245,6 +247,7 @@ impl App {
             show_stream_viewer: false,
             selected_stream_index: initial_stream_index,
             tab_bar_area: Rect::default(),
+            conversation_area: Rect::default(),
             keystore,
             session_manager,
             log_viewer: LogViewer::new(),
@@ -952,7 +955,12 @@ impl App {
                         block.inner(conv_chunks[0])
                     };
                     self.conversation_viewer.set_inner_area(conv_inner);
+                    
+                    // Save conversation area for mouse hit-testing
+                    self.conversation_area = conv_chunks[0];
                 } else {
+                    // Clear conversation area when not visible
+                    self.conversation_area = Rect::default();
                     if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
                         session.terminal().render(
                             frame,
@@ -1185,15 +1193,34 @@ impl App {
                             self.focus.focus(FocusArea::ChatInput);
                             return None;
                         }
-                        match key.code {
-                            KeyCode::Char('j') | KeyCode::Down => Some(Action::StreamViewerScrollDown(1)),
-                            KeyCode::Char('k') | KeyCode::Up => Some(Action::StreamViewerScrollUp(1)),
-                            KeyCode::Char('g') => Some(Action::StreamViewerScrollToTop),
-                            KeyCode::Char('G') => Some(Action::StreamViewerScrollToBottom),
-                            KeyCode::PageUp => Some(Action::StreamViewerScrollUp(10)),
-                            KeyCode::PageDown => Some(Action::StreamViewerScrollDown(10)),
-                            KeyCode::Esc | KeyCode::Char('q') => Some(Action::StreamViewerHide),
-                            _ => None,
+                        
+                        // When conversation is visible, route scroll keys to conversation viewer
+                        if self.show_conversation {
+                            match key.code {
+                                KeyCode::Char('j') | KeyCode::Down => Some(Action::ConversationScrollDown(1)),
+                                KeyCode::Char('k') | KeyCode::Up => Some(Action::ConversationScrollUp(1)),
+                                KeyCode::Char('g') => Some(Action::ConversationScrollToTop),
+                                KeyCode::Char('G') => Some(Action::ConversationScrollToBottom),
+                                KeyCode::PageUp => Some(Action::ConversationScrollUp(10)),
+                                KeyCode::PageDown => Some(Action::ConversationScrollDown(10)),
+                                KeyCode::Char('a') => {
+                                    self.conversation_viewer.toggle_auto_scroll();
+                                    None
+                                }
+                                KeyCode::Esc | KeyCode::Char('q') => Some(Action::StreamViewerHide),
+                                _ => None,
+                            }
+                        } else {
+                            match key.code {
+                                KeyCode::Char('j') | KeyCode::Down => Some(Action::StreamViewerScrollDown(1)),
+                                KeyCode::Char('k') | KeyCode::Up => Some(Action::StreamViewerScrollUp(1)),
+                                KeyCode::Char('g') => Some(Action::StreamViewerScrollToTop),
+                                KeyCode::Char('G') => Some(Action::StreamViewerScrollToBottom),
+                                KeyCode::PageUp => Some(Action::StreamViewerScrollUp(10)),
+                                KeyCode::PageDown => Some(Action::StreamViewerScrollDown(10)),
+                                KeyCode::Esc | KeyCode::Char('q') => Some(Action::StreamViewerHide),
+                                _ => None,
+                            }
                         }
                     }
                     FocusArea::ConfigPanel => {
@@ -1330,6 +1357,27 @@ impl App {
             }
         }
         
+        // Mouse scroll over conversation area - route to conversation regardless of focus
+        if self.conversation_area.height > 0 {
+            let in_conversation = mouse.row >= self.conversation_area.y
+                && mouse.row < self.conversation_area.y + self.conversation_area.height
+                && mouse.column >= self.conversation_area.x
+                && mouse.column < self.conversation_area.x + self.conversation_area.width;
+            
+            if in_conversation {
+                match mouse.kind {
+                    MouseEventKind::ScrollUp => return Some(Action::ConversationScrollUp(3)),
+                    MouseEventKind::ScrollDown => return Some(Action::ConversationScrollDown(3)),
+                    MouseEventKind::Down(MouseButton::Left) => {
+                        // Click on conversation focuses StreamViewer (conversation history)
+                        self.focus.focus(FocusArea::StreamViewer);
+                        return None;
+                    }
+                    _ => {}
+                }
+            }
+        }
+        
         // Focus-based mouse handling
         match self.focus.current() {
             FocusArea::Terminal => match mouse.kind {
@@ -1356,7 +1404,22 @@ impl App {
                 self.menu.handle_event(&CrosstermEvent::Mouse(mouse))
             }
             // Overlay areas
-            FocusArea::StreamViewer => None,
+            FocusArea::StreamViewer => {
+                // Handle mouse scroll for conversation/stream viewer
+                if self.show_conversation {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => Some(Action::ConversationScrollUp(3)),
+                        MouseEventKind::ScrollDown => Some(Action::ConversationScrollDown(3)),
+                        _ => None,
+                    }
+                } else {
+                    match mouse.kind {
+                        MouseEventKind::ScrollUp => Some(Action::StreamViewerScrollUp(3)),
+                        MouseEventKind::ScrollDown => Some(Action::StreamViewerScrollDown(3)),
+                        _ => None,
+                    }
+                }
+            }
             FocusArea::ConfigPanel => {
                 // Handle ConfigPanel mouse events (TRC-014)
                 self.config_panel.handle_event(&CrosstermEvent::Mouse(mouse))
@@ -1688,11 +1751,16 @@ impl App {
                 self.notification_manager.tick();
             }
             Action::LlmSendMessage(msg) => {
+                tracing::info!("Sending LLM message: {} chars", msg.len());
                 // Ensure conversation is visible when sending a message
                 if !self.show_conversation {
                     self.show_conversation = true;
                 }
+                tracing::debug!("LLM manager configured: {}", self.llm_manager.is_configured());
+                tracing::debug!("Current provider: {}", self.llm_manager.current_provider());
+                tracing::debug!("Current model: {}", self.llm_manager.current_model());
                 self.llm_manager.send_message(msg, None);
+                tracing::info!("Message sent to LLM manager");
             }
             Action::LlmCancel => {
                 self.llm_manager.cancel();

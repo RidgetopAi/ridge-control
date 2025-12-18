@@ -439,13 +439,6 @@ impl ConversationViewer {
             }
         }
 
-        self.line_count = lines.len();
-
-        // Auto-scroll to bottom if enabled and new content
-        if self.auto_scroll && self.line_count > self.visible_height as usize {
-            self.scroll_offset = (self.line_count - self.visible_height as usize) as u16;
-        }
-
         // Handle empty state
         if lines.is_empty() {
             lines.push(Line::from(Span::styled(
@@ -456,12 +449,27 @@ impl ConversationViewer {
             )));
         }
 
+        // Create paragraph with wrap to measure actual wrapped line count
         let paragraph = Paragraph::new(lines)
-            .block(block)
-            .wrap(Wrap { trim: false })
-            .scroll((self.scroll_offset, 0));
+            .block(block.clone())
+            .wrap(Wrap { trim: false });
 
-        frame.render_widget(paragraph, conversation_area);
+        // Calculate actual line count after text wrapping
+        // This accounts for long lines that wrap to multiple visual lines
+        self.line_count = paragraph.line_count(inner.width);
+
+        // Auto-scroll to bottom if enabled and new content
+        if self.auto_scroll && self.line_count > self.visible_height as usize {
+            self.scroll_offset = (self.line_count - self.visible_height as usize) as u16;
+        }
+        
+        // Clamp scroll offset to valid range (prevents scrolling past content)
+        let max_scroll = self.line_count.saturating_sub(self.visible_height as usize) as u16;
+        self.scroll_offset = self.scroll_offset.min(max_scroll);
+
+        // Apply scroll offset and render
+        let scrolled_paragraph = paragraph.scroll((self.scroll_offset, 0));
+        frame.render_widget(scrolled_paragraph, conversation_area);
 
         // Render scrollbar if content exceeds visible area
         if self.line_count > self.visible_height as usize {
@@ -470,9 +478,10 @@ impl ConversationViewer {
                 .begin_symbol(Some("↑"))
                 .end_symbol(Some("↓"));
 
-            let mut scrollbar_state = ScrollbarState::new(self.line_count)
-                .position(self.scroll_offset as usize)
-                .viewport_content_length(self.visible_height as usize);
+            // ScrollbarState uses content length minus viewport as the scrollable range
+            let scrollable_range = self.line_count.saturating_sub(self.visible_height as usize);
+            let mut scrollbar_state = ScrollbarState::new(scrollable_range)
+                .position(self.scroll_offset as usize);
 
             frame.render_stateful_widget(
                 scrollbar,
@@ -773,11 +782,10 @@ impl ConversationViewer {
     }
 
     pub fn scroll_down(&mut self, n: u16) {
-        self.scroll_offset = self.scroll_offset.saturating_add(n);
+        let max_scroll = self.line_count.saturating_sub(self.visible_height as usize) as u16;
+        self.scroll_offset = self.scroll_offset.saturating_add(n).min(max_scroll);
         // Re-enable auto-scroll if at bottom
-        if self.line_count <= self.visible_height as usize
-            || self.scroll_offset as usize >= self.line_count - self.visible_height as usize
-        {
+        if self.scroll_offset >= max_scroll {
             self.auto_scroll = true;
         }
     }
@@ -941,12 +949,12 @@ impl ConversationViewer {
                     None
                 }
             }
-            KeyCode::Char('j') | KeyCode::Down => Some(Action::ScrollDown(1)),
-            KeyCode::Char('k') | KeyCode::Up => Some(Action::ScrollUp(1)),
-            KeyCode::Char('g') => Some(Action::ScrollToTop),
-            KeyCode::Char('G') => Some(Action::ScrollToBottom),
-            KeyCode::PageUp => Some(Action::ScrollPageUp),
-            KeyCode::PageDown => Some(Action::ScrollPageDown),
+            KeyCode::Char('j') | KeyCode::Down => Some(Action::ConversationScrollDown(1)),
+            KeyCode::Char('k') | KeyCode::Up => Some(Action::ConversationScrollUp(1)),
+            KeyCode::Char('g') => Some(Action::ConversationScrollToTop),
+            KeyCode::Char('G') => Some(Action::ConversationScrollToBottom),
+            KeyCode::PageUp => Some(Action::ConversationScrollUp(10)),
+            KeyCode::PageDown => Some(Action::ConversationScrollDown(10)),
             KeyCode::Char('a') => {
                 self.toggle_auto_scroll();
                 None

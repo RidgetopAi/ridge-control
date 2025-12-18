@@ -351,11 +351,16 @@ impl LLMManager {
     }
 
     pub fn send_message(&mut self, user_message: String, system_prompt: Option<String>) {
+        tracing::info!("LLMManager::send_message called");
         self.add_user_message(user_message);
 
         let provider = match self.registry.get(&self.current_provider) {
-            Some(p) => p,
+            Some(p) => {
+                tracing::debug!("Got provider: {}", p.name());
+                p
+            }
             None => {
+                tracing::error!("No provider configured! current_provider={}", self.current_provider);
                 let _ = self.event_tx.send(LLMEvent::Error(LLMError::ProviderError {
                     status: 0,
                     message: "No provider configured".to_string(),
@@ -364,6 +369,7 @@ impl LLMManager {
             }
         };
 
+        tracing::debug!("Building LLM request");
         let request = LLMRequest {
             model: self.current_model.clone(),
             system: system_prompt,
@@ -371,34 +377,43 @@ impl LLMManager {
             stream: true,
             ..Default::default()
         };
+        tracing::debug!("Request built with {} messages", request.messages.len());
 
         let event_tx = self.event_tx.clone();
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
         self.cancel_tx = Some(cancel_tx);
 
+        tracing::info!("Spawning async LLM request task");
         tokio::spawn(async move {
+            tracing::debug!("Async task started, calling provider.stream()");
             match provider.stream(request).await {
                 Ok(mut stream) => {
+                    tracing::debug!("Stream created successfully");
                     loop {
                         tokio::select! {
                             chunk = stream.next() => {
                                 match chunk {
                                     Some(Ok(c)) => {
+                                        tracing::trace!("Got stream chunk: {:?}", c);
                                         if event_tx.send(LLMEvent::Chunk(c)).is_err() {
+                                            tracing::warn!("Event channel closed");
                                             break;
                                         }
                                     }
                                     Some(Err(e)) => {
+                                        tracing::error!("Stream error: {}", e);
                                         let _ = event_tx.send(LLMEvent::Error(e));
                                         break;
                                     }
                                     None => {
+                                        tracing::info!("Stream complete");
                                         let _ = event_tx.send(LLMEvent::Complete);
                                         break;
                                     }
                                 }
                             }
                             _ = cancel_rx.recv() => {
+                                tracing::info!("Stream cancelled");
                                 let _ = event_tx.send(LLMEvent::Error(LLMError::StreamInterrupted));
                                 break;
                             }
@@ -406,10 +421,12 @@ impl LLMManager {
                     }
                 }
                 Err(e) => {
+                    tracing::error!("Failed to create stream: {}", e);
                     let _ = event_tx.send(LLMEvent::Error(e));
                 }
             }
         });
+        tracing::debug!("send_message completed, task spawned");
     }
 }
 

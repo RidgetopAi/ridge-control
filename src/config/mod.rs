@@ -3,12 +3,14 @@
 
 mod keybindings;
 mod keystore;
+mod llm;
 mod session;
 mod theme;
 mod watcher;
 
 pub use keybindings::KeybindingsConfig;
 pub use keystore::{KeyId, KeyStore, SecretString};
+pub use llm::{LLMConfig, LLMDefaults, LLMParameters, ProviderConfig};
 pub use session::{SessionData, SessionManager};
 pub use theme::Theme;
 pub use watcher::{ConfigWatcherMode, ConfigEvent};
@@ -23,6 +25,7 @@ const CONFIG_DIR: &str = "ridge-control";
 const MAIN_CONFIG_FILE: &str = "config.toml";
 const KEYBINDINGS_FILE: &str = "keybindings.toml";
 const THEME_FILE: &str = "theme.toml";
+const LLM_CONFIG_FILE: &str = "llm.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[derive(Default)]
@@ -102,6 +105,7 @@ pub struct ConfigManager {
     app_config: AppConfig,
     keybindings: KeybindingsConfig,
     theme: Theme,
+    llm_config: LLMConfig,
 }
 
 impl ConfigManager {
@@ -111,12 +115,14 @@ impl ConfigManager {
         let app_config = Self::load_app_config(&config_dir);
         let keybindings = Self::load_keybindings(&config_dir);
         let theme = Self::load_theme(&config_dir);
+        let llm_config = Self::load_llm_config(&config_dir);
         
         Ok(Self {
             config_dir,
             app_config,
             keybindings,
             theme,
+            llm_config,
         })
     }
     
@@ -136,10 +142,25 @@ impl ConfigManager {
         &self.theme
     }
     
+    pub fn llm_config(&self) -> &LLMConfig {
+        &self.llm_config
+    }
+    
+    pub fn llm_config_mut(&mut self) -> &mut LLMConfig {
+        &mut self.llm_config
+    }
+    
+    pub fn save_llm_config(&self) -> Result<()> {
+        self.ensure_config_dir()?;
+        let path = self.config_dir.join(LLM_CONFIG_FILE);
+        self.llm_config.save(&path)
+    }
+    
     pub fn reload_all(&mut self) {
         self.app_config = Self::load_app_config(&self.config_dir);
         self.keybindings = Self::load_keybindings(&self.config_dir);
         self.theme = Self::load_theme(&self.config_dir);
+        self.llm_config = Self::load_llm_config(&self.config_dir);
     }
     
     pub fn reload_file(&mut self, path: &Path) {
@@ -154,6 +175,9 @@ impl ConfigManager {
             }
             Some(THEME_FILE) => {
                 self.theme = Self::load_theme(&self.config_dir);
+            }
+            Some(LLM_CONFIG_FILE) => {
+                self.llm_config = Self::load_llm_config(&self.config_dir);
             }
             _ => {
                 self.reload_all();
@@ -179,6 +203,11 @@ impl ConfigManager {
     
     fn load_theme(config_dir: &Path) -> Theme {
         let path = config_dir.join(THEME_FILE);
+        Self::load_toml_file(&path).unwrap_or_default()
+    }
+    
+    fn load_llm_config(config_dir: &Path) -> LLMConfig {
+        let path = config_dir.join(LLM_CONFIG_FILE);
         Self::load_toml_file(&path).unwrap_or_default()
     }
     
