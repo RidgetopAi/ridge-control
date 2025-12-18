@@ -11,6 +11,7 @@ pub mod notification;
 pub mod pane_layout;
 pub mod process_monitor;
 pub mod search;
+pub mod settings_editor;
 pub mod spinner;
 pub mod spinner_manager;
 pub mod stream_viewer;

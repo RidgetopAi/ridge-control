@@ -394,6 +394,40 @@ pub enum Action {
     /// End mouse drag
     PaneEndDrag,
 
+    // Settings Editor actions (TS-003+)
+    /// Show settings editor
+    SettingsShow,
+    /// Hide settings editor
+    SettingsClose,
+    /// Toggle settings editor visibility
+    SettingsToggle,
+    /// Navigate to next section
+    SettingsNextSection,
+    /// Navigate to previous section
+    SettingsPrevSection,
+    /// Navigate to next item within section
+    SettingsNextItem,
+    /// Navigate to previous item within section
+    SettingsPrevItem,
+    /// Scroll settings up
+    SettingsScrollUp(u16),
+    /// Scroll settings down
+    SettingsScrollDown(u16),
+    /// Start editing a field (API key entry)
+    SettingsStartEdit,
+    /// Cancel current edit
+    SettingsCancelEdit,
+    /// API key entered for a provider
+    SettingsKeyEntered { provider: String, key: String },
+    /// Provider selection changed
+    SettingsProviderChanged(String),
+    /// Model selection changed
+    SettingsModelChanged(String),
+    /// Test current API key
+    SettingsTestKey,
+    /// Save settings
+    SettingsSave,
+
     None,
 }
 
