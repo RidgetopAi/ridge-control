@@ -48,6 +48,10 @@ pub trait Provider: Send + Sync {
             .sum();
         Ok((chars / 4) as u32)
     }
+
+    /// Test if the API key is valid by making a minimal API call (TS-007)
+    /// Returns Ok(()) if key is valid, Err with specific error otherwise
+    async fn test_key(&self) -> Result<(), LLMError>;
 }
 
 /// Model information

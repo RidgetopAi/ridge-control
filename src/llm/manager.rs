@@ -435,3 +435,37 @@ impl Default for LLMManager {
         Self::new()
     }
 }
+
+/// Test an API key for a specific provider (TS-007)
+/// Creates a temporary provider instance and validates the key
+/// Returns Ok(()) if valid, Err with LLMError if invalid
+pub async fn test_api_key(provider_name: &str, api_key: &str) -> Result<(), LLMError> {
+    use super::provider::Provider;
+    
+    match provider_name.to_lowercase().as_str() {
+        "anthropic" => {
+            let provider = AnthropicProvider::new(api_key);
+            provider.test_key().await
+        }
+        "openai" => {
+            let provider = OpenAIProvider::new(api_key);
+            provider.test_key().await
+        }
+        "gemini" | "google" => {
+            let provider = GeminiProvider::new(api_key);
+            provider.test_key().await
+        }
+        "grok" | "xai" => {
+            let provider = GrokProvider::new(api_key);
+            provider.test_key().await
+        }
+        "groq" => {
+            let provider = GroqProvider::new(api_key);
+            provider.test_key().await
+        }
+        _ => Err(LLMError::ProviderError {
+            status: 0,
+            message: format!("Unknown provider: {}", provider_name),
+        }),
+    }
+}

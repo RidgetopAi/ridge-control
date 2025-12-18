@@ -16,8 +16,9 @@ use ratatui::{
 };
 
 use crate::action::Action;
+use crate::agent::ModelCatalog;
 use crate::components::Component;
-use crate::config::{LLMConfig, Theme};
+use crate::config::{KeyId, KeyStore, LLMConfig, Theme};
 
 /// Section within the settings editor
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -61,7 +62,14 @@ pub enum SettingsInputMode {
     /// Normal navigation mode
     Normal,
     /// Editing a text field (e.g., API key input)
-    Editing { field: String, buffer: String, masked: bool },
+    Editing { 
+        field: String, 
+        buffer: String, 
+        /// Whether input is masked (shows dots instead of chars)
+        masked: bool,
+        /// Whether mask is currently hidden (user toggled visibility)
+        show_plain: bool,
+    },
 }
 
 /// Provider with key status
@@ -69,6 +77,19 @@ pub enum SettingsInputMode {
 pub struct ProviderKeyStatus {
     pub name: String,
     pub has_key: bool,
+}
+
+/// Status of a key test operation (TS-007)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KeyTestStatus {
+    /// No test in progress
+    Idle,
+    /// Testing in progress for this provider
+    Testing(String),
+    /// Test passed
+    Success(String),
+    /// Test failed with error message
+    Failed(String, String),
 }
 
 /// Settings Editor component
@@ -93,6 +114,10 @@ pub struct SettingsEditor {
     available_models: Vec<String>,
     /// Current LLM config snapshot
     config: LLMConfig,
+    /// Key test status (TS-007)
+    key_test_status: KeyTestStatus,
+    /// Model catalog for rich model info (TS-009)
+    model_catalog: ModelCatalog,
 }
 
 impl SettingsEditor {
@@ -114,6 +139,8 @@ impl SettingsEditor {
             ],
             available_models: Vec::new(),
             config: LLMConfig::default(),
+            key_test_status: KeyTestStatus::Idle,
+            model_catalog: ModelCatalog::new(),
         }
     }
 
@@ -131,6 +158,82 @@ impl SettingsEditor {
     /// Set provider key statuses
     pub fn set_provider_keys(&mut self, keys: Vec<ProviderKeyStatus>) {
         self.provider_keys = keys;
+    }
+
+    /// Load key statuses from the keystore (TS-006)
+    /// Queries the keystore to determine which providers have keys configured
+    pub fn load_key_statuses_from_keystore(&mut self, keystore: &KeyStore) {
+        let mut statuses = Vec::new();
+        
+        for provider in &self.available_providers {
+            let key_id = KeyId::from_provider_str(provider);
+            let has_key = keystore.exists(&key_id).unwrap_or(false);
+            statuses.push(ProviderKeyStatus {
+                name: provider.clone(),
+                has_key,
+            });
+        }
+        
+        self.provider_keys = statuses;
+    }
+
+    /// Mark a single provider's key status as configured (TS-006)
+    /// Called after successfully storing a key
+    pub fn mark_key_configured(&mut self, provider: &str) {
+        if let Some(status) = self.provider_keys.iter_mut().find(|s| s.name == provider) {
+            status.has_key = true;
+        } else {
+            self.provider_keys.push(ProviderKeyStatus {
+                name: provider.to_string(),
+                has_key: true,
+            });
+        }
+    }
+
+    /// Get the provider name for the current editing session (TS-006)
+    /// Returns None if not currently editing
+    pub fn editing_provider(&self) -> Option<&str> {
+        if let SettingsInputMode::Editing { field, .. } = &self.input_mode {
+            Some(field.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// Get the currently selected provider in API Keys section (TS-007)
+    pub fn selected_provider(&self) -> Option<&str> {
+        if self.current_section() == SettingsSection::ApiKeys {
+            self.available_providers.get(self.selected_item).map(|s| s.as_str())
+        } else {
+            None
+        }
+    }
+
+    /// Start testing a key (TS-007)
+    pub fn start_key_test(&mut self, provider: &str) {
+        self.key_test_status = KeyTestStatus::Testing(provider.to_string());
+    }
+
+    /// Update key test result (TS-007)
+    pub fn set_key_test_result(&mut self, provider: &str, success: bool, error: Option<String>) {
+        if success {
+            self.key_test_status = KeyTestStatus::Success(provider.to_string());
+        } else {
+            self.key_test_status = KeyTestStatus::Failed(
+                provider.to_string(),
+                error.unwrap_or_else(|| "Unknown error".to_string()),
+            );
+        }
+    }
+
+    /// Clear key test status (TS-007)
+    pub fn clear_key_test_status(&mut self) {
+        self.key_test_status = KeyTestStatus::Idle;
+    }
+
+    /// Get current key test status (TS-007)
+    pub fn key_test_status(&self) -> &KeyTestStatus {
+        &self.key_test_status
     }
 
     /// Set available models for current provider
@@ -245,9 +348,82 @@ impl SettingsEditor {
                     field: provider.clone(),
                     buffer: String::new(),
                     masked: true,
+                    show_plain: false,
                 };
             }
         }
+    }
+
+    /// Toggle visibility of masked input (Ctrl+U)
+    pub fn toggle_mask_visibility(&mut self) {
+        if let SettingsInputMode::Editing { show_plain, .. } = &mut self.input_mode {
+            *show_plain = !*show_plain;
+        }
+    }
+
+    /// Clear the current input buffer (Ctrl+K)
+    pub fn clear_input(&mut self) {
+        if let SettingsInputMode::Editing { buffer, .. } = &mut self.input_mode {
+            buffer.clear();
+        }
+    }
+
+    /// Paste text into input buffer
+    pub fn paste_text(&mut self, text: &str) {
+        if let SettingsInputMode::Editing { buffer, .. } = &mut self.input_mode {
+            // Filter to only printable ASCII chars (API keys are typically alphanumeric + symbols)
+            let filtered: String = text.chars()
+                .filter(|c| c.is_ascii_graphic())
+                .collect();
+            buffer.push_str(&filtered);
+        }
+    }
+
+    /// Get expected key prefix hint for a provider
+    fn key_prefix_hint(provider: &str) -> &'static str {
+        match provider {
+            "anthropic" => "sk-ant-...",
+            "openai" => "sk-...",
+            "gemini" => "AI...",
+            "grok" => "xai-...",
+            "groq" => "gsk_...",
+            _ => "",
+        }
+    }
+
+    /// Validate key format for a provider (basic checks)
+    fn validate_key_format(provider: &str, key: &str) -> Option<&'static str> {
+        if key.is_empty() {
+            return Some("Key cannot be empty");
+        }
+        if key.len() < 10 {
+            return Some("Key too short");
+        }
+        // Provider-specific prefix checks
+        match provider {
+            "anthropic" => {
+                if !key.starts_with("sk-ant-") {
+                    return Some("Expected prefix: sk-ant-");
+                }
+            }
+            "openai" => {
+                if !key.starts_with("sk-") {
+                    return Some("Expected prefix: sk-");
+                }
+            }
+            "groq" => {
+                if !key.starts_with("gsk_") {
+                    return Some("Expected prefix: gsk_");
+                }
+            }
+            "grok" => {
+                if !key.starts_with("xai-") {
+                    return Some("Expected prefix: xai-");
+                }
+            }
+            _ => {}
+        }
+        None
     }
 
     /// Cancel editing and return to normal mode
@@ -377,6 +553,22 @@ impl SettingsEditor {
                 self.handle_edit_backspace();
                 None
             }
+            // Ctrl+U: Toggle mask visibility
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.toggle_mask_visibility();
+                None
+            }
+            // Ctrl+K: Clear input
+            KeyCode::Char('k') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.clear_input();
+                None
+            }
+            // Ctrl+V: Paste (clipboard handled externally, but we accept pasted text)
+            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                // Note: Terminal paste comes as rapid char events, not Ctrl+V
+                // This is a placeholder for potential clipboard integration
+                None
+            }
             KeyCode::Char(c) => {
                 self.handle_edit_char(c);
                 None
@@ -446,6 +638,10 @@ impl SettingsEditor {
                 theme.colors.error.to_color()
             };
 
+            // Selection indicator (arrow for selected, space for others)
+            let selector = if is_selected { "▸" } else { " " };
+            let selector_style = Style::default().fg(theme.colors.accent.to_color());
+
             let name_style = if is_selected {
                 Style::default()
                     .fg(theme.colors.accent.to_color())
@@ -455,35 +651,168 @@ impl SettingsEditor {
             };
 
             // Show input field if editing this provider
-            if let SettingsInputMode::Editing { field, buffer, masked } = &self.input_mode {
+            if let SettingsInputMode::Editing { field, buffer, masked, show_plain } = &self.input_mode {
                 if field == provider {
-                    let display = if *masked {
+                    // Show masked or plain based on toggle
+                    let display = if *masked && !*show_plain {
                         "•".repeat(buffer.len())
                     } else {
                         buffer.clone()
                     };
+                    let char_count = format!(" ({} chars)", buffer.len());
+                    
+                    // Visibility indicator
+                    let vis_icon = if *show_plain { "👁" } else { "🔒" };
+                    
                     lines.push(Line::from(vec![
-                        Span::styled(format!("  {:12} ", provider), name_style),
+                        Span::styled(format!(" {} ", selector), selector_style),
+                        Span::styled(format!("{:12} ", provider), name_style),
                         Span::styled("[", Style::default().fg(theme.colors.muted.to_color())),
                         Span::styled(display, Style::default().fg(theme.colors.accent.to_color())),
                         Span::styled("█", Style::default().fg(theme.colors.accent.to_color())),
                         Span::styled("]", Style::default().fg(theme.colors.muted.to_color())),
+                        Span::styled(format!(" {} ", vis_icon), Style::default().fg(theme.colors.muted.to_color())),
+                        Span::styled(char_count, Style::default().fg(theme.colors.muted.to_color())),
+                    ]));
+                    
+                    // Add format hint if buffer is empty
+                    if buffer.is_empty() {
+                        let prefix_hint = Self::key_prefix_hint(provider);
+                        if !prefix_hint.is_empty() {
+                            lines.push(Line::from(vec![
+                                Span::styled("                    ", Style::default()),
+                                Span::styled(format!("Format: {}", prefix_hint), Style::default().fg(theme.colors.muted.to_color())),
+                            ]));
+                        }
+                    }
+                    
+                    // Add hint line with keybindings
+                    lines.push(Line::from(vec![
+                        Span::styled("                    ", Style::default()),
+                        Span::styled("↵ save  ", Style::default().fg(theme.colors.success.to_color())),
+                        Span::styled("Esc cancel  ", Style::default().fg(theme.colors.muted.to_color())),
+                        Span::styled("^U show/hide  ", Style::default().fg(theme.colors.secondary.to_color())),
+                        Span::styled("^K clear", Style::default().fg(theme.colors.warning.to_color())),
                     ]));
                     continue;
                 }
             }
 
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {:12} ", provider), name_style),
+            // Check test status for this provider (TS-007)
+            let test_status_for_provider = match &self.key_test_status {
+                KeyTestStatus::Testing(p) if p == provider => Some("⏳ testing..."),
+                KeyTestStatus::Success(p) if p == provider => Some("✓ valid"),
+                KeyTestStatus::Failed(p, _) if p == provider => Some("✗ invalid"),
+                _ => None,
+            };
+
+            // Build the line with optional action hints for selected item
+            let mut spans = vec![
+                Span::styled(format!(" {} ", selector), selector_style),
+                Span::styled(format!("{:12} ", provider), name_style),
                 Span::styled(status_icon.to_string(), Style::default().fg(status_color)),
                 Span::styled(
                     if has_key { " configured" } else { " not set" }.to_string(),
                     Style::default().fg(theme.colors.muted.to_color()),
                 ),
-            ]));
+            ];
+
+            // Show test status if applicable (TS-007)
+            if let Some(status) = test_status_for_provider {
+                let color = match &self.key_test_status {
+                    KeyTestStatus::Testing(_) => theme.colors.warning.to_color(),
+                    KeyTestStatus::Success(_) => theme.colors.success.to_color(),
+                    KeyTestStatus::Failed(_, _) => theme.colors.error.to_color(),
+                    _ => theme.colors.muted.to_color(),
+                };
+                spans.push(Span::styled(format!("  {}", status), Style::default().fg(color)));
+            }
+
+            // Add action hints for selected item
+            if is_selected && test_status_for_provider.is_none() {
+                spans.push(Span::styled("  ", Style::default()));
+                spans.push(Span::styled("↵ edit", Style::default().fg(theme.colors.primary.to_color())));
+                if has_key {
+                    spans.push(Span::styled("  ^T test", Style::default().fg(theme.colors.secondary.to_color())));
+                }
+            }
+
+            lines.push(Line::from(spans));
+
+            // Show error message if test failed (TS-007)
+            if let KeyTestStatus::Failed(p, err) = &self.key_test_status {
+                if p == provider {
+                    lines.push(Line::from(vec![
+                        Span::styled("                    ", Style::default()),
+                        Span::styled(format!("Error: {}", err), Style::default().fg(theme.colors.error.to_color())),
+                    ]));
+                }
+            }
         }
 
         lines
+    }
+
+    /// Get a description for a provider
+    fn provider_description(provider: &str) -> &'static str {
+        match provider {
+            "anthropic" => "Claude models - Advanced reasoning & coding",
+            "openai" => "GPT models - General purpose AI",
+            "gemini" => "Google's Gemini - Multimodal AI",
+            "grok" => "xAI Grok - Real-time knowledge",
+            "groq" => "Groq - Ultra-fast inference",
+            _ => "Custom provider",
+        }
+    }
+
+    /// Get the number of available models for a provider
+    fn model_count_for_provider(&self, provider: &str) -> usize {
+        match provider {
+            "anthropic" => 4,
+            "openai" => 3,
+            "gemini" => 3,
+            "grok" => 2,
+            "groq" => 3,
+            _ => 0,
+        }
+    }
+
+    /// Get a short description for a model (TS-009)
+    fn model_description(model: &str) -> &'static str {
+        match model {
+            // Anthropic models
+            "claude-sonnet-4-20250514" => "Latest Sonnet - Best balance of speed & intelligence",
+            "claude-3-5-sonnet-20241022" => "Previous Sonnet - Fast, capable coding model",
+            "claude-3-opus-20240229" => "Opus - Most capable, deep reasoning",
+            "claude-3-haiku-20240307" => "Haiku - Fastest, lightweight tasks",
+            // OpenAI models
+            "gpt-4o" => "Flagship multimodal model",
+            "gpt-4o-mini" => "Small, fast, affordable",
+            "gpt-4-turbo" => "GPT-4 with vision & 128K context",
+            // Gemini models
+            "gemini-2.0-flash" => "Latest Flash - Fast multimodal",
+            "gemini-1.5-pro" => "1M context - Document understanding",
+            "gemini-1.5-flash" => "Fast, efficient multimodal",
+            // Grok models
+            "grok-3" => "Latest Grok - Real-time knowledge",
+            "grok-2" => "Previous generation",
+            // Groq models
+            "llama-3.3-70b-versatile" => "Latest Llama - Ultra-fast inference",
+            "llama-3.1-8b-instant" => "Small Llama - Instant responses",
+            "mixtral-8x7b-32768" => "MoE model - 32K context",
+            _ => "",
+        }
+    }
+
+    /// Format token count in a human-friendly way (e.g., 200K, 1M) (TS-009)
+    fn format_context_window(tokens: u32) -> String {
+        if tokens >= 1_000_000 {
+            format!("{}M", tokens / 1_000_000)
+        } else if tokens >= 1_000 {
+            format!("{}K", tokens / 1_000)
+        } else {
+            format!("{}", tokens)
+        }
     }
 
     fn render_provider_section(&self, theme: &Theme) -> Vec<Line<'static>> {
@@ -494,8 +823,27 @@ impl SettingsEditor {
                 && self.selected_item == idx;
             let is_current = provider == &self.config.defaults.provider;
 
+            // Check if key is configured for this provider
+            let has_key = self.provider_keys
+                .iter()
+                .find(|p| &p.name == provider)
+                .map(|p| p.has_key)
+                .unwrap_or(false);
+
+            // Selection arrow (like API Keys section)
+            let selector = if is_selected { "▸" } else { " " };
+            let selector_style = Style::default().fg(theme.colors.accent.to_color());
+
+            // Radio button marker for current selection
             let marker = if is_current { "●" } else { "○" };
-            let style = if is_selected {
+            let marker_style = if is_current {
+                Style::default().fg(theme.colors.success.to_color())
+            } else {
+                Style::default().fg(theme.colors.muted.to_color())
+            };
+
+            // Provider name styling
+            let name_style = if is_selected {
                 Style::default()
                     .fg(theme.colors.accent.to_color())
                     .add_modifier(Modifier::BOLD)
@@ -505,10 +853,62 @@ impl SettingsEditor {
                 Style::default().fg(theme.colors.foreground.to_color())
             };
 
-            lines.push(Line::from(vec![
-                Span::styled(format!("  {} ", marker), style),
-                Span::styled(provider.clone(), style),
-            ]));
+            // Key status indicator
+            let key_icon = if has_key { "🔑" } else { "  " };
+            let key_style = if has_key {
+                Style::default().fg(theme.colors.success.to_color())
+            } else {
+                Style::default()
+            };
+
+            // Model count
+            let model_count = self.model_count_for_provider(provider);
+            let model_info = format!("{} models", model_count);
+
+            // Build the main line
+            let mut spans = vec![
+                Span::styled(format!(" {} ", selector), selector_style),
+                Span::styled(format!("{} ", marker), marker_style),
+                Span::styled(format!("{:10}", provider), name_style),
+                Span::styled(format!(" {} ", key_icon), key_style),
+                Span::styled(
+                    format!("({}) ", model_info),
+                    Style::default().fg(theme.colors.muted.to_color()),
+                ),
+            ];
+
+            // Add selection hint for selected item
+            if is_selected {
+                spans.push(Span::styled(
+                    "↵ select",
+                    Style::default().fg(theme.colors.primary.to_color()),
+                ));
+            }
+
+            lines.push(Line::from(spans));
+
+            // Show description for selected provider
+            if is_selected {
+                let desc = Self::provider_description(provider);
+                lines.push(Line::from(vec![
+                    Span::styled("        ", Style::default()),
+                    Span::styled(
+                        desc.to_string(),
+                        Style::default().fg(theme.colors.secondary.to_color()),
+                    ),
+                ]));
+
+                // Show warning if key not configured
+                if !has_key {
+                    lines.push(Line::from(vec![
+                        Span::styled("        ", Style::default()),
+                        Span::styled(
+                            "⚠ API key not configured",
+                            Style::default().fg(theme.colors.warning.to_color()),
+                        ),
+                    ]));
+                }
+            }
         }
 
         lines
@@ -522,8 +922,23 @@ impl SettingsEditor {
                 && self.selected_item == idx;
             let is_current = model == &self.config.defaults.model;
 
+            // Get model info from catalog
+            let model_info = self.model_catalog.info_for(model);
+
+            // Selection arrow (like Provider section)
+            let selector = if is_selected { "▸" } else { " " };
+            let selector_style = Style::default().fg(theme.colors.accent.to_color());
+
+            // Radio button marker for current selection
             let marker = if is_current { "●" } else { "○" };
-            let style = if is_selected {
+            let marker_style = if is_current {
+                Style::default().fg(theme.colors.success.to_color())
+            } else {
+                Style::default().fg(theme.colors.muted.to_color())
+            };
+
+            // Model name styling
+            let name_style = if is_selected {
                 Style::default()
                     .fg(theme.colors.accent.to_color())
                     .add_modifier(Modifier::BOLD)
@@ -533,9 +948,76 @@ impl SettingsEditor {
                 Style::default().fg(theme.colors.foreground.to_color())
             };
 
+            // Context window formatted (e.g., 200K, 1M)
+            let context_size = Self::format_context_window(model_info.max_context_tokens);
+
+            // Feature icons
+            let thinking_icon = if model_info.supports_thinking { "🧠" } else { "  " };
+            let tools_icon = if model_info.supports_tools { "🔧" } else { "  " };
+
+            // Build the main line
+            let mut spans = vec![
+                Span::styled(format!(" {} ", selector), selector_style),
+                Span::styled(format!("{} ", marker), marker_style),
+                Span::styled(format!("{:<32}", model), name_style),
+                Span::styled(
+                    format!(" {} ", context_size),
+                    Style::default().fg(theme.colors.secondary.to_color()),
+                ),
+                Span::styled(format!("{} ", thinking_icon), Style::default()),
+                Span::styled(format!("{} ", tools_icon), Style::default()),
+            ];
+
+            // Add selection hint for selected item
+            if is_selected {
+                spans.push(Span::styled(
+                    "↵ select",
+                    Style::default().fg(theme.colors.primary.to_color()),
+                ));
+            }
+
+            lines.push(Line::from(spans));
+
+            // Show description for selected model
+            if is_selected {
+                let desc = Self::model_description(model);
+                if !desc.is_empty() {
+                    lines.push(Line::from(vec![
+                        Span::styled("        ", Style::default()),
+                        Span::styled(
+                            desc.to_string(),
+                            Style::default().fg(theme.colors.secondary.to_color()),
+                        ),
+                    ]));
+                }
+
+                // Show feature legend on first selected model
+                lines.push(Line::from(vec![
+                    Span::styled("        ", Style::default()),
+                    Span::styled(
+                        format!("Context: {} tokens", model_info.max_context_tokens),
+                        Style::default().fg(theme.colors.muted.to_color()),
+                    ),
+                    Span::styled("  ", Style::default()),
+                    Span::styled(
+                        if model_info.supports_thinking { "🧠 thinking" } else { "" },
+                        Style::default().fg(theme.colors.muted.to_color()),
+                    ),
+                    Span::styled(
+                        if model_info.supports_tools { " 🔧 tools" } else { "" },
+                        Style::default().fg(theme.colors.muted.to_color()),
+                    ),
+                ]));
+            }
+        }
+
+        // Show empty state if no models available
+        if lines.is_empty() {
             lines.push(Line::from(vec![
-                Span::styled(format!("  {} ", marker), style),
-                Span::styled(model.clone(), style),
+                Span::styled(
+                    "  No models available for this provider",
+                    Style::default().fg(theme.colors.muted.to_color()),
+                ),
             ]));
         }
 
@@ -735,10 +1217,11 @@ mod tests {
         editor.start_editing();
         assert!(editor.is_editing());
 
-        if let SettingsInputMode::Editing { field, buffer, masked } = &editor.input_mode {
+        if let SettingsInputMode::Editing { field, buffer, masked, show_plain } = &editor.input_mode {
             assert_eq!(field, "anthropic");
             assert!(buffer.is_empty());
             assert!(*masked);
+            assert!(!*show_plain);
         } else {
             panic!("Expected Editing mode");
         }
@@ -816,5 +1299,641 @@ mod tests {
         assert_eq!(editor.provider_keys.len(), 2);
         assert!(editor.provider_keys[0].has_key);
         assert!(!editor.provider_keys[1].has_key);
+    }
+
+    #[test]
+    fn test_api_keys_section_render_content() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.set_provider_keys(vec![
+            ProviderKeyStatus { name: "anthropic".to_string(), has_key: true },
+            ProviderKeyStatus { name: "openai".to_string(), has_key: false },
+        ]);
+        
+        let theme = Theme::default();
+        let lines = editor.render_api_keys_section(&theme);
+        
+        // Should have one line per provider
+        assert_eq!(lines.len(), editor.available_providers.len());
+        
+        // First line should have selection indicator (selected by default)
+        let first_line = &lines[0];
+        assert!(!first_line.spans.is_empty());
+        // Selected item should have "▸" selector and action hints
+        let line_text: String = first_line.spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(line_text.contains("▸"), "Selected item should have arrow selector");
+        assert!(line_text.contains("↵ edit"), "Selected item should show edit hint");
+    }
+
+    #[test]
+    fn test_api_keys_editing_shows_char_count() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.start_editing();
+        
+        // Type some characters
+        editor.handle_edit_char('s');
+        editor.handle_edit_char('k');
+        editor.handle_edit_char('-');
+        
+        let theme = Theme::default();
+        let lines = editor.render_api_keys_section(&theme);
+        
+        // Find the line with the input field (should be first, for anthropic)
+        let input_line = &lines[0];
+        let line_text: String = input_line.spans.iter().map(|s| s.content.as_ref()).collect();
+        
+        // Should show character count
+        assert!(line_text.contains("(3 chars)"), "Should show character count during editing");
+        // Should show masked dots
+        assert!(line_text.contains("•••"), "Should show masked input");
+    }
+
+    #[test]
+    fn test_toggle_mask_visibility() {
+        let mut editor = SettingsEditor::new();
+        editor.start_editing();
+        
+        // Initially masked (show_plain = false)
+        if let SettingsInputMode::Editing { show_plain, .. } = &editor.input_mode {
+            assert!(!*show_plain);
+        }
+        
+        // Toggle visibility
+        editor.toggle_mask_visibility();
+        if let SettingsInputMode::Editing { show_plain, .. } = &editor.input_mode {
+            assert!(*show_plain);
+        }
+        
+        // Toggle back
+        editor.toggle_mask_visibility();
+        if let SettingsInputMode::Editing { show_plain, .. } = &editor.input_mode {
+            assert!(!*show_plain);
+        }
+    }
+
+    #[test]
+    fn test_clear_input() {
+        let mut editor = SettingsEditor::new();
+        editor.start_editing();
+        
+        editor.handle_edit_char('a');
+        editor.handle_edit_char('b');
+        editor.handle_edit_char('c');
+        
+        if let SettingsInputMode::Editing { buffer, .. } = &editor.input_mode {
+            assert_eq!(buffer, "abc");
+        }
+        
+        editor.clear_input();
+        
+        if let SettingsInputMode::Editing { buffer, .. } = &editor.input_mode {
+            assert!(buffer.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_paste_text() {
+        let mut editor = SettingsEditor::new();
+        editor.start_editing();
+        
+        // Paste valid text
+        editor.paste_text("sk-ant-abc123");
+        
+        if let SettingsInputMode::Editing { buffer, .. } = &editor.input_mode {
+            assert_eq!(buffer, "sk-ant-abc123");
+        }
+        
+        // Clear and paste text with invalid chars (should filter)
+        editor.clear_input();
+        editor.paste_text("sk-ant-\n\t abc");  // newline, tab, space filtered
+        
+        if let SettingsInputMode::Editing { buffer, .. } = &editor.input_mode {
+            assert_eq!(buffer, "sk-ant-abc");
+        }
+    }
+
+    #[test]
+    fn test_key_validation() {
+        // Empty key
+        assert!(SettingsEditor::validate_key_format("anthropic", "").is_some());
+        
+        // Too short
+        assert!(SettingsEditor::validate_key_format("anthropic", "sk-ant").is_some());
+        
+        // Wrong prefix for anthropic
+        assert!(SettingsEditor::validate_key_format("anthropic", "sk-wrong-prefix-key").is_some());
+        
+        // Valid anthropic key
+        assert!(SettingsEditor::validate_key_format("anthropic", "sk-ant-valid-key-12345").is_none());
+        
+        // Valid openai key
+        assert!(SettingsEditor::validate_key_format("openai", "sk-valid-openai-key").is_none());
+        
+        // Gemini has no prefix check, just length
+        assert!(SettingsEditor::validate_key_format("gemini", "AIza-some-key").is_none());
+    }
+
+    #[test]
+    fn test_key_prefix_hints() {
+        assert_eq!(SettingsEditor::key_prefix_hint("anthropic"), "sk-ant-...");
+        assert_eq!(SettingsEditor::key_prefix_hint("openai"), "sk-...");
+        assert_eq!(SettingsEditor::key_prefix_hint("groq"), "gsk_...");
+        assert_eq!(SettingsEditor::key_prefix_hint("grok"), "xai-...");
+        assert_eq!(SettingsEditor::key_prefix_hint("unknown"), "");
+    }
+
+    #[test]
+    fn test_editing_shows_visibility_toggle_hint() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.start_editing();
+        
+        let theme = Theme::default();
+        let lines = editor.render_api_keys_section(&theme);
+        
+        // Find the hints line (contains keybindings)
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        assert!(all_text.contains("^U show/hide"), "Should show visibility toggle hint");
+        assert!(all_text.contains("^K clear"), "Should show clear hint");
+    }
+
+    #[test]
+    fn test_editing_shows_format_hint_when_empty() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.start_editing();  // Empty buffer
+        
+        let theme = Theme::default();
+        let lines = editor.render_api_keys_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        assert!(all_text.contains("Format: sk-ant-..."), "Should show format hint when buffer is empty");
+    }
+
+    #[test]
+    fn test_mark_key_configured() {
+        let mut editor = SettingsEditor::new();
+        
+        // Initially no keys configured
+        assert!(editor.provider_keys.is_empty());
+        
+        // Mark anthropic as configured
+        editor.mark_key_configured("anthropic");
+        assert_eq!(editor.provider_keys.len(), 1);
+        assert!(editor.provider_keys[0].has_key);
+        assert_eq!(editor.provider_keys[0].name, "anthropic");
+        
+        // Mark again should update, not duplicate
+        editor.mark_key_configured("anthropic");
+        assert_eq!(editor.provider_keys.len(), 1);
+        
+        // Mark another provider
+        editor.mark_key_configured("openai");
+        assert_eq!(editor.provider_keys.len(), 2);
+    }
+
+    #[test]
+    fn test_editing_provider() {
+        let mut editor = SettingsEditor::new();
+        
+        // Not editing - should be None
+        assert!(editor.editing_provider().is_none());
+        
+        // Start editing anthropic (first provider, selected by default)
+        editor.start_editing();
+        assert_eq!(editor.editing_provider(), Some("anthropic"));
+        
+        // Cancel editing
+        editor.cancel_editing();
+        assert!(editor.editing_provider().is_none());
+        
+        // Select a different provider and edit
+        editor.selected_item = 1; // openai
+        editor.start_editing();
+        assert_eq!(editor.editing_provider(), Some("openai"));
+    }
+
+    #[test]
+    fn test_set_provider_keys_updates_status() {
+        let mut editor = SettingsEditor::new();
+        
+        // Set mixed key statuses
+        editor.set_provider_keys(vec![
+            ProviderKeyStatus { name: "anthropic".to_string(), has_key: true },
+            ProviderKeyStatus { name: "openai".to_string(), has_key: false },
+            ProviderKeyStatus { name: "gemini".to_string(), has_key: true },
+        ]);
+        
+        assert_eq!(editor.provider_keys.len(), 3);
+        assert!(editor.provider_keys[0].has_key);
+        assert!(!editor.provider_keys[1].has_key);
+        assert!(editor.provider_keys[2].has_key);
+    }
+
+    // TS-007 Tests
+
+    #[test]
+    fn test_key_test_status_lifecycle() {
+        let mut editor = SettingsEditor::new();
+        
+        // Initially idle
+        assert_eq!(editor.key_test_status(), &KeyTestStatus::Idle);
+        
+        // Start test
+        editor.start_key_test("anthropic");
+        assert_eq!(editor.key_test_status(), &KeyTestStatus::Testing("anthropic".to_string()));
+        
+        // Mark success
+        editor.set_key_test_result("anthropic", true, None);
+        assert_eq!(editor.key_test_status(), &KeyTestStatus::Success("anthropic".to_string()));
+        
+        // Clear
+        editor.clear_key_test_status();
+        assert_eq!(editor.key_test_status(), &KeyTestStatus::Idle);
+    }
+
+    #[test]
+    fn test_key_test_failure() {
+        let mut editor = SettingsEditor::new();
+        
+        editor.start_key_test("openai");
+        editor.set_key_test_result("openai", false, Some("Invalid API key".to_string()));
+        
+        assert_eq!(
+            editor.key_test_status(),
+            &KeyTestStatus::Failed("openai".to_string(), "Invalid API key".to_string())
+        );
+    }
+
+    #[test]
+    fn test_selected_provider() {
+        let mut editor = SettingsEditor::new();
+        
+        // In API Keys section by default
+        assert_eq!(editor.selected_provider(), Some("anthropic"));
+        
+        // Select openai
+        editor.selected_item = 1;
+        assert_eq!(editor.selected_provider(), Some("openai"));
+        
+        // Switch to different section
+        editor.next_section();
+        assert!(editor.selected_provider().is_none());
+    }
+
+    #[test]
+    fn test_key_test_ui_display() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.set_provider_keys(vec![
+            ProviderKeyStatus { name: "anthropic".to_string(), has_key: true },
+        ]);
+        
+        let theme = Theme::default();
+        
+        // Start testing
+        editor.start_key_test("anthropic");
+        let lines = editor.render_api_keys_section(&theme);
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(all_text.contains("testing"), "Should show testing status");
+        
+        // Mark success
+        editor.set_key_test_result("anthropic", true, None);
+        let lines = editor.render_api_keys_section(&theme);
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(all_text.contains("valid"), "Should show valid status");
+        
+        // Mark failure
+        editor.set_key_test_result("anthropic", false, Some("Auth error".to_string()));
+        let lines = editor.render_api_keys_section(&theme);
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(all_text.contains("invalid"), "Should show invalid status");
+        assert!(all_text.contains("Auth error"), "Should show error message");
+    }
+
+    // TS-008 Tests: Provider Section Enhanced UI
+
+    #[test]
+    fn test_provider_description() {
+        assert_eq!(SettingsEditor::provider_description("anthropic"), "Claude models - Advanced reasoning & coding");
+        assert_eq!(SettingsEditor::provider_description("openai"), "GPT models - General purpose AI");
+        assert_eq!(SettingsEditor::provider_description("gemini"), "Google's Gemini - Multimodal AI");
+        assert_eq!(SettingsEditor::provider_description("grok"), "xAI Grok - Real-time knowledge");
+        assert_eq!(SettingsEditor::provider_description("groq"), "Groq - Ultra-fast inference");
+        assert_eq!(SettingsEditor::provider_description("unknown"), "Custom provider");
+    }
+
+    #[test]
+    fn test_model_count_for_provider() {
+        let editor = SettingsEditor::new();
+        
+        assert_eq!(editor.model_count_for_provider("anthropic"), 4);
+        assert_eq!(editor.model_count_for_provider("openai"), 3);
+        assert_eq!(editor.model_count_for_provider("gemini"), 3);
+        assert_eq!(editor.model_count_for_provider("grok"), 2);
+        assert_eq!(editor.model_count_for_provider("groq"), 3);
+        assert_eq!(editor.model_count_for_provider("unknown"), 0);
+    }
+
+    #[test]
+    fn test_provider_section_shows_selector_and_hint() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.next_section(); // Move to Provider section
+        
+        let theme = Theme::default();
+        let lines = editor.render_provider_section(&theme);
+        
+        // Should have multiple lines (at least 1 per provider + description lines)
+        assert!(lines.len() >= 5, "Provider section should have provider lines plus descriptions");
+        
+        // First provider should be selected (selected_item = 0)
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show selector arrow
+        assert!(all_text.contains("▸"), "Selected provider should have arrow selector");
+        // Should show select hint
+        assert!(all_text.contains("↵ select"), "Selected provider should show select hint");
+        // Should show model count
+        assert!(all_text.contains("models"), "Should show model count");
+        // Should show description for selected provider
+        assert!(all_text.contains("Claude models"), "Should show description for anthropic");
+    }
+
+    #[test]
+    fn test_provider_section_shows_key_status() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.next_section(); // Move to Provider section
+        
+        // Set some providers with keys
+        editor.set_provider_keys(vec![
+            ProviderKeyStatus { name: "anthropic".to_string(), has_key: true },
+            ProviderKeyStatus { name: "openai".to_string(), has_key: false },
+        ]);
+        
+        let theme = Theme::default();
+        let lines = editor.render_provider_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show key icon for configured provider
+        assert!(all_text.contains("🔑"), "Should show key icon for configured provider");
+    }
+
+    #[test]
+    fn test_provider_section_shows_warning_for_missing_key() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.next_section(); // Move to Provider section
+        
+        // No keys configured
+        editor.set_provider_keys(vec![
+            ProviderKeyStatus { name: "anthropic".to_string(), has_key: false },
+        ]);
+        
+        let theme = Theme::default();
+        let lines = editor.render_provider_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show warning for selected provider without key
+        assert!(all_text.contains("⚠ API key not configured"), "Should show warning for missing key");
+    }
+
+    #[test]
+    fn test_provider_section_shows_current_marker() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        editor.next_section(); // Move to Provider section
+        
+        // Default provider is "anthropic"
+        let theme = Theme::default();
+        let lines = editor.render_provider_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should have filled circle for current provider
+        assert!(all_text.contains("●"), "Should show filled circle for current provider");
+        // Should have empty circles for other providers
+        assert!(all_text.contains("○"), "Should show empty circles for non-current providers");
+    }
+
+    // TS-009 Tests: Model Section Enhanced UI
+
+    #[test]
+    fn test_model_description() {
+        assert_eq!(SettingsEditor::model_description("claude-sonnet-4-20250514"), "Latest Sonnet - Best balance of speed & intelligence");
+        assert_eq!(SettingsEditor::model_description("gpt-4o"), "Flagship multimodal model");
+        assert_eq!(SettingsEditor::model_description("gemini-2.0-flash"), "Latest Flash - Fast multimodal");
+        assert_eq!(SettingsEditor::model_description("grok-3"), "Latest Grok - Real-time knowledge");
+        assert_eq!(SettingsEditor::model_description("llama-3.3-70b-versatile"), "Latest Llama - Ultra-fast inference");
+        assert_eq!(SettingsEditor::model_description("unknown-model"), "");
+    }
+
+    #[test]
+    fn test_format_context_window() {
+        assert_eq!(SettingsEditor::format_context_window(200_000), "200K");
+        assert_eq!(SettingsEditor::format_context_window(1_000_000), "1M");
+        assert_eq!(SettingsEditor::format_context_window(128_000), "128K");
+        assert_eq!(SettingsEditor::format_context_window(500), "500");
+        assert_eq!(SettingsEditor::format_context_window(8_192), "8K");
+    }
+
+    #[test]
+    fn test_model_section_shows_selector_and_hint() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        // Set up models by setting config
+        let mut config = crate::config::LLMConfig::default();
+        config.defaults.provider = "anthropic".to_string();
+        config.defaults.model = "claude-sonnet-4-20250514".to_string();
+        editor.set_config(config);
+        
+        // Move to Model section (Tab twice: ApiKeys -> Provider -> Model)
+        editor.next_section();
+        editor.next_section();
+        
+        let theme = Theme::default();
+        let lines = editor.render_model_section(&theme);
+        
+        // Should have multiple lines (models + description lines)
+        assert!(lines.len() >= 4, "Model section should have model lines plus descriptions");
+        
+        // First model should be selected (selected_item = 0)
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show selector arrow
+        assert!(all_text.contains("▸"), "Selected model should have arrow selector");
+        // Should show select hint
+        assert!(all_text.contains("↵ select"), "Selected model should show select hint");
+        // Should show context window
+        assert!(all_text.contains("200K") || all_text.contains("200000"), "Should show context window size");
+    }
+
+    #[test]
+    fn test_model_section_shows_feature_icons() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        // Set up models with anthropic (which has thinking-capable models)
+        let mut config = crate::config::LLMConfig::default();
+        config.defaults.provider = "anthropic".to_string();
+        config.defaults.model = "claude-sonnet-4-20250514".to_string();
+        editor.set_config(config);
+        
+        // Move to Model section
+        editor.next_section();
+        editor.next_section();
+        
+        let theme = Theme::default();
+        let lines = editor.render_model_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show tools icon (all models support tools by default)
+        assert!(all_text.contains("🔧") || all_text.contains("tools"), "Should show tools icon");
+        // claude-sonnet-4 supports thinking
+        assert!(all_text.contains("🧠") || all_text.contains("thinking"), "Should show thinking icon for claude-sonnet-4");
+    }
+
+    #[test]
+    fn test_model_section_shows_description() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        let mut config = crate::config::LLMConfig::default();
+        config.defaults.provider = "anthropic".to_string();
+        config.defaults.model = "claude-sonnet-4-20250514".to_string();
+        editor.set_config(config);
+        
+        // Move to Model section
+        editor.next_section();
+        editor.next_section();
+        
+        let theme = Theme::default();
+        let lines = editor.render_model_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show description for selected model
+        assert!(all_text.contains("Latest Sonnet") || all_text.contains("balance"), 
+            "Should show model description");
+    }
+
+    #[test]
+    fn test_model_section_shows_current_marker() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        let mut config = crate::config::LLMConfig::default();
+        config.defaults.provider = "anthropic".to_string();
+        config.defaults.model = "claude-3-5-sonnet-20241022".to_string(); // Set a specific current model
+        editor.set_config(config);
+        
+        // Move to Model section
+        editor.next_section();
+        editor.next_section();
+        
+        let theme = Theme::default();
+        let lines = editor.render_model_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should have filled circle for current model
+        assert!(all_text.contains("●"), "Should show filled circle for current model");
+        // Should have empty circles for other models
+        assert!(all_text.contains("○"), "Should show empty circles for non-current models");
+    }
+
+    #[test]
+    fn test_model_section_empty_state() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        let mut config = crate::config::LLMConfig::default();
+        config.defaults.provider = "unknown".to_string(); // Provider with no models
+        editor.set_config(config);
+        
+        // Move to Model section
+        editor.next_section();
+        editor.next_section();
+        
+        let theme = Theme::default();
+        let lines = editor.render_model_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show empty state message
+        assert!(all_text.contains("No models available"), "Should show empty state message");
+    }
+
+    #[test]
+    fn test_model_catalog_integration() {
+        let editor = SettingsEditor::new();
+        
+        // Model catalog should be populated
+        let info = editor.model_catalog.info_for("gpt-4o");
+        assert_eq!(info.max_context_tokens, 128_000);
+        assert_eq!(info.provider, "openai");
+        
+        // Check another provider
+        let info = editor.model_catalog.info_for("gemini-1.5-pro");
+        assert_eq!(info.max_context_tokens, 1_000_000);
     }
 }

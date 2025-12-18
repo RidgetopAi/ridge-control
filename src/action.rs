@@ -423,8 +423,10 @@ pub enum Action {
     SettingsProviderChanged(String),
     /// Model selection changed
     SettingsModelChanged(String),
-    /// Test current API key
+    /// Test current API key (TS-007)
     SettingsTestKey,
+    /// Test key result received (TS-007)
+    SettingsTestKeyResult { provider: String, success: bool, error: Option<String> },
     /// Save settings
     SettingsSave,
 

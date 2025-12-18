@@ -67,6 +67,19 @@ impl KeyId {
             KeyId::Custom(s) => s,
         }
     }
+
+    /// Convert a provider name string to a KeyId
+    /// Used by SettingsEditor when storing keys from UI input
+    pub fn from_provider_str(provider: &str) -> Self {
+        match provider.to_lowercase().as_str() {
+            "anthropic" => KeyId::Anthropic,
+            "openai" => KeyId::OpenAI,
+            "gemini" => KeyId::Gemini,
+            "grok" => KeyId::Grok,
+            "groq" => KeyId::Groq,
+            other => KeyId::Custom(other.to_string()),
+        }
+    }
 }
 
 impl std::fmt::Display for KeyId {
@@ -642,6 +655,18 @@ mod tests {
         assert_eq!(KeyId::Anthropic.as_str(), "anthropic");
         assert_eq!(KeyId::OpenAI.as_str(), "openai");
         assert_eq!(KeyId::Custom("mykey".to_string()).as_str(), "mykey");
+    }
+
+    #[test]
+    fn test_key_id_from_provider_str() {
+        assert_eq!(KeyId::from_provider_str("anthropic"), KeyId::Anthropic);
+        assert_eq!(KeyId::from_provider_str("ANTHROPIC"), KeyId::Anthropic);
+        assert_eq!(KeyId::from_provider_str("openai"), KeyId::OpenAI);
+        assert_eq!(KeyId::from_provider_str("OpenAI"), KeyId::OpenAI);
+        assert_eq!(KeyId::from_provider_str("gemini"), KeyId::Gemini);
+        assert_eq!(KeyId::from_provider_str("grok"), KeyId::Grok);
+        assert_eq!(KeyId::from_provider_str("groq"), KeyId::Groq);
+        assert_eq!(KeyId::from_provider_str("custom_provider"), KeyId::Custom("custom_provider".to_string()));
     }
 
     #[test]

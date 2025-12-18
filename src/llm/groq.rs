@@ -304,6 +304,34 @@ impl Provider for GroqProvider {
         let stream: StreamBox = Box::pin(ReceiverStream::new(rx));
         Ok(stream)
     }
+
+    async fn test_key(&self) -> Result<(), LLMError> {
+        let body = json!({
+            "model": "llama3-8b-8192",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "max_tokens": 1,
+        });
+
+        let response = self
+            .http_client
+            .post(GROQ_API_URL)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LLMError::NetworkError {
+                message: e.to_string(),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(parse_error_response(status.as_u16(), &text));
+        }
+
+        Ok(())
+    }
 }
 
 async fn parse_sse_stream(

@@ -269,6 +269,33 @@ impl Provider for GeminiProvider {
         let stream: StreamBox = Box::pin(ReceiverStream::new(rx));
         Ok(stream)
     }
+
+    async fn test_key(&self) -> Result<(), LLMError> {
+        let body = json!({
+            "contents": [{"role": "user", "parts": [{"text": "Hi"}]}],
+            "generationConfig": {"maxOutputTokens": 1}
+        });
+        let url = self.get_endpoint("gemini-1.5-flash", false);
+
+        let response = self
+            .http_client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LLMError::NetworkError {
+                message: e.to_string(),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(parse_error_response(status.as_u16(), &text));
+        }
+
+        Ok(())
+    }
 }
 
 async fn parse_stream(

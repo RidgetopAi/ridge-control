@@ -9,5 +9,5 @@ pub mod manager;
 pub mod tools;
 
 pub use types::*;
-pub use manager::{LLMManager, LLMEvent};
+pub use manager::{LLMManager, LLMEvent, test_api_key};
 pub use tools::{ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolError};

@@ -220,6 +220,35 @@ impl Provider for AnthropicProvider {
         let stream: StreamBox = Box::pin(ReceiverStream::new(rx));
         Ok(stream)
     }
+
+    async fn test_key(&self) -> Result<(), LLMError> {
+        let body = json!({
+            "model": "claude-3-5-haiku-20241022",
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hi"}]}],
+            "max_tokens": 1,
+        });
+
+        let response = self
+            .http_client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| LLMError::NetworkError {
+                message: e.to_string(),
+            })?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let text = response.text().await.unwrap_or_default();
+            return Err(parse_error_response(status.as_u16(), &text));
+        }
+
+        Ok(())
+    }
 }
 
 async fn parse_sse_stream(
