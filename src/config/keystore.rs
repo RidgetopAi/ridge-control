@@ -141,11 +141,60 @@ impl KeyStore {
             KeyStoreBackend::EncryptedFile
         };
 
-        Ok(Self {
+        let mut keystore = Self {
             backend,
             keys_dir,
             master_key: None,
-        })
+        };
+        
+        // Auto-initialize encrypted backend with machine-derived key
+        if backend == KeyStoreBackend::EncryptedFile {
+            let derived_password = Self::derive_machine_password();
+            if keystore.salt_file().exists() {
+                // Keystore exists, unlock it
+                if let Err(e) = keystore.unlock(&derived_password) {
+                    tracing::warn!("Failed to unlock existing keystore: {}", e);
+                    // Try to reinitialize (may have been corrupted)
+                    let _ = keystore.init_encrypted(&derived_password);
+                }
+            } else {
+                // First run, initialize the keystore
+                if let Err(e) = keystore.init_encrypted(&derived_password) {
+                    tracing::error!("Failed to initialize encrypted keystore: {}", e);
+                }
+            }
+        }
+        
+        Ok(keystore)
+    }
+    
+    /// Derive a machine-specific password for auto-unlock
+    /// This provides encryption at rest without requiring user password entry
+    fn derive_machine_password() -> String {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        
+        // Include machine-id if available
+        if let Ok(machine_id) = std::fs::read_to_string("/etc/machine-id") {
+            machine_id.trim().hash(&mut hasher);
+        }
+        
+        // Include username
+        if let Ok(user) = std::env::var("USER") {
+            user.hash(&mut hasher);
+        }
+        
+        // Include home directory
+        if let Some(home) = dirs::home_dir() {
+            home.to_string_lossy().hash(&mut hasher);
+        }
+        
+        // Add a constant salt specific to ridge-control
+        "ridge-control-keystore-v1".hash(&mut hasher);
+        
+        format!("{:016x}", hasher.finish())
     }
 
     /// Create a KeyStore with a specific backend

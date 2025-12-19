@@ -116,8 +116,11 @@ impl AnthropicProvider {
             })
             .collect();
 
+        let model_to_use = if request.model.is_empty() { &self.default_model } else { &request.model };
+        tracing::info!("Anthropic API request - model: '{}' (request.model was: '{}')", model_to_use, request.model);
+        
         let mut body = json!({
-            "model": if request.model.is_empty() { &self.default_model } else { &request.model },
+            "model": model_to_use,
             "messages": messages,
             "max_tokens": request.max_tokens.unwrap_or(4096),
             "stream": request.stream,

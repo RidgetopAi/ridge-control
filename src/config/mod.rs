@@ -10,7 +10,7 @@ mod watcher;
 
 pub use keybindings::KeybindingsConfig;
 pub use keystore::{KeyId, KeyStore, SecretString};
-pub use llm::{LLMConfig, LLMDefaults, LLMParameters, ProviderConfig};
+pub use llm::LLMConfig;
 pub use session::{SessionData, SessionManager};
 pub use theme::Theme;
 pub use watcher::{ConfigWatcherMode, ConfigEvent};

@@ -1,7 +1,7 @@
 // Conversation viewer - some state getters for future UI integration
 #![allow(dead_code)]
 
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
@@ -18,6 +18,7 @@ use crate::components::tool_call_widget::{ToolCallManager, ToolCallWidget, ToolS
 use crate::components::Component;
 use crate::config::Theme;
 use crate::llm::{ContentBlock, Message, Role, ToolUse, ToolResult};
+use crate::util::strip_ansi;
 
 /// Displays LLM conversation history with streaming response support and tool call management
 pub struct ConversationViewer {
@@ -38,6 +39,19 @@ pub struct ConversationViewer {
     search_state: SearchState,
     /// Cached text lines for search
     cached_text: Vec<String>,
+    /// Text selection state for copy support
+    selection: Option<TextSelection>,
+    /// Whether we're currently dragging to select
+    selecting: bool,
+}
+
+/// Text selection in the conversation viewer
+#[derive(Debug, Clone, Copy)]
+pub struct TextSelection {
+    /// Start position (line, column)
+    pub start: (usize, usize),
+    /// End position (line, column)  
+    pub end: (usize, usize),
 }
 
 impl ConversationViewer {
@@ -56,6 +70,8 @@ impl ConversationViewer {
             thinking_collapsed: false,
             search_state: SearchState::new(),
             cached_text: Vec::new(),
+            selection: None,
+            selecting: false,
         }
     }
     
@@ -196,6 +212,244 @@ impl ConversationViewer {
         }
     }
 
+    // =====================================================================
+    // Text Selection Support
+    // =====================================================================
+
+    /// Convert screen coordinates to text position (line, column)
+    fn screen_to_text_pos(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
+        if self.inner_area.width == 0 || self.inner_area.height == 0 {
+            return None;
+        }
+        
+        if screen_x < self.inner_area.x || screen_y < self.inner_area.y {
+            return None;
+        }
+        if screen_x >= self.inner_area.x + self.inner_area.width 
+            || screen_y >= self.inner_area.y + self.inner_area.height {
+            return None;
+        }
+        
+        let col = (screen_x - self.inner_area.x) as usize;
+        let visible_row = (screen_y - self.inner_area.y) as usize;
+        let line = (self.scroll_offset as usize) + visible_row;
+        
+        Some((line, col))
+    }
+
+    /// Start text selection at screen coordinates
+    pub fn start_selection(&mut self, screen_x: u16, screen_y: u16) {
+        if let Some((line, col)) = self.screen_to_text_pos(screen_x, screen_y) {
+            self.selection = Some(TextSelection {
+                start: (line, col),
+                end: (line, col),
+            });
+            self.selecting = true;
+            self.auto_scroll = false;
+        }
+    }
+
+    /// Update selection end point during drag
+    pub fn update_selection(&mut self, screen_x: u16, screen_y: u16) {
+        if !self.selecting {
+            return;
+        }
+        if let Some((line, col)) = self.screen_to_text_pos(screen_x, screen_y) {
+            if let Some(ref mut sel) = self.selection {
+                sel.end = (line, col);
+            }
+        }
+    }
+
+    /// End selection (mouse up)
+    pub fn end_selection(&mut self) {
+        self.selecting = false;
+    }
+
+    /// Clear current selection
+    pub fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selecting = false;
+    }
+
+    /// Check if there's an active selection
+    pub fn has_selection(&self) -> bool {
+        self.selection.is_some()
+    }
+
+    /// Check if currently in the middle of a drag selection
+    pub fn is_selecting(&self) -> bool {
+        self.selecting
+    }
+
+    /// Get the currently selected text
+    pub fn get_selected_text(&self) -> Option<String> {
+        let sel = self.selection?;
+        
+        if self.cached_text.is_empty() {
+            return None;
+        }
+        
+        // Normalize selection (start should be before end)
+        let (start, end) = if sel.start.0 < sel.end.0 
+            || (sel.start.0 == sel.end.0 && sel.start.1 <= sel.end.1) {
+            (sel.start, sel.end)
+        } else {
+            (sel.end, sel.start)
+        };
+        
+        let start_line = start.0;
+        let start_col = start.1;
+        let end_line = end.0;
+        let end_col = end.1;
+        
+        let mut result = String::new();
+        
+        for (i, line_text) in self.cached_text.iter().enumerate() {
+            if i < start_line || i > end_line {
+                continue;
+            }
+            
+            let line_chars: Vec<char> = line_text.chars().collect();
+            
+            if i == start_line && i == end_line {
+                // Single line selection
+                let start_idx = start_col.min(line_chars.len());
+                let end_idx = (end_col + 1).min(line_chars.len());
+                if start_idx < end_idx {
+                    result.push_str(&line_chars[start_idx..end_idx].iter().collect::<String>());
+                }
+            } else if i == start_line {
+                // First line of multi-line selection
+                let start_idx = start_col.min(line_chars.len());
+                result.push_str(&line_chars[start_idx..].iter().collect::<String>());
+                result.push('\n');
+            } else if i == end_line {
+                // Last line of multi-line selection
+                let end_idx = (end_col + 1).min(line_chars.len());
+                result.push_str(&line_chars[..end_idx].iter().collect::<String>());
+            } else {
+                // Middle lines - take entire line
+                result.push_str(line_text);
+                result.push('\n');
+            }
+        }
+        
+        if result.is_empty() {
+            None
+        } else {
+            Some(result)
+        }
+    }
+
+    /// Handle mouse events for selection
+    pub fn handle_mouse(&mut self, mouse: MouseEvent) -> Option<Action> {
+        match mouse.kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                self.start_selection(mouse.column, mouse.row);
+                None
+            }
+            MouseEventKind::Drag(MouseButton::Left) => {
+                self.update_selection(mouse.column, mouse.row);
+                None
+            }
+            MouseEventKind::Up(MouseButton::Left) => {
+                self.end_selection();
+                if self.has_selection() {
+                    Some(Action::ConversationCopy)
+                } else {
+                    None
+                }
+            }
+            MouseEventKind::ScrollUp => Some(Action::ConversationScrollUp(3)),
+            MouseEventKind::ScrollDown => Some(Action::ConversationScrollDown(3)),
+            _ => None,
+        }
+    }
+
+    /// Check if position is within selection (for highlighting)
+    pub fn is_position_selected(&self, line: usize, col: usize) -> bool {
+        let sel = match self.selection {
+            Some(s) => s,
+            None => return false,
+        };
+        
+        let (start, end) = if sel.start.0 < sel.end.0 
+            || (sel.start.0 == sel.end.0 && sel.start.1 <= sel.end.1) {
+            (sel.start, sel.end)
+        } else {
+            (sel.end, sel.start)
+        };
+        
+        if line < start.0 || line > end.0 {
+            return false;
+        }
+        
+        if line == start.0 && line == end.0 {
+            col >= start.1 && col <= end.1
+        } else if line == start.0 {
+            col >= start.1
+        } else if line == end.0 {
+            col <= end.1
+        } else {
+            true
+        }
+    }
+
+    /// Render selection highlight overlay on the frame buffer
+    fn render_selection_highlight(&self, frame: &mut Frame, inner: Rect, theme: &Theme) {
+        let sel = match self.selection {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Normalize selection
+        let (start, end) = if sel.start.0 < sel.end.0 
+            || (sel.start.0 == sel.end.0 && sel.start.1 <= sel.end.1) {
+            (sel.start, sel.end)
+        } else {
+            (sel.end, sel.start)
+        };
+
+        let scroll = self.scroll_offset as usize;
+        let visible_start = scroll;
+        let visible_end = scroll + inner.height as usize;
+
+        // Selection highlight style - invert colors for visibility
+        let highlight_style = Style::default()
+            .bg(theme.colors.primary.to_color())
+            .fg(theme.colors.background.to_color());
+
+        let buf = frame.buffer_mut();
+
+        for line in start.0..=end.0 {
+            // Skip lines not in visible range
+            if line < visible_start || line >= visible_end {
+                continue;
+            }
+
+            let screen_y = inner.y + (line - scroll) as u16;
+            if screen_y >= inner.y + inner.height {
+                continue;
+            }
+
+            // Determine column range for this line
+            let col_start = if line == start.0 { start.1 } else { 0 };
+            let col_end = if line == end.0 { end.1 } else { inner.width as usize - 1 };
+
+            for col in col_start..=col_end {
+                let screen_x = inner.x + col as u16;
+                if screen_x >= inner.x + inner.width {
+                    break;
+                }
+
+                if let Some(cell) = buf.cell_mut((screen_x, screen_y)) {
+                    cell.set_style(highlight_style);
+                }
+            }
+        }
+    }
+
     /// Cache text content for search (TRC-021)
     fn cache_text_for_search(&mut self, messages: &[Message], streaming_buffer: &str, thinking_buffer: &str) {
         self.cached_text.clear();
@@ -325,7 +579,8 @@ impl ConversationViewer {
             for content_block in &message.content {
                 match content_block {
                     ContentBlock::Text(text) => {
-                        for line in text.lines() {
+                        let clean_text = strip_ansi(text);
+                        for line in clean_text.lines() {
                             lines.push(Line::from(Span::styled(
                                 format!("  {}", line),
                                 Style::default().fg(theme.colors.foreground.to_color()),
@@ -375,7 +630,8 @@ impl ConversationViewer {
             // Show thinking content if not collapsed
             if !self.thinking_collapsed {
                 // Count lines for summary
-                let thinking_lines: Vec<&str> = thinking_buffer.lines().collect();
+                let clean_thinking = strip_ansi(thinking_buffer);
+                let thinking_lines: Vec<&str> = clean_thinking.lines().collect();
                 let max_thinking_lines = 20;
                 let truncated = thinking_lines.len() > max_thinking_lines;
                 
@@ -422,7 +678,8 @@ impl ConversationViewer {
                         .add_modifier(Modifier::BOLD),
                 )));
             }
-            for line in streaming_buffer.lines() {
+            let clean_streaming = strip_ansi(streaming_buffer);
+            for line in clean_streaming.lines() {
                 lines.push(Line::from(Span::styled(
                     format!("  {}", line),
                     Style::default().fg(theme.colors.foreground.to_color()),
@@ -470,6 +727,9 @@ impl ConversationViewer {
         // Apply scroll offset and render
         let scrolled_paragraph = paragraph.scroll((self.scroll_offset, 0));
         frame.render_widget(scrolled_paragraph, conversation_area);
+
+        // Render selection highlight overlay
+        self.render_selection_highlight(frame, inner, theme);
 
         // Render scrollbar if content exceeds visible area
         if self.line_count > self.visible_height as usize {
@@ -626,8 +886,9 @@ impl ConversationViewer {
         ]));
         
         if !self.thinking_collapsed {
-            // Show thinking content
-            let thinking_lines: Vec<&str> = text.lines().collect();
+            // Show thinking content (strip ANSI escapes)
+            let clean_text = strip_ansi(text);
+            let thinking_lines: Vec<&str> = clean_text.lines().collect();
             let max_lines = 30;
             let truncated = thinking_lines.len() > max_lines;
             

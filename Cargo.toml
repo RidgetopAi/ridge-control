@@ -63,7 +63,7 @@ libc = "0.2"  # For kill syscall
 # ─────────────────────────────────────────────────────────────────────────────
 # Secure Key Storage (i[2] decision: hybrid keyring + encrypted fallback)
 # ─────────────────────────────────────────────────────────────────────────────
-keyring = "3"  # Wrapper over keyring-core with Linux backends
+keyring = { version = "3", features = ["sync-secret-service"] }  # D-Bus Secret Service backend
 chacha20poly1305 = "0.10"  # Fallback encryption
 argon2 = "0.5"  # Key derivation
 zeroize = { version = "1.8", features = ["derive"] }

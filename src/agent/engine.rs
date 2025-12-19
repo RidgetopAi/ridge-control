@@ -314,7 +314,7 @@ impl<S: ThreadStore> AgentEngine<S> {
             }
         }
 
-        self.llm.continue_after_tool(built.request.system);
+        self.llm.continue_after_tool(built.request.system, self.config.tools.clone());
         self.transition(AgentState::StreamingResponse);
     }
 
@@ -322,30 +322,27 @@ impl<S: ThreadStore> AgentEngine<S> {
         self.emit(AgentEvent::Chunk(chunk.clone()));
 
         // Accumulate response content
-        match chunk {
-            StreamChunk::Delta(delta) => {
-                match delta {
-                    crate::llm::types::StreamDelta::Text(text) => {
-                        // Add to current text block or create new one
-                        if let Some(ContentBlock::Text(ref mut t)) = self.current_response.last_mut() {
-                            t.push_str(&text);
-                        } else {
-                            self.current_response.push(ContentBlock::Text(text));
-                        }
+        if let StreamChunk::Delta(delta) = chunk {
+            match delta {
+                crate::llm::types::StreamDelta::Text(text) => {
+                    // Add to current text block or create new one
+                    if let Some(ContentBlock::Text(ref mut t)) = self.current_response.last_mut() {
+                        t.push_str(&text);
+                    } else {
+                        self.current_response.push(ContentBlock::Text(text));
                     }
-                    crate::llm::types::StreamDelta::ToolInput { .. } => {
-                        // Tool inputs are handled via ToolUseDetected event
-                    }
-                    crate::llm::types::StreamDelta::Thinking(text) => {
-                        if let Some(ContentBlock::Thinking(ref mut t)) = self.current_response.last_mut() {
-                            t.push_str(&text);
-                        } else {
-                            self.current_response.push(ContentBlock::Thinking(text));
-                        }
+                }
+                crate::llm::types::StreamDelta::ToolInput { .. } => {
+                    // Tool inputs are handled via ToolUseDetected event
+                }
+                crate::llm::types::StreamDelta::Thinking(text) => {
+                    if let Some(ContentBlock::Thinking(ref mut t)) = self.current_response.last_mut() {
+                        t.push_str(&text);
+                    } else {
+                        self.current_response.push(ContentBlock::Thinking(text));
                     }
                 }
             }
-            _ => {}
         }
     }
 

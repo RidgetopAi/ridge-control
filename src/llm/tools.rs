@@ -221,7 +221,7 @@ impl ToolRegistry {
             },
             ToolDefinition {
                 name: "bash_execute".to_string(),
-                description: "Execute a bash command (requires dangerous mode)".to_string(),
+                description: "Execute a bash command".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
@@ -231,6 +231,20 @@ impl ToolRegistry {
                         }
                     },
                     "required": ["command"]
+                }),
+            },
+            ToolDefinition {
+                name: "file_delete".to_string(),
+                description: "Delete a file".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "The path to the file to delete"
+                        }
+                    },
+                    "required": ["path"]
                 }),
             },
         ]
@@ -267,6 +281,11 @@ impl ToolExecutor {
     
     pub fn set_dangerous_mode(&mut self, enabled: bool) {
         self.registry.set_dangerous_mode(enabled);
+    }
+    
+    /// Get tool definitions for LLM requests
+    pub fn tool_definitions_for_llm(&self) -> Vec<ToolDefinition> {
+        self.registry.get_tool_definitions()
     }
     
     /// Check if a tool can be executed

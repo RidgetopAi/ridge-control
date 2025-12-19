@@ -11,6 +11,7 @@ mod llm;
 mod pty;
 mod streams;
 mod tabs;
+mod util;
 
 use std::path::PathBuf;
 

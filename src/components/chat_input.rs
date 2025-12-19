@@ -388,31 +388,100 @@ impl ChatInput {
             .title(Span::styled(" Message ", title_style));
 
         let inner_area = block.inner(area);
+        let wrap_width = inner_area.width as usize;
         
-        // Build the display lines with cursor
-        let mut display_lines: Vec<Line> = Vec::new();
-        let visible_start = self.scroll_offset as usize;
-        let visible_end = (self.scroll_offset as usize + inner_area.height as usize).min(self.lines.len());
-
-        for (line_idx, line) in self.lines.iter().enumerate().skip(visible_start).take(visible_end - visible_start) {
+        if wrap_width == 0 {
+            frame.render_widget(block, area);
+            return;
+        }
+        
+        // Build visual lines with soft-wrapping
+        // Each logical line may become multiple visual lines
+        let mut visual_lines: Vec<Line> = Vec::new();
+        let mut cursor_visual_row: Option<usize> = None;
+        let mut cursor_visual_col: usize = 0;
+        
+        for (line_idx, line) in self.lines.iter().enumerate() {
             let is_cursor_line = line_idx == self.cursor.0;
+            let chars: Vec<char> = line.chars().collect();
             
-            if is_cursor_line && focused {
-                // Build line with cursor indicator
-                let cursor_col = self.cursor.1;
-                let chars: Vec<char> = line.chars().collect();
-                
+            if chars.is_empty() {
+                // Empty line - still takes up one visual row
+                if is_cursor_line {
+                    cursor_visual_row = Some(visual_lines.len());
+                    cursor_visual_col = 0;
+                }
+                visual_lines.push(Line::from(" "));
+            } else {
+                // Wrap the line into chunks of wrap_width
+                let mut char_offset = 0;
+                while char_offset < chars.len() {
+                    let chunk_end = (char_offset + wrap_width).min(chars.len());
+                    let chunk: String = chars[char_offset..chunk_end].iter().collect();
+                    
+                    // Check if cursor is in this visual line
+                    if is_cursor_line {
+                        let cursor_col = self.cursor.1;
+                        if cursor_col >= char_offset && cursor_col < chunk_end {
+                            cursor_visual_row = Some(visual_lines.len());
+                            cursor_visual_col = cursor_col - char_offset;
+                        } else if cursor_col == chars.len() && chunk_end == chars.len() {
+                            // Cursor at end of line
+                            cursor_visual_row = Some(visual_lines.len());
+                            cursor_visual_col = chunk.chars().count();
+                        }
+                    }
+                    
+                    visual_lines.push(Line::styled(
+                        chunk,
+                        Style::default().fg(theme.colors.foreground.to_color()),
+                    ));
+                    
+                    char_offset = chunk_end;
+                }
+            }
+        }
+        
+        // Calculate scroll to keep cursor visible
+        let total_visual_lines = visual_lines.len();
+        let visible_height = inner_area.height as usize;
+        
+        let scroll_offset = if let Some(cursor_row) = cursor_visual_row {
+            if cursor_row < self.scroll_offset as usize {
+                cursor_row
+            } else if cursor_row >= self.scroll_offset as usize + visible_height {
+                cursor_row.saturating_sub(visible_height - 1)
+            } else {
+                self.scroll_offset as usize
+            }
+        } else {
+            self.scroll_offset as usize
+        };
+        
+        // Build the final display with cursor overlay
+        let visible_start = scroll_offset;
+        let visible_end = (scroll_offset + visible_height).min(total_visual_lines);
+        
+        let mut display_lines: Vec<Line> = Vec::new();
+        
+        for (visual_idx, vline) in visual_lines.iter().enumerate().skip(visible_start).take(visible_end - visible_start) {
+            let is_cursor_row = cursor_visual_row == Some(visual_idx) && focused;
+            
+            if is_cursor_row {
+                // Render this line with cursor highlighting
+                let text: String = vline.spans.iter().map(|s| s.content.as_ref()).collect();
+                let chars: Vec<char> = text.chars().collect();
                 let mut spans = Vec::new();
                 
                 // Text before cursor
-                if cursor_col > 0 {
-                    let before: String = chars[..cursor_col.min(chars.len())].iter().collect();
+                if cursor_visual_col > 0 {
+                    let before: String = chars[..cursor_visual_col.min(chars.len())].iter().collect();
                     spans.push(Span::styled(before, Style::default().fg(theme.colors.foreground.to_color())));
                 }
                 
-                // Cursor character (or space if at end)
-                if cursor_col < chars.len() {
-                    let cursor_char = chars[cursor_col].to_string();
+                // Cursor character
+                if cursor_visual_col < chars.len() {
+                    let cursor_char = chars[cursor_visual_col].to_string();
                     spans.push(Span::styled(
                         cursor_char,
                         Style::default()
@@ -420,7 +489,7 @@ impl ChatInput {
                             .bg(theme.colors.primary.to_color())
                     ));
                 } else {
-                    // Cursor at end of line - show block cursor
+                    // Cursor at end - show block cursor
                     spans.push(Span::styled(
                         " ",
                         Style::default()
@@ -430,19 +499,14 @@ impl ChatInput {
                 }
                 
                 // Text after cursor
-                if cursor_col + 1 < chars.len() {
-                    let after: String = chars[cursor_col + 1..].iter().collect();
+                if cursor_visual_col + 1 < chars.len() {
+                    let after: String = chars[cursor_visual_col + 1..].iter().collect();
                     spans.push(Span::styled(after, Style::default().fg(theme.colors.foreground.to_color())));
                 }
                 
                 display_lines.push(Line::from(spans));
             } else {
-                // For empty lines, use a single space to ensure line takes up space
-                let display_text = if line.is_empty() { " " } else { line.as_str() };
-                display_lines.push(Line::styled(
-                    display_text.to_string(),
-                    Style::default().fg(theme.colors.foreground.to_color()),
-                ));
+                display_lines.push(vline.clone());
             }
         }
 
@@ -452,10 +516,10 @@ impl ChatInput {
         frame.render_widget(paragraph, area);
 
         // Render scrollbar if content exceeds visible area
-        if self.lines.len() as u16 > inner_area.height {
+        if total_visual_lines > visible_height {
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight);
-            let mut scrollbar_state = ScrollbarState::new(self.lines.len())
-                .position(self.scroll_offset as usize);
+            let mut scrollbar_state = ScrollbarState::new(total_visual_lines)
+                .position(scroll_offset);
             
             frame.render_stateful_widget(
                 scrollbar,

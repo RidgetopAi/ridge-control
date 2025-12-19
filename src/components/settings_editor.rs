@@ -682,19 +682,15 @@ impl SettingsEditor {
     fn handle_key_normal(&mut self, key: KeyEvent) -> Option<Action> {
         match key.code {
             KeyCode::Tab => {
-                self.next_section();
                 Some(Action::SettingsNextSection)
             }
             KeyCode::BackTab => {
-                self.prev_section();
                 Some(Action::SettingsPrevSection)
             }
             KeyCode::Char('j') | KeyCode::Down => {
-                self.next_item();
                 Some(Action::SettingsNextItem)
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                self.prev_item();
                 Some(Action::SettingsPrevItem)
             }
             KeyCode::Enter | KeyCode::Char(' ') => {
@@ -747,6 +743,10 @@ impl SettingsEditor {
             KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 Some(Action::SettingsSave)
             }
+            // Ctrl+V in normal mode - consume but do nothing (prevents fallthrough to quit)
+            KeyCode::Char('v') | KeyCode::Char('V') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                None
+            }
             KeyCode::Esc | KeyCode::Char('q') => Some(Action::SettingsClose),
             _ => None,
         }
@@ -773,11 +773,9 @@ impl SettingsEditor {
                 self.clear_input();
                 None
             }
-            // Ctrl+V: Paste (clipboard handled externally, but we accept pasted text)
-            KeyCode::Char('v') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                // Note: Terminal paste comes as rapid char events, not Ctrl+V
-                // This is a placeholder for potential clipboard integration
-                None
+            // Ctrl+V or Ctrl+Shift+V: Paste - dispatch to app-level handler which routes to paste_text()
+            KeyCode::Char('v') | KeyCode::Char('V') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::Paste)
             }
             KeyCode::Char(c) => {
                 self.handle_edit_char(c);

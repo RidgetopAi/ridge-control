@@ -1398,7 +1398,20 @@ impl App {
             }
         }
         
-        // Mouse scroll over conversation area - route to conversation regardless of focus
+        // Handle ongoing conversation text selection (drag/up events while selecting)
+        if self.conversation_viewer.is_selecting() {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                    if let Some(action) = self.conversation_viewer.handle_mouse(mouse) {
+                        return Some(action);
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+        
+        // Mouse events over conversation area - route to conversation viewer for selection
         if self.conversation_area.height > 0 {
             let in_conversation = mouse.row >= self.conversation_area.y
                 && mouse.row < self.conversation_area.y + self.conversation_area.height
@@ -1406,16 +1419,15 @@ impl App {
                 && mouse.column < self.conversation_area.x + self.conversation_area.width;
             
             if in_conversation {
-                match mouse.kind {
-                    MouseEventKind::ScrollUp => return Some(Action::ConversationScrollUp(3)),
-                    MouseEventKind::ScrollDown => return Some(Action::ConversationScrollDown(3)),
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        // Click on conversation focuses StreamViewer (conversation history)
-                        self.focus.focus(FocusArea::StreamViewer);
-                        return None;
-                    }
-                    _ => {}
+                // Route mouse events to conversation viewer for text selection
+                if let Some(action) = self.conversation_viewer.handle_mouse(mouse) {
+                    return Some(action);
                 }
+                // Focus on click if no action returned
+                if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                    self.focus.focus(FocusArea::StreamViewer);
+                }
+                return None;
             }
         }
         
@@ -1676,10 +1688,16 @@ impl App {
                 }
             }
             Action::Paste => {
-                // Paste to active tab's PTY (TRC-005)
+                // Route paste based on focus and editing state
                 if let Some(ref mut clipboard) = self.clipboard {
                     if let Ok(text) = clipboard.get_text() {
-                        self.tab_manager.write_to_active_pty(text.into_bytes());
+                        // If settings editor is visible and in editing mode, paste there
+                        if self.show_settings_editor && self.settings_editor.is_editing() {
+                            self.settings_editor.paste_text(&text);
+                        } else {
+                            // Otherwise paste to active tab's PTY (TRC-005)
+                            self.tab_manager.write_to_active_pty(text.into_bytes());
+                        }
                     }
                 }
             }
@@ -1804,7 +1822,8 @@ impl App {
                 tracing::debug!("LLM manager configured: {}", self.llm_manager.is_configured());
                 tracing::debug!("Current provider: {}", self.llm_manager.current_provider());
                 tracing::debug!("Current model: {}", self.llm_manager.current_model());
-                self.llm_manager.send_message(msg, None);
+                let tools = self.tool_executor.tool_definitions_for_llm();
+                self.llm_manager.send_message(msg, None, tools);
                 tracing::info!("Message sent to LLM manager");
             }
             Action::LlmCancel => {
@@ -1812,6 +1831,11 @@ impl App {
             }
             Action::LlmSelectModel(model) => {
                 self.llm_manager.set_model(&model);
+                // Also persist to config so model is remembered on restart
+                self.config_manager.llm_config_mut().defaults.model = model.clone();
+                if let Err(e) = self.config_manager.save_llm_config() {
+                    tracing::warn!("Failed to save model selection: {}", e);
+                }
             }
             Action::LlmSelectProvider(provider) => {
                 self.llm_manager.set_provider(&provider);
@@ -1863,7 +1887,8 @@ impl App {
                     self.llm_manager.add_tool_use(pending.tool);
                     self.llm_manager.add_tool_result(error_result);
                     // Continue conversation with the rejection
-                    self.llm_manager.continue_after_tool(None);
+                    let tools = self.tool_executor.tool_definitions_for_llm();
+                    self.llm_manager.continue_after_tool(None, tools);
                 }
             }
             Action::ToolResult(result) => {
@@ -1887,7 +1912,8 @@ impl App {
                 self.llm_manager.add_tool_result(result);
                 self.pending_tool = None;
                 // Continue the conversation
-                self.llm_manager.continue_after_tool(None);
+                let tools = self.tool_executor.tool_definitions_for_llm();
+                self.llm_manager.continue_after_tool(None, tools);
             }
             Action::ToolToggleDangerousMode => {
                 let current = self.dangerous_mode;
@@ -1905,6 +1931,18 @@ impl App {
                 // TRC-028: Handle streams.toml changes - dynamically regenerate menu from config
                 if path.file_name().and_then(|n| n.to_str()) == Some("streams.toml") {
                     self.reload_streams_from_config();
+                }
+                
+                // Re-apply LLM settings when llm.toml changes (fixes model not updating after hot-reload)
+                if path.file_name().and_then(|n| n.to_str()) == Some("llm.toml") {
+                    let llm_config = self.config_manager.llm_config();
+                    self.llm_manager.set_provider(&llm_config.defaults.provider);
+                    self.llm_manager.set_model(&llm_config.defaults.model);
+                    tracing::info!(
+                        "Re-applied LLM settings after hot-reload: provider={}, model={}",
+                        llm_config.defaults.provider,
+                        llm_config.defaults.model
+                    );
                 }
             }
             Action::ConfigReload => {
@@ -1937,6 +1975,16 @@ impl App {
             }
             Action::ConversationScrollToBottom => {
                 self.conversation_viewer.scroll_to_bottom();
+            }
+            Action::ConversationCopy => {
+                // Copy selected text from conversation viewer to clipboard
+                if let Some(text) = self.conversation_viewer.get_selected_text() {
+                    if let Some(ref mut clipboard) = self.clipboard {
+                        let _ = clipboard.set_text(&text);
+                        self.notification_manager.info("Copied to clipboard");
+                    }
+                }
+                self.conversation_viewer.clear_selection();
             }
 
             // Tab actions (TRC-005: Per-tab PTY isolation)
@@ -2371,6 +2419,8 @@ impl App {
             Action::SettingsProviderChanged(ref provider) => {
                 // Update LLMManager with new provider
                 self.llm_manager.set_provider(provider);
+                // Update config_manager so it persists on save
+                self.config_manager.llm_config_mut().defaults.provider = provider.clone();
                 // Refresh models list for the new provider
                 let models = self.model_catalog.models_for_provider(provider);
                 self.settings_editor.set_available_models(models.iter().map(|m| m.to_string()).collect());
@@ -2378,6 +2428,8 @@ impl App {
             Action::SettingsModelChanged(ref model) => {
                 // Update LLMManager with new model
                 self.llm_manager.set_model(model);
+                // Update config_manager so it persists on save
+                self.config_manager.llm_config_mut().defaults.model = model.clone();
             }
             Action::SettingsTestKey => {
                 self.handle_settings_test_key();
@@ -2640,6 +2692,13 @@ impl App {
     
     /// Close the settings editor overlay
     fn close_settings_editor(&mut self) {
+        // Auto-save settings on close
+        if let Err(e) = self.config_manager.save_llm_config() {
+            tracing::warn!("Failed to auto-save LLM config on close: {}", e);
+        } else {
+            tracing::debug!("LLM settings auto-saved on close");
+        }
+        
         self.show_settings_editor = false;
         self.settings_editor.clear_key_test_status();
         self.focus.focus(FocusArea::Menu);
@@ -2647,14 +2706,17 @@ impl App {
     
     /// Handle storing a new API key from settings
     fn handle_settings_key_entered(&mut self, provider: String, key: String) {
+        tracing::info!("Storing API key for provider: {}", provider);
         if let Some(ref mut keystore) = self.keystore {
             let key_id = crate::config::KeyId::from_provider_str(&provider);
+            tracing::debug!("Key ID: {:?}", key_id);
             match keystore.store(&key_id, &SecretString::new(key.clone())) {
                 Ok(()) => {
                     // Update settings editor to show key is now configured
                     self.settings_editor.mark_key_configured(&provider);
                     
                     // Register the key with LLMManager
+                    tracing::info!("Registering {} provider with LLMManager", provider);
                     match provider.as_str() {
                         "anthropic" => self.llm_manager.register_anthropic(key),
                         "openai" => self.llm_manager.register_openai(key),

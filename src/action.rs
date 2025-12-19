@@ -146,6 +146,8 @@ pub enum Action {
     ConversationScrollDown(u16),
     ConversationScrollToTop,
     ConversationScrollToBottom,
+    /// Copy selected text from conversation viewer
+    ConversationCopy,
 
     // Tab actions
     /// Create a new tab

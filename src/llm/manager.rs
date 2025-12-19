@@ -14,7 +14,7 @@ use super::grok::GrokProvider;
 use super::groq::GroqProvider;
 use super::openai::OpenAIProvider;
 use super::provider::{Provider, ProviderRegistry};
-use super::types::{LLMError, LLMRequest, Message, StreamChunk, ToolUse, ContentBlock, ToolResult};
+use super::types::{LLMError, LLMRequest, Message, StreamChunk, ToolUse, ContentBlock, ToolResult, ToolDefinition};
 
 /// Event from the LLM subsystem
 #[derive(Debug, Clone)]
@@ -132,20 +132,30 @@ impl LLMManager {
         ];
 
         for (key_id, name) in providers {
-            if let Ok(Some(secret)) = keystore.get(&key_id) {
-                match key_id {
-                    KeyId::Anthropic => self.register_anthropic(secret.expose()),
-                    KeyId::OpenAI => self.register_openai(secret.expose()),
-                    KeyId::Gemini => self.register_gemini(secret.expose()),
-                    KeyId::Grok => self.register_grok(secret.expose()),
-                    KeyId::Groq => self.register_groq(secret.expose()),
-                    KeyId::Custom(_) => continue,
+            match keystore.get(&key_id) {
+                Ok(Some(secret)) => {
+                    tracing::info!("Found key for {} in keystore, registering...", name);
+                    match key_id {
+                        KeyId::Anthropic => self.register_anthropic(secret.expose()),
+                        KeyId::OpenAI => self.register_openai(secret.expose()),
+                        KeyId::Gemini => self.register_gemini(secret.expose()),
+                        KeyId::Grok => self.register_grok(secret.expose()),
+                        KeyId::Groq => self.register_groq(secret.expose()),
+                        KeyId::Custom(_) => continue,
+                    }
+                    registered.push(name.to_string());
+                    tracing::info!("Registered {} provider from keystore", name);
                 }
-                registered.push(name.to_string());
-                tracing::info!("Registered {} provider from keystore", name);
+                Ok(None) => {
+                    tracing::debug!("No key found for {} in keystore", name);
+                }
+                Err(e) => {
+                    tracing::warn!("Error checking keystore for {}: {}", name, e);
+                }
             }
         }
 
+        tracing::info!("Keystore registration complete. Registered providers: {:?}", registered);
         registered
     }
 
@@ -171,14 +181,50 @@ impl LLMManager {
         &self.current_model
     }
 
+    /// Generate a user-friendly error message when provider is not available
+    fn provider_not_configured_error(&self) -> String {
+        if self.current_provider.is_empty() {
+            "No LLM provider configured. Open Settings (Ctrl+,) to select a provider and add an API key.".to_string()
+        } else {
+            format!(
+                "Provider '{}' has no API key configured. Open Settings (Ctrl+,) to add an API key for {}.",
+                self.current_provider, self.current_provider
+            )
+        }
+    }
+
     pub fn set_provider(&mut self, name: &str) {
+        // Always update current_provider - this allows settings to be applied
+        // even before API keys are configured
+        let old_provider = std::mem::replace(&mut self.current_provider, name.to_string());
+        let provider_changed = old_provider != name;
+        
         if let Some(provider) = self.registry.get(name) {
-            self.current_provider = name.to_string();
-            self.current_model = provider.default_model().to_string();
+            // Only reset model to default if provider actually changed
+            // This preserves the user's model selection when just re-setting the same provider
+            if provider_changed {
+                self.current_model = provider.default_model().to_string();
+                tracing::info!("Switched to provider: {}, model: {}", name, self.current_model);
+            } else {
+                tracing::debug!("Provider {} unchanged, keeping model: {}", name, self.current_model);
+            }
+        } else {
+            // Provider not registered yet (no API key) - keep the provider name
+            // but warn so the user knows they need to add a key
+            tracing::warn!(
+                "Provider '{}' selected but not yet registered (no API key configured). \
+                 Add an API key in Settings to use this provider.",
+                name
+            );
+            // Don't change model - keep whatever was set
+            if old_provider != name {
+                tracing::debug!("Provider changed from '{}' to '{}' (pending key)", old_provider, name);
+            }
         }
     }
 
     pub fn set_model(&mut self, model: &str) {
+        tracing::info!("LLMManager::set_model called: '{}' -> '{}'", self.current_model, model);
         self.current_model = model.to_string();
     }
 
@@ -224,13 +270,15 @@ impl LLMManager {
     }
     
     /// Continue the conversation after a tool result (re-send to get LLM response)
-    pub fn continue_after_tool(&mut self, system_prompt: Option<String>) {
+    pub fn continue_after_tool(&mut self, system_prompt: Option<String>, tools: Vec<ToolDefinition>) {
         let provider = match self.registry.get(&self.current_provider) {
             Some(p) => p,
             None => {
+                let error_msg = self.provider_not_configured_error();
+                tracing::error!("{}", error_msg);
                 let _ = self.event_tx.send(LLMEvent::Error(LLMError::ProviderError {
                     status: 0,
-                    message: "No provider configured".to_string(),
+                    message: error_msg,
                 }));
                 return;
             }
@@ -240,6 +288,7 @@ impl LLMManager {
             model: self.current_model.clone(),
             system: system_prompt,
             messages: self.conversation.clone(),
+            tools,
             stream: true,
             ..Default::default()
         };
@@ -302,9 +351,11 @@ impl LLMManager {
         let provider = match self.registry.get(&self.current_provider) {
             Some(p) => p,
             None => {
+                let error_msg = self.provider_not_configured_error();
+                tracing::error!("{}", error_msg);
                 let _ = self.event_tx.send(LLMEvent::Error(LLMError::ProviderError {
                     status: 0,
-                    message: "No provider configured".to_string(),
+                    message: error_msg,
                 }));
                 return;
             }
@@ -350,34 +401,51 @@ impl LLMManager {
         });
     }
 
-    pub fn send_message(&mut self, user_message: String, system_prompt: Option<String>) {
-        tracing::info!("LLMManager::send_message called");
+    pub fn send_message(&mut self, user_message: String, system_prompt: Option<String>, tools: Vec<ToolDefinition>) {
+        tracing::info!(
+            "LLMManager::send_message called - current_provider='{}', current_model='{}', registered={:?}, tools={}",
+            self.current_provider,
+            self.current_model,
+            self.registry.list(),
+            tools.len()
+        );
         self.add_user_message(user_message);
 
         let provider = match self.registry.get(&self.current_provider) {
             Some(p) => {
-                tracing::debug!("Got provider: {}", p.name());
+                tracing::info!("Using provider: {} for model: {}", p.name(), self.current_model);
                 p
             }
             None => {
-                tracing::error!("No provider configured! current_provider={}", self.current_provider);
+                let error_msg = self.provider_not_configured_error();
+                tracing::error!("{}", error_msg);
                 let _ = self.event_tx.send(LLMEvent::Error(LLMError::ProviderError {
                     status: 0,
-                    message: "No provider configured".to_string(),
+                    message: error_msg,
                 }));
                 return;
             }
         };
 
-        tracing::debug!("Building LLM request");
+        tracing::info!(
+            "Building LLM request - current_model='{}', will use this in API call",
+            self.current_model
+        );
         let request = LLMRequest {
             model: self.current_model.clone(),
             system: system_prompt,
             messages: self.conversation.clone(),
+            tools,
             stream: true,
             ..Default::default()
         };
-        tracing::debug!("Request built with {} messages", request.messages.len());
+        tracing::info!(
+            "Request built: model='{}', messages={}, tools={}, stream={}",
+            request.model,
+            request.messages.len(),
+            request.tools.len(),
+            request.stream
+        );
 
         let event_tx = self.event_tx.clone();
         let (cancel_tx, mut cancel_rx) = mpsc::channel::<()>(1);
