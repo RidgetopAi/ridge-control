@@ -427,6 +427,10 @@ pub enum Action {
     SettingsTestKey,
     /// Test key result received (TS-007)
     SettingsTestKeyResult { provider: String, success: bool, error: Option<String> },
+    /// Temperature changed (TS-010)
+    SettingsTemperatureChanged(f32),
+    /// Max tokens changed (TS-010)
+    SettingsMaxTokensChanged(u32),
     /// Save settings
     SettingsSave,
 

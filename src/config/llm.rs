@@ -33,19 +33,19 @@ impl Default for LLMConfig {
         providers.insert(
             "openai".to_string(),
             ProviderConfig {
-                default_model: "gpt-4o".to_string(),
+                default_model: "gpt-5.2-2025-12-11".to_string(),
             },
         );
         providers.insert(
             "gemini".to_string(),
             ProviderConfig {
-                default_model: "gemini-2.0-flash".to_string(),
+                default_model: "gemini-2.5-flash".to_string(),
             },
         );
         providers.insert(
             "grok".to_string(),
             ProviderConfig {
-                default_model: "grok-3".to_string(),
+                default_model: "grok-4-fast-non-reasoning".to_string(),
             },
         );
         providers.insert(
@@ -179,6 +179,7 @@ mod tests {
 
     #[test]
     fn test_default_providers() {
+        // Updated for new model defaults (TS-010 fix)
         let config = LLMConfig::default();
         assert_eq!(
             config.default_model_for_provider("anthropic"),
@@ -186,15 +187,15 @@ mod tests {
         );
         assert_eq!(
             config.default_model_for_provider("openai"),
-            Some("gpt-4o")
+            Some("gpt-5.2-2025-12-11")
         );
         assert_eq!(
             config.default_model_for_provider("gemini"),
-            Some("gemini-2.0-flash")
+            Some("gemini-2.5-flash")
         );
         assert_eq!(
             config.default_model_for_provider("grok"),
-            Some("grok-3")
+            Some("grok-4-fast-non-reasoning")
         );
         assert_eq!(
             config.default_model_for_provider("groq"),

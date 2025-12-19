@@ -32,10 +32,29 @@ impl AnthropicProvider {
         let http_client = Client::new();
 
         let models = vec![
+            // Claude 4.5 series (latest)
+            ModelInfo::new("claude-opus-4-5-20251101", "Claude Opus 4.5")
+                .with_thinking()
+                .with_context_window(200_000)
+                .with_max_output(16384),
+            ModelInfo::new("claude-sonnet-4-5-20250929", "Claude Sonnet 4.5")
+                .with_thinking()
+                .with_context_window(200_000)
+                .with_max_output(16384),
+            ModelInfo::new("claude-haiku-4-5-20251001", "Claude Haiku 4.5")
+                .with_thinking()
+                .with_context_window(200_000)
+                .with_max_output(8192),
+            // Claude 4 series
             ModelInfo::new("claude-sonnet-4-20250514", "Claude Sonnet 4")
                 .with_thinking()
                 .with_context_window(200_000)
                 .with_max_output(8192),
+            ModelInfo::new("claude-opus-4-20250514", "Claude Opus 4")
+                .with_thinking()
+                .with_context_window(200_000)
+                .with_max_output(8192),
+            // Claude 3.5 series
             ModelInfo::new("claude-3-5-sonnet-20241022", "Claude 3.5 Sonnet")
                 .with_context_window(200_000)
                 .with_max_output(8192),
@@ -48,7 +67,7 @@ impl AnthropicProvider {
             api_key,
             http_client,
             models,
-            default_model: "claude-sonnet-4-20250514".to_string(),
+            default_model: "claude-sonnet-4-5-20250929".to_string(),
         }
     }
 

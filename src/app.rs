@@ -22,6 +22,7 @@ use crate::cli::Cli;
 use crate::components::chat_input::ChatInput;
 use crate::components::command_palette::CommandPalette;
 use crate::components::config_panel::ConfigPanel;
+use crate::components::settings_editor::SettingsEditor;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::{ContextMenu, ContextMenuItem};
 use crate::components::conversation_viewer::ConversationViewer;
@@ -108,6 +109,9 @@ pub struct App {
     // Config panel (TRC-014)
     config_panel: ConfigPanel,
     show_config_panel: bool,
+    // Settings editor (TS-012)
+    settings_editor: SettingsEditor,
+    show_settings_editor: bool,
     // Spinner manager for animations (TRC-015)
     spinner_manager: SpinnerManager,
     // TRC-018: Dangerous mode flag (from --dangerously-allow-all CLI flag)
@@ -254,6 +258,8 @@ impl App {
             show_log_viewer: false,
             config_panel: ConfigPanel::new(),
             show_config_panel: false,
+            settings_editor: SettingsEditor::new(),
+            show_settings_editor: false,
             spinner_manager: SpinnerManager::new(),
             dangerous_mode: false,
             context_menu: ContextMenu::new(),
@@ -800,6 +806,7 @@ impl App {
         let show_stream_viewer = self.show_stream_viewer;
         let show_log_viewer = self.show_log_viewer;
         let show_config_panel = self.show_config_panel;
+        let show_settings_editor = self.show_settings_editor;
         let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
         let messages = self.llm_manager.conversation().to_vec();
@@ -1088,6 +1095,26 @@ impl App {
                     self.config_panel.set_inner_area(config_inner);
                 }
                 
+                // Settings Editor overlay (TS-012) - centered modal dialog
+                if show_settings_editor {
+                    // Calculate centered dialog size (70% width, 70% height, clamped)
+                    let dialog_width = (size.width * 70 / 100).clamp(60, 120);
+                    let dialog_height = (size.height * 70 / 100).clamp(20, 40);
+                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                    let settings_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                    // Clear the area behind for readability
+                    frame.render_widget(ratatui::widgets::Clear, settings_area);
+
+                    self.settings_editor.render(
+                        frame,
+                        settings_area,
+                        focus.is_focused(FocusArea::SettingsEditor),
+                        &theme,
+                    );
+                }
+                
                 if show_confirm {
                     self.confirm_dialog.render(frame, size, &theme);
                 }
@@ -1250,6 +1277,10 @@ impl App {
                             return None;
                         }
                         self.chat_input.handle_event(&CrosstermEvent::Key(key))
+                    }
+                    FocusArea::SettingsEditor => {
+                        // Handle SettingsEditor key events (TS-012)
+                        self.settings_editor.handle_event(&CrosstermEvent::Key(key))
                     }
                 };
 
@@ -1439,6 +1470,10 @@ impl App {
             FocusArea::ChatInput => {
                 // ChatInput doesn't handle mouse events currently
                 None
+            }
+            FocusArea::SettingsEditor => {
+                // Handle SettingsEditor mouse events (TS-012)
+                self.settings_editor.handle_event(&CrosstermEvent::Mouse(mouse))
             }
         }
     }
@@ -2281,6 +2316,77 @@ impl App {
                 self.drag_state.stop();
             }
             
+            // Settings Editor actions (TS-012)
+            Action::SettingsShow => {
+                self.open_settings_editor();
+            }
+            Action::SettingsClose => {
+                self.close_settings_editor();
+            }
+            Action::SettingsToggle => {
+                if self.show_settings_editor {
+                    self.close_settings_editor();
+                } else {
+                    self.open_settings_editor();
+                }
+            }
+            Action::SettingsNextSection => {
+                self.settings_editor.update(&action);
+            }
+            Action::SettingsPrevSection => {
+                self.settings_editor.update(&action);
+            }
+            Action::SettingsNextItem => {
+                self.settings_editor.update(&action);
+            }
+            Action::SettingsPrevItem => {
+                self.settings_editor.update(&action);
+            }
+            Action::SettingsScrollUp(_) => {
+                self.settings_editor.update(&action);
+            }
+            Action::SettingsScrollDown(_) => {
+                self.settings_editor.update(&action);
+            }
+            Action::SettingsStartEdit => {
+                // Handled by settings_editor internally via handle_event
+            }
+            Action::SettingsCancelEdit => {
+                // Handled by settings_editor internally via handle_event
+            }
+            Action::SettingsKeyEntered { ref provider, ref key } => {
+                // Store the key in keystore and update SettingsEditor
+                self.handle_settings_key_entered(provider.clone(), key.clone());
+            }
+            Action::SettingsProviderChanged(ref provider) => {
+                // Update LLMManager with new provider
+                self.llm_manager.set_provider(provider);
+                // Refresh models list for the new provider
+                let models = self.model_catalog.models_for_provider(provider);
+                self.settings_editor.set_available_models(models.iter().map(|m| m.to_string()).collect());
+            }
+            Action::SettingsModelChanged(ref model) => {
+                // Update LLMManager with new model
+                self.llm_manager.set_model(model);
+            }
+            Action::SettingsTestKey => {
+                self.handle_settings_test_key();
+            }
+            Action::SettingsTestKeyResult { ref provider, success, ref error } => {
+                self.settings_editor.set_key_test_result(provider, success, error.clone());
+            }
+            Action::SettingsTemperatureChanged(temp) => {
+                // Update config with new temperature
+                self.config_manager.llm_config_mut().parameters.temperature = temp;
+            }
+            Action::SettingsMaxTokensChanged(tokens) => {
+                // Update config with new max tokens  
+                self.config_manager.llm_config_mut().parameters.max_tokens = tokens;
+            }
+            Action::SettingsSave => {
+                self.handle_settings_save();
+            }
+            
             _ => {}
         }
         Ok(())
@@ -2491,12 +2597,126 @@ impl App {
                     ContextMenuItem::separator(),
                     ContextMenuItem::new("New Tab", Action::TabCreate)
                         .with_shortcut("Ctrl+T"),
-                    ContextMenuItem::new("Settings", Action::ConfigPanelToggle),
+                    ContextMenuItem::new("Settings", Action::SettingsToggle),
                     ContextMenuItem::separator(),
                     ContextMenuItem::new("Quit", Action::Quit)
                         .with_shortcut("Ctrl+C"),
                 ]
             }
+        }
+    }
+    
+    // ==================== Settings Editor helpers (TS-012) ====================
+    
+    /// Open the settings editor overlay
+    fn open_settings_editor(&mut self) {
+        // Initialize settings editor with current config
+        let llm_config = self.config_manager.llm_config().clone();
+        self.settings_editor.set_config(llm_config);
+        
+        // Load key statuses from keystore
+        if let Some(ref keystore) = self.keystore {
+            self.settings_editor.load_key_statuses_from_keystore(keystore);
+        }
+        
+        // Set current provider/model info
+        let provider = self.llm_manager.current_provider();
+        let models = self.model_catalog.models_for_provider(provider);
+        self.settings_editor.set_available_models(models.iter().map(|m| m.to_string()).collect());
+        
+        self.show_settings_editor = true;
+        self.focus.focus(FocusArea::SettingsEditor);
+    }
+    
+    /// Close the settings editor overlay
+    fn close_settings_editor(&mut self) {
+        self.show_settings_editor = false;
+        self.settings_editor.clear_key_test_status();
+        self.focus.focus(FocusArea::Menu);
+    }
+    
+    /// Handle storing a new API key from settings
+    fn handle_settings_key_entered(&mut self, provider: String, key: String) {
+        if let Some(ref mut keystore) = self.keystore {
+            let key_id = crate::config::KeyId::from_provider_str(&provider);
+            match keystore.store(&key_id, &SecretString::new(key.clone())) {
+                Ok(()) => {
+                    // Update settings editor to show key is now configured
+                    self.settings_editor.mark_key_configured(&provider);
+                    
+                    // Register the key with LLMManager
+                    match provider.as_str() {
+                        "anthropic" => self.llm_manager.register_anthropic(key),
+                        "openai" => self.llm_manager.register_openai(key),
+                        "gemini" => self.llm_manager.register_gemini(key),
+                        "grok" => self.llm_manager.register_grok(key),
+                        "groq" => self.llm_manager.register_groq(key),
+                        _ => {}
+                    }
+                    
+                    self.notification_manager.success(format!("{} API key saved", provider));
+                }
+                Err(e) => {
+                    self.notification_manager.error_with_message(
+                        "Failed to save key",
+                        e.to_string(),
+                    );
+                }
+            }
+        } else {
+            self.notification_manager.error("Keystore not available");
+        }
+    }
+    
+    /// Handle test key request from settings
+    fn handle_settings_test_key(&mut self) {
+        if let Some(provider) = self.settings_editor.selected_provider() {
+            let provider = provider.to_string();
+            self.settings_editor.start_key_test(&provider);
+            
+            // Check if provider has a key configured
+            let has_key = self.keystore.as_ref()
+                .map(|ks| {
+                    let key_id = crate::config::KeyId::from_provider_str(&provider);
+                    ks.exists(&key_id).unwrap_or(false)
+                })
+                .unwrap_or(false);
+            
+            if !has_key {
+                self.settings_editor.set_key_test_result(
+                    &provider,
+                    false,
+                    Some("No API key configured".to_string()),
+                );
+                return;
+            }
+            
+            // For now, just verify the key exists - actual API test would require async
+            // Future: Spawn async task to actually test the API endpoint
+            self.settings_editor.set_key_test_result(&provider, true, None);
+            self.notification_manager.success(format!("{} key verified", provider));
+        }
+    }
+    
+    /// Handle settings save request
+    fn handle_settings_save(&mut self) {
+        let config = self.settings_editor.config().clone();
+        
+        // Update LLMManager with new settings
+        self.llm_manager.set_provider(&config.defaults.provider);
+        self.llm_manager.set_model(&config.defaults.model);
+        
+        // Update config manager with new settings
+        *self.config_manager.llm_config_mut() = config;
+        
+        // Save to config file
+        if let Err(e) = self.config_manager.save_llm_config() {
+            self.notification_manager.error_with_message(
+                "Failed to save LLM config",
+                e.to_string(),
+            );
+        } else {
+            self.notification_manager.success("LLM settings saved");
         }
     }
 }

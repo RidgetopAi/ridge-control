@@ -276,16 +276,35 @@ impl SettingsEditor {
                 "claude-3-haiku-20240307".to_string(),
             ],
             "openai" => vec![
+                "gpt-5.2-2025-12-11".to_string(),
+                "gpt-5.2-pro-2025-12-11".to_string(),
+                "gpt-5-mini-2025-08-07".to_string(),
                 "gpt-4o".to_string(),
                 "gpt-4o-mini".to_string(),
                 "gpt-4-turbo".to_string(),
+                "o1".to_string(),
+                "o1-mini".to_string(),
+                "o3-mini".to_string(),
             ],
             "gemini" => vec![
+                "gemini-2.5-flash".to_string(),
+                "gemini-2.5-pro".to_string(),
                 "gemini-2.0-flash".to_string(),
                 "gemini-1.5-pro".to_string(),
                 "gemini-1.5-flash".to_string(),
             ],
-            "grok" => vec!["grok-3".to_string(), "grok-2".to_string()],
+            "grok" => vec![
+                    "grok-4".to_string(),
+                    "grok-4-fast-reasoning".to_string(),
+                    "grok-4-fast-non-reasoning".to_string(),
+                    "grok-4-1-fast-reasoning".to_string(),
+                    "grok-4-1-fast-non-reasoning".to_string(),
+                    "grok-code-fast-1".to_string(),
+                    "grok-3".to_string(),
+                    "grok-3-mini".to_string(),
+                    "grok-2-1212".to_string(),
+                    "grok-2-vision-1212".to_string(),
+                ],
             "groq" => vec![
                 "llama-3.3-70b-versatile".to_string(),
                 "llama-3.1-8b-instant".to_string(),
@@ -489,6 +508,168 @@ impl SettingsEditor {
         None
     }
 
+    // ==================== TS-010: Parameters section methods ====================
+
+    /// Temperature range constants
+    const TEMPERATURE_MIN: f32 = 0.0;
+    const TEMPERATURE_MAX: f32 = 2.0;
+    const TEMPERATURE_STEP: f32 = 0.1;
+
+    /// Max tokens range constants
+    const MAX_TOKENS_MIN: u32 = 1;
+    const MAX_TOKENS_MAX: u32 = 128_000;
+    const MAX_TOKENS_STEP: u32 = 256;
+    const MAX_TOKENS_LARGE_STEP: u32 = 1024;
+
+    /// Increase temperature by step
+    pub fn increase_temperature(&mut self) -> Option<Action> {
+        if self.current_section() == SettingsSection::Parameters && self.selected_item == 0 {
+            let new_temp = (self.config.parameters.temperature + Self::TEMPERATURE_STEP)
+                .min(Self::TEMPERATURE_MAX);
+            // Round to 1 decimal place to avoid floating point drift
+            self.config.parameters.temperature = (new_temp * 10.0).round() / 10.0;
+            return Some(Action::SettingsTemperatureChanged(self.config.parameters.temperature));
+        }
+        None
+    }
+
+    /// Decrease temperature by step
+    pub fn decrease_temperature(&mut self) -> Option<Action> {
+        if self.current_section() == SettingsSection::Parameters && self.selected_item == 0 {
+            let new_temp = (self.config.parameters.temperature - Self::TEMPERATURE_STEP)
+                .max(Self::TEMPERATURE_MIN);
+            self.config.parameters.temperature = (new_temp * 10.0).round() / 10.0;
+            return Some(Action::SettingsTemperatureChanged(self.config.parameters.temperature));
+        }
+        None
+    }
+
+    /// Increase max tokens by step
+    pub fn increase_max_tokens(&mut self) -> Option<Action> {
+        if self.current_section() == SettingsSection::Parameters && self.selected_item == 1 {
+            let step = if self.config.parameters.max_tokens >= 8192 {
+                Self::MAX_TOKENS_LARGE_STEP
+            } else {
+                Self::MAX_TOKENS_STEP
+            };
+            self.config.parameters.max_tokens = self.config.parameters.max_tokens
+                .saturating_add(step)
+                .min(Self::MAX_TOKENS_MAX);
+            return Some(Action::SettingsMaxTokensChanged(self.config.parameters.max_tokens));
+        }
+        None
+    }
+
+    /// Decrease max tokens by step
+    pub fn decrease_max_tokens(&mut self) -> Option<Action> {
+        if self.current_section() == SettingsSection::Parameters && self.selected_item == 1 {
+            let step = if self.config.parameters.max_tokens > 8192 {
+                Self::MAX_TOKENS_LARGE_STEP
+            } else {
+                Self::MAX_TOKENS_STEP
+            };
+            self.config.parameters.max_tokens = self.config.parameters.max_tokens
+                .saturating_sub(step)
+                .max(Self::MAX_TOKENS_MIN);
+            return Some(Action::SettingsMaxTokensChanged(self.config.parameters.max_tokens));
+        }
+        None
+    }
+
+    /// Adjust current parameter (left = decrease, right = increase)
+    pub fn adjust_parameter(&mut self, increase: bool) -> Option<Action> {
+        if self.current_section() != SettingsSection::Parameters {
+            return None;
+        }
+        match self.selected_item {
+            0 => {
+                if increase {
+                    self.increase_temperature()
+                } else {
+                    self.decrease_temperature()
+                }
+            }
+            1 => {
+                if increase {
+                    self.increase_max_tokens()
+                } else {
+                    self.decrease_max_tokens()
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Get temperature as a percentage (0-100) for slider rendering
+    fn temperature_percentage(&self) -> u8 {
+        let range = Self::TEMPERATURE_MAX - Self::TEMPERATURE_MIN;
+        let normalized = (self.config.parameters.temperature - Self::TEMPERATURE_MIN) / range;
+        (normalized * 100.0).round() as u8
+    }
+
+    /// Get max tokens as a percentage (0-100) for slider rendering
+    fn max_tokens_percentage(&self) -> u8 {
+        // Use logarithmic scale for better UX with large token ranges
+        let log_min = (Self::MAX_TOKENS_MIN as f64).ln();
+        let log_max = (Self::MAX_TOKENS_MAX as f64).ln();
+        let log_val = (self.config.parameters.max_tokens as f64).ln();
+        let normalized = (log_val - log_min) / (log_max - log_min);
+        (normalized * 100.0).round() as u8
+    }
+
+    /// Render a slider bar (width chars, filled to percentage)
+    fn render_slider_bar(percentage: u8, width: usize) -> String {
+        let filled = (percentage as usize * width) / 100;
+        let empty = width.saturating_sub(filled);
+        format!("{}{}",
+            "█".repeat(filled),
+            "░".repeat(empty)
+        )
+    }
+
+    /// Get description for temperature value
+    fn temperature_description(temp: f32) -> &'static str {
+        if temp <= 0.2 {
+            "Very deterministic - same output each time"
+        } else if temp <= 0.5 {
+            "Focused - predictable with minor variation"
+        } else if temp <= 0.8 {
+            "Balanced - good mix of creativity and focus"
+        } else if temp <= 1.2 {
+            "Creative - more varied responses"
+        } else if temp <= 1.6 {
+            "Highly creative - quite random"
+        } else {
+            "Maximum randomness - unpredictable"
+        }
+    }
+
+    /// Get description for max tokens value
+    fn max_tokens_description(tokens: u32) -> &'static str {
+        if tokens <= 256 {
+            "Very short - quick responses"
+        } else if tokens <= 1024 {
+            "Short - concise answers"
+        } else if tokens <= 4096 {
+            "Medium - detailed responses"
+        } else if tokens <= 8192 {
+            "Long - comprehensive output"
+        } else if tokens <= 32768 {
+            "Very long - extensive generation"
+        } else {
+            "Maximum - full context capacity"
+        }
+    }
+
+    /// Format max tokens for display (e.g., 8192 -> "8K", 128000 -> "128K")
+    fn format_tokens_display(tokens: u32) -> String {
+        if tokens >= 1000 {
+            format!("{}K", tokens / 1000)
+        } else {
+            format!("{}", tokens)
+        }
+    }
+
     /// Scroll operations
     pub fn scroll_up(&mut self, n: u16) {
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
@@ -525,9 +706,38 @@ impl SettingsEditor {
                     SettingsSection::Provider => self.select_provider(),
                     SettingsSection::Model => self.select_model(),
                     SettingsSection::Parameters => {
-                        // Parameters editing - TS-010 will implement
+                        // Enter/Space on parameters does nothing (use left/right to adjust)
                         None
                     }
+                }
+            }
+            // TS-010: Parameter adjustment with left/right arrows and +/-
+            KeyCode::Left | KeyCode::Char('h') => {
+                if self.current_section() == SettingsSection::Parameters {
+                    self.adjust_parameter(false)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Right | KeyCode::Char('l') => {
+                if self.current_section() == SettingsSection::Parameters {
+                    self.adjust_parameter(true)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('-') | KeyCode::Char('_') => {
+                if self.current_section() == SettingsSection::Parameters {
+                    self.adjust_parameter(false)
+                } else {
+                    None
+                }
+            }
+            KeyCode::Char('+') | KeyCode::Char('=') => {
+                if self.current_section() == SettingsSection::Parameters {
+                    self.adjust_parameter(true)
+                } else {
+                    None
                 }
             }
             KeyCode::Char('t') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -780,22 +990,52 @@ impl SettingsEditor {
     /// Get a short description for a model (TS-009)
     fn model_description(model: &str) -> &'static str {
         match model {
-            // Anthropic models
-            "claude-sonnet-4-20250514" => "Latest Sonnet - Best balance of speed & intelligence",
-            "claude-3-5-sonnet-20241022" => "Previous Sonnet - Fast, capable coding model",
-            "claude-3-opus-20240229" => "Opus - Most capable, deep reasoning",
-            "claude-3-haiku-20240307" => "Haiku - Fastest, lightweight tasks",
-            // OpenAI models
-            "gpt-4o" => "Flagship multimodal model",
-            "gpt-4o-mini" => "Small, fast, affordable",
-            "gpt-4-turbo" => "GPT-4 with vision & 128K context",
-            // Gemini models
-            "gemini-2.0-flash" => "Latest Flash - Fast multimodal",
-            "gemini-1.5-pro" => "1M context - Document understanding",
-            "gemini-1.5-flash" => "Fast, efficient multimodal",
-            // Grok models
-            "grok-3" => "Latest Grok - Real-time knowledge",
-            "grok-2" => "Previous generation",
+            // Anthropic Claude 4.5 models (latest)
+            "claude-opus-4-5-20251101" => "Opus 4.5 - Most capable, deep reasoning with thinking",
+            "claude-sonnet-4-5-20250929" => "Sonnet 4.5 - Best balance of speed & intelligence",
+            "claude-haiku-4-5-20251001" => "Haiku 4.5 - Fast & capable with thinking",
+            // Anthropic Claude 4 models
+            "claude-sonnet-4-20250514" => "Sonnet 4 - Previous generation, extended thinking",
+            "claude-opus-4-20250514" => "Opus 4 - Previous generation, deep reasoning",
+            // Anthropic Claude 3.5 models
+            "claude-3-5-sonnet-20241022" => "3.5 Sonnet - Fast, capable coding model",
+            "claude-3-5-haiku-20241022" => "3.5 Haiku - Fast, lightweight tasks",
+            // Anthropic Claude 3 models (legacy)
+            "claude-3-opus-20240229" => "3 Opus - Legacy, deep reasoning",
+            "claude-3-haiku-20240307" => "3 Haiku - Legacy, fastest responses",
+            // OpenAI GPT-5 models (latest)
+            "gpt-5.2-2025-12-11" => "GPT-5.2 - Latest flagship model",
+            "gpt-5.2-pro-2025-12-11" => "GPT-5.2 Pro - Deep reasoning",
+            "gpt-5-mini-2025-08-07" => "GPT-5 Mini - Fast & efficient",
+            // OpenAI GPT-4 models
+            "gpt-4o" => "GPT-4o - Multimodal flagship",
+            "gpt-4o-mini" => "GPT-4o Mini - Fast, affordable",
+            "gpt-4-turbo" => "GPT-4 Turbo - 128K context",
+            // OpenAI o-series (reasoning)
+            "o1" => "o1 - Advanced reasoning",
+            "o1-mini" => "o1 Mini - Fast reasoning",
+            "o3-mini" => "o3 Mini - Latest reasoning",
+            // Gemini 2.5 models (latest)
+            "gemini-2.5-flash" => "2.5 Flash - Latest fast multimodal",
+            "gemini-2.5-pro" => "2.5 Pro - Thinking, deep reasoning",
+            // Gemini 2.0 models
+            "gemini-2.0-flash" => "2.0 Flash - Fast multimodal",
+            // Gemini 1.5 models
+            "gemini-1.5-pro" => "1.5 Pro - 2M context, document understanding",
+            "gemini-1.5-flash" => "1.5 Flash - Fast, efficient",
+            // Grok 4 models (latest)
+            "grok-4" => "Grok 4 - Flagship with thinking",
+            "grok-4-fast-reasoning" => "Grok 4 Fast - 2M context, reasoning",
+            "grok-4-fast-non-reasoning" => "Grok 4 Fast - 2M context, speed",
+            "grok-4-1-fast-reasoning" => "Grok 4.1 Fast - Latest reasoning",
+            "grok-4-1-fast-non-reasoning" => "Grok 4.1 Fast - Latest speed",
+            "grok-code-fast-1" => "Grok Code - Optimized for coding",
+            // Grok 3 models
+            "grok-3" => "Grok 3 - Previous generation",
+            "grok-3-mini" => "Grok 3 Mini - Lightweight",
+            // Grok 2 models (legacy)
+            "grok-2-1212" => "Grok 2 - Legacy",
+            "grok-2-vision-1212" => "Grok 2 Vision - Image understanding",
             // Groq models
             "llama-3.3-70b-versatile" => "Latest Llama - Ultra-fast inference",
             "llama-3.1-8b-instant" => "Small Llama - Instant responses",
@@ -1026,27 +1266,136 @@ impl SettingsEditor {
 
     fn render_parameters_section(&self, theme: &Theme) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
+        const SLIDER_WIDTH: usize = 20;
 
-        let items = [
-            ("Temperature", format!("{:.1}", self.config.parameters.temperature)),
-            ("Max Tokens", format!("{}", self.config.parameters.max_tokens)),
+        // ===== Temperature (item 0) =====
+        let temp_selected = self.current_section() == SettingsSection::Parameters 
+            && self.selected_item == 0;
+        
+        let temp_selector = if temp_selected { "▸" } else { " " };
+        let temp_selector_style = Style::default().fg(theme.colors.accent.to_color());
+        
+        let temp_label_style = if temp_selected {
+            Style::default()
+                .fg(theme.colors.accent.to_color())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.colors.foreground.to_color())
+        };
+
+        let temp_value = format!("{:.1}", self.config.parameters.temperature);
+        let temp_slider = Self::render_slider_bar(self.temperature_percentage(), SLIDER_WIDTH);
+
+        // Main temperature line: selector, label, slider, value
+        let mut temp_spans = vec![
+            Span::styled(format!(" {} ", temp_selector), temp_selector_style),
+            Span::styled("Temperature   ", temp_label_style),
+            Span::styled(
+                format!("[{}] ", temp_slider),
+                Style::default().fg(theme.colors.secondary.to_color()),
+            ),
+            Span::styled(
+                temp_value,
+                Style::default().fg(theme.colors.primary.to_color()),
+            ),
         ];
 
-        for (idx, (label, value)) in items.iter().enumerate() {
-            let is_selected = self.current_section() == SettingsSection::Parameters 
-                && self.selected_item == idx;
+        // Add adjustment hint for selected
+        if temp_selected {
+            temp_spans.push(Span::styled(
+                "  ←/→ adjust",
+                Style::default().fg(theme.colors.muted.to_color()),
+            ));
+        }
 
-            let label_style = if is_selected {
-                Style::default()
-                    .fg(theme.colors.accent.to_color())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme.colors.foreground.to_color())
-            };
+        lines.push(Line::from(temp_spans));
 
+        // Temperature description line (only when selected)
+        if temp_selected {
+            let desc = Self::temperature_description(self.config.parameters.temperature);
             lines.push(Line::from(vec![
-                Span::styled(format!("  {:14} ", label), label_style),
-                Span::styled(value.clone(), Style::default().fg(theme.colors.primary.to_color())),
+                Span::styled("        ", Style::default()),
+                Span::styled(
+                    desc.to_string(),
+                    Style::default().fg(theme.colors.secondary.to_color()),
+                ),
+            ]));
+            // Range hint
+            lines.push(Line::from(vec![
+                Span::styled("        ", Style::default()),
+                Span::styled(
+                    format!("Range: {:.1} - {:.1} (step {:.1})", 
+                        Self::TEMPERATURE_MIN, Self::TEMPERATURE_MAX, Self::TEMPERATURE_STEP),
+                    Style::default().fg(theme.colors.muted.to_color()),
+                ),
+            ]));
+        }
+
+        // Spacing
+        lines.push(Line::default());
+
+        // ===== Max Tokens (item 1) =====
+        let tokens_selected = self.current_section() == SettingsSection::Parameters 
+            && self.selected_item == 1;
+        
+        let tokens_selector = if tokens_selected { "▸" } else { " " };
+        let tokens_selector_style = Style::default().fg(theme.colors.accent.to_color());
+        
+        let tokens_label_style = if tokens_selected {
+            Style::default()
+                .fg(theme.colors.accent.to_color())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme.colors.foreground.to_color())
+        };
+
+        let tokens_value = Self::format_tokens_display(self.config.parameters.max_tokens);
+        let tokens_slider = Self::render_slider_bar(self.max_tokens_percentage(), SLIDER_WIDTH);
+
+        // Main tokens line: selector, label, slider, value
+        let mut tokens_spans = vec![
+            Span::styled(format!(" {} ", tokens_selector), tokens_selector_style),
+            Span::styled("Max Tokens    ", tokens_label_style),
+            Span::styled(
+                format!("[{}] ", tokens_slider),
+                Style::default().fg(theme.colors.secondary.to_color()),
+            ),
+            Span::styled(
+                tokens_value,
+                Style::default().fg(theme.colors.primary.to_color()),
+            ),
+        ];
+
+        // Add adjustment hint for selected
+        if tokens_selected {
+            tokens_spans.push(Span::styled(
+                "  ←/→ adjust",
+                Style::default().fg(theme.colors.muted.to_color()),
+            ));
+        }
+
+        lines.push(Line::from(tokens_spans));
+
+        // Tokens description line (only when selected)
+        if tokens_selected {
+            let desc = Self::max_tokens_description(self.config.parameters.max_tokens);
+            lines.push(Line::from(vec![
+                Span::styled("        ", Style::default()),
+                Span::styled(
+                    desc.to_string(),
+                    Style::default().fg(theme.colors.secondary.to_color()),
+                ),
+            ]));
+            // Range hint with exact value
+            lines.push(Line::from(vec![
+                Span::styled("        ", Style::default()),
+                Span::styled(
+                    format!("Value: {} tokens (range: {} - {})", 
+                        self.config.parameters.max_tokens,
+                        Self::MAX_TOKENS_MIN, 
+                        Self::format_tokens_display(Self::MAX_TOKENS_MAX)),
+                    Style::default().fg(theme.colors.muted.to_color()),
+                ),
             ]));
         }
 
@@ -1762,10 +2111,12 @@ mod tests {
 
     #[test]
     fn test_model_description() {
-        assert_eq!(SettingsEditor::model_description("claude-sonnet-4-20250514"), "Latest Sonnet - Best balance of speed & intelligence");
-        assert_eq!(SettingsEditor::model_description("gpt-4o"), "Flagship multimodal model");
-        assert_eq!(SettingsEditor::model_description("gemini-2.0-flash"), "Latest Flash - Fast multimodal");
-        assert_eq!(SettingsEditor::model_description("grok-3"), "Latest Grok - Real-time knowledge");
+        // Updated for new model catalog (TS-010 fix)
+        assert_eq!(SettingsEditor::model_description("claude-sonnet-4-20250514"), "Sonnet 4 - Previous generation, extended thinking");
+        assert_eq!(SettingsEditor::model_description("claude-sonnet-4-5-20250929"), "Sonnet 4.5 - Best balance of speed & intelligence");
+        assert_eq!(SettingsEditor::model_description("gpt-4o"), "GPT-4o - Multimodal flagship");
+        assert_eq!(SettingsEditor::model_description("gemini-2.0-flash"), "2.0 Flash - Fast multimodal");
+        assert_eq!(SettingsEditor::model_description("grok-3"), "Grok 3 - Previous generation");
         assert_eq!(SettingsEditor::model_description("llama-3.3-70b-versatile"), "Latest Llama - Ultra-fast inference");
         assert_eq!(SettingsEditor::model_description("unknown-model"), "");
     }
@@ -1865,9 +2216,9 @@ mod tests {
             .map(|s| s.content.as_ref())
             .collect();
         
-        // Should show description for selected model
-        assert!(all_text.contains("Latest Sonnet") || all_text.contains("balance"), 
-            "Should show model description");
+        // Should show description for selected model (updated for new model names - TS-010 fix)
+        assert!(all_text.contains("Sonnet 4") || all_text.contains("extended thinking"), 
+            "Should show model description, got: {}", all_text);
     }
 
     #[test]
@@ -1932,8 +2283,258 @@ mod tests {
         assert_eq!(info.max_context_tokens, 128_000);
         assert_eq!(info.provider, "openai");
         
-        // Check another provider
+        // Check another provider (updated for 2M context - TS-010 fix)
         let info = editor.model_catalog.info_for("gemini-1.5-pro");
-        assert_eq!(info.max_context_tokens, 1_000_000);
+        assert_eq!(info.max_context_tokens, 2_000_000);
+    }
+
+    // TS-010 Tests: Parameters Section Enhanced UI
+
+    #[test]
+    fn test_temperature_adjustment() {
+        let mut editor = SettingsEditor::new();
+        // Navigate to Parameters section (Tab 3 times: ApiKeys -> Provider -> Model -> Parameters)
+        editor.next_section();
+        editor.next_section();
+        editor.next_section();
+        
+        // Initial temperature is 0.7
+        assert_eq!(editor.config().parameters.temperature, 0.7);
+        
+        // Increase temperature
+        let action = editor.increase_temperature();
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.temperature, 0.8);
+        
+        // Decrease temperature
+        let action = editor.decrease_temperature();
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.temperature, 0.7);
+        
+        // Decrease below minimum should clamp
+        for _ in 0..20 {
+            editor.decrease_temperature();
+        }
+        assert_eq!(editor.config().parameters.temperature, 0.0);
+        
+        // Increase above maximum should clamp
+        for _ in 0..30 {
+            editor.increase_temperature();
+        }
+        assert_eq!(editor.config().parameters.temperature, 2.0);
+    }
+
+    #[test]
+    fn test_max_tokens_adjustment() {
+        let mut editor = SettingsEditor::new();
+        // Navigate to Parameters section
+        editor.next_section();
+        editor.next_section();
+        editor.next_section();
+        // Select max_tokens (item 1)
+        editor.next_item();
+        
+        // Initial max_tokens is 8192
+        assert_eq!(editor.config().parameters.max_tokens, 8192);
+        
+        // Increase tokens (should use LARGE_STEP since >= 8192)
+        let action = editor.increase_max_tokens();
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.max_tokens, 9216); // 8192 + 1024
+        
+        // Decrease tokens
+        let action = editor.decrease_max_tokens();
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.max_tokens, 8192);
+        
+        // Decrease to small value should use small step
+        editor.config.parameters.max_tokens = 512;
+        let action = editor.decrease_max_tokens();
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.max_tokens, 256); // 512 - 256
+    }
+
+    #[test]
+    fn test_adjust_parameter_delegates() {
+        let mut editor = SettingsEditor::new();
+        // Navigate to Parameters section
+        editor.next_section();
+        editor.next_section();
+        editor.next_section();
+        
+        // Initially on temperature (item 0)
+        assert_eq!(editor.config().parameters.temperature, 0.7);
+        
+        // Increase via adjust_parameter
+        let action = editor.adjust_parameter(true);
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.temperature, 0.8);
+        
+        // Decrease via adjust_parameter
+        let action = editor.adjust_parameter(false);
+        assert!(action.is_some());
+        assert_eq!(editor.config().parameters.temperature, 0.7);
+        
+        // Switch to max_tokens
+        editor.next_item();
+        let initial_tokens = editor.config().parameters.max_tokens;
+        
+        let action = editor.adjust_parameter(true);
+        assert!(action.is_some());
+        assert!(editor.config().parameters.max_tokens > initial_tokens);
+    }
+
+    #[test]
+    fn test_temperature_percentage() {
+        let mut editor = SettingsEditor::new();
+        
+        // 0.0 -> 0%
+        editor.config.parameters.temperature = 0.0;
+        assert_eq!(editor.temperature_percentage(), 0);
+        
+        // 1.0 -> 50%
+        editor.config.parameters.temperature = 1.0;
+        assert_eq!(editor.temperature_percentage(), 50);
+        
+        // 2.0 -> 100%
+        editor.config.parameters.temperature = 2.0;
+        assert_eq!(editor.temperature_percentage(), 100);
+    }
+
+    #[test]
+    fn test_max_tokens_percentage_logarithmic() {
+        let mut editor = SettingsEditor::new();
+        
+        // Very small value -> near 0%
+        editor.config.parameters.max_tokens = 1;
+        assert!(editor.max_tokens_percentage() < 5);
+        
+        // Max value -> 100%
+        editor.config.parameters.max_tokens = 128_000;
+        assert_eq!(editor.max_tokens_percentage(), 100);
+        
+        // Middle-ish value should be in middle range
+        editor.config.parameters.max_tokens = 8192;
+        let pct = editor.max_tokens_percentage();
+        assert!(pct > 30 && pct < 80, "8192 tokens should be in middle range, got {}", pct);
+    }
+
+    #[test]
+    fn test_render_slider_bar() {
+        // 0% -> all empty
+        let bar = SettingsEditor::render_slider_bar(0, 10);
+        assert_eq!(bar, "░░░░░░░░░░");
+        
+        // 100% -> all filled
+        let bar = SettingsEditor::render_slider_bar(100, 10);
+        assert_eq!(bar, "██████████");
+        
+        // 50% -> half and half
+        let bar = SettingsEditor::render_slider_bar(50, 10);
+        assert_eq!(bar, "█████░░░░░");
+        
+        // 30% with width 20
+        let bar = SettingsEditor::render_slider_bar(30, 20);
+        assert_eq!(bar, "██████░░░░░░░░░░░░░░");
+    }
+
+    #[test]
+    fn test_temperature_description() {
+        assert_eq!(SettingsEditor::temperature_description(0.0), "Very deterministic - same output each time");
+        assert_eq!(SettingsEditor::temperature_description(0.7), "Balanced - good mix of creativity and focus");
+        assert_eq!(SettingsEditor::temperature_description(1.5), "Highly creative - quite random");
+        assert_eq!(SettingsEditor::temperature_description(2.0), "Maximum randomness - unpredictable");
+    }
+
+    #[test]
+    fn test_max_tokens_description() {
+        assert_eq!(SettingsEditor::max_tokens_description(100), "Very short - quick responses");
+        assert_eq!(SettingsEditor::max_tokens_description(512), "Short - concise answers");
+        assert_eq!(SettingsEditor::max_tokens_description(2048), "Medium - detailed responses");
+        assert_eq!(SettingsEditor::max_tokens_description(8192), "Long - comprehensive output");
+        assert_eq!(SettingsEditor::max_tokens_description(16384), "Very long - extensive generation");
+        assert_eq!(SettingsEditor::max_tokens_description(64000), "Maximum - full context capacity");
+    }
+
+    #[test]
+    fn test_format_tokens_display() {
+        assert_eq!(SettingsEditor::format_tokens_display(500), "500");
+        assert_eq!(SettingsEditor::format_tokens_display(1000), "1K");
+        assert_eq!(SettingsEditor::format_tokens_display(8192), "8K");
+        assert_eq!(SettingsEditor::format_tokens_display(128000), "128K");
+    }
+
+    #[test]
+    fn test_parameters_section_shows_slider_and_hint() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        // Navigate to Parameters section
+        editor.next_section();
+        editor.next_section();
+        editor.next_section();
+        
+        let theme = Theme::default();
+        let lines = editor.render_parameters_section(&theme);
+        
+        // Should have multiple lines (2 params + descriptions + spacing)
+        assert!(lines.len() >= 4, "Parameters section should have multiple lines");
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show selector arrow
+        assert!(all_text.contains("▸"), "Selected parameter should have arrow selector");
+        // Should show slider
+        assert!(all_text.contains("█") || all_text.contains("░"), "Should show slider bar");
+        // Should show adjustment hint
+        assert!(all_text.contains("←/→ adjust"), "Should show adjustment hint");
+        // Should show temperature label
+        assert!(all_text.contains("Temperature"), "Should show Temperature label");
+        // Should show description
+        assert!(all_text.contains("Balanced") || all_text.contains("creativity"), "Should show temperature description");
+    }
+
+    #[test]
+    fn test_parameters_section_max_tokens_selected() {
+        use crate::config::Theme;
+        
+        let mut editor = SettingsEditor::new();
+        // Navigate to Parameters section
+        editor.next_section();
+        editor.next_section();
+        editor.next_section();
+        // Select max_tokens
+        editor.next_item();
+        
+        let theme = Theme::default();
+        let lines = editor.render_parameters_section(&theme);
+        
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        
+        // Should show Max Tokens label
+        assert!(all_text.contains("Max Tokens"), "Should show Max Tokens label");
+        // Should show description for tokens
+        assert!(all_text.contains("comprehensive") || all_text.contains("Long"), "Should show max tokens description");
+        // Should show token value
+        assert!(all_text.contains("8K") || all_text.contains("8192"), "Should show token value");
+    }
+
+    #[test]
+    fn test_parameters_not_adjustable_in_other_sections() {
+        let mut editor = SettingsEditor::new();
+        // Stay in API Keys section (default)
+        
+        // Try to adjust temperature - should return None
+        let action = editor.adjust_parameter(true);
+        assert!(action.is_none(), "Should not adjust when not in Parameters section");
+        
+        // Temperature should be unchanged
+        assert_eq!(editor.config().parameters.temperature, 0.7);
     }
 }

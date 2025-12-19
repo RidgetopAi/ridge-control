@@ -31,6 +31,18 @@ impl OpenAIProvider {
         let http_client = Client::new();
 
         let models = vec![
+            // GPT-5 series (latest)
+            ModelInfo::new("gpt-5.2-2025-12-11", "GPT-5.2")
+                .with_context_window(256_000)
+                .with_max_output(32_768),
+            ModelInfo::new("gpt-5.2-pro-2025-12-11", "GPT-5.2 Pro")
+                .with_thinking()
+                .with_context_window(256_000)
+                .with_max_output(32_768),
+            ModelInfo::new("gpt-5-mini-2025-08-07", "GPT-5 Mini")
+                .with_context_window(128_000)
+                .with_max_output(16_384),
+            // GPT-4 series
             ModelInfo::new("gpt-4o", "GPT-4o")
                 .with_context_window(128_000)
                 .with_max_output(16_384),
@@ -40,9 +52,7 @@ impl OpenAIProvider {
             ModelInfo::new("gpt-4-turbo", "GPT-4 Turbo")
                 .with_context_window(128_000)
                 .with_max_output(4_096),
-            ModelInfo::new("gpt-4", "GPT-4")
-                .with_context_window(8_192)
-                .with_max_output(4_096),
+            // o-series (reasoning)
             ModelInfo::new("o1", "o1 Reasoning")
                 .with_thinking()
                 .with_context_window(200_000)
@@ -51,13 +61,17 @@ impl OpenAIProvider {
                 .with_thinking()
                 .with_context_window(128_000)
                 .with_max_output(65_536),
+            ModelInfo::new("o3-mini", "o3 Mini")
+                .with_thinking()
+                .with_context_window(200_000)
+                .with_max_output(100_000),
         ];
 
         Self {
             api_key,
             http_client,
             models,
-            default_model: "gpt-4o".to_string(),
+            default_model: "gpt-5.2-2025-12-11".to_string(),
         }
     }
 

@@ -16,6 +16,8 @@ pub enum FocusArea {
     LogViewer,
     /// When chat input is focused (in conversation view)
     ChatInput,
+    /// When settings editor is open (overlay) - TS-012
+    SettingsEditor,
 }
 
 impl FocusArea {

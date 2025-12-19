@@ -146,6 +146,20 @@ impl ModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
         // Anthropic Claude Models
         // ─────────────────────────────────────────────────────────────────────
+        // Claude 4.5 series (latest)
+        self.register(
+            ModelInfo::new("claude-opus-4-5-20251101", 200_000, 16_384, TokenizerKind::Claude, "anthropic")
+                .with_thinking()
+        );
+        self.register(
+            ModelInfo::new("claude-sonnet-4-5-20250929", 200_000, 16_384, TokenizerKind::Claude, "anthropic")
+                .with_thinking()
+        );
+        self.register(
+            ModelInfo::new("claude-haiku-4-5-20251001", 200_000, 8_192, TokenizerKind::Claude, "anthropic")
+                .with_thinking()
+        );
+        // Claude 4 series
         self.register(
             ModelInfo::new("claude-sonnet-4-20250514", 200_000, 8_192, TokenizerKind::Claude, "anthropic")
                 .with_thinking()
@@ -154,12 +168,14 @@ impl ModelCatalog {
             ModelInfo::new("claude-opus-4-20250514", 200_000, 8_192, TokenizerKind::Claude, "anthropic")
                 .with_thinking()
         );
+        // Claude 3.5 series
         self.register(
             ModelInfo::new("claude-3-5-sonnet-20241022", 200_000, 8_192, TokenizerKind::Claude, "anthropic")
         );
         self.register(
             ModelInfo::new("claude-3-5-haiku-20241022", 200_000, 8_192, TokenizerKind::Claude, "anthropic")
         );
+        // Claude 3 series (legacy)
         self.register(
             ModelInfo::new("claude-3-opus-20240229", 200_000, 4_096, TokenizerKind::Claude, "anthropic")
         );
@@ -170,8 +186,20 @@ impl ModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
         // OpenAI Models
         // ─────────────────────────────────────────────────────────────────────
+        // GPT-5 series (latest)
         self.register(
-            ModelInfo::new("gpt-4o", 128_000, 4_096, TokenizerKind::GptLike, "openai")
+            ModelInfo::new("gpt-5.2-2025-12-11", 256_000, 32_768, TokenizerKind::GptLike, "openai")
+        );
+        self.register(
+            ModelInfo::new("gpt-5.2-pro-2025-12-11", 256_000, 32_768, TokenizerKind::GptLike, "openai")
+                .with_thinking()
+        );
+        self.register(
+            ModelInfo::new("gpt-5-mini-2025-08-07", 128_000, 16_384, TokenizerKind::GptLike, "openai")
+        );
+        // GPT-4 series
+        self.register(
+            ModelInfo::new("gpt-4o", 128_000, 16_384, TokenizerKind::GptLike, "openai")
         );
         self.register(
             ModelInfo::new("gpt-4o-mini", 128_000, 16_384, TokenizerKind::GptLike, "openai")
@@ -179,47 +207,82 @@ impl ModelCatalog {
         self.register(
             ModelInfo::new("gpt-4-turbo", 128_000, 4_096, TokenizerKind::GptLike, "openai")
         );
-        self.register(
-            ModelInfo::new("gpt-4", 8_192, 4_096, TokenizerKind::GptLike, "openai")
-        );
+        // o-series (reasoning)
         self.register(
             ModelInfo::new("o1", 200_000, 100_000, TokenizerKind::GptLike, "openai")
+                .with_thinking()
         );
         self.register(
             ModelInfo::new("o1-mini", 128_000, 65_536, TokenizerKind::GptLike, "openai")
+                .with_thinking()
         );
         self.register(
             ModelInfo::new("o3-mini", 200_000, 100_000, TokenizerKind::GptLike, "openai")
+                .with_thinking()
         );
 
         // ─────────────────────────────────────────────────────────────────────
         // Google Gemini Models
         // ─────────────────────────────────────────────────────────────────────
+        // Gemini 2.5 series (latest)
         self.register(
-            ModelInfo::new("gemini-1.5-pro", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
+            ModelInfo::new("gemini-2.5-flash", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
         );
         self.register(
-            ModelInfo::new("gemini-1.5-flash", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
+            ModelInfo::new("gemini-2.5-pro", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
+                .with_thinking()
         );
+        // Gemini 2.0 series
         self.register(
             ModelInfo::new("gemini-2.0-flash", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
         );
+        // Gemini 1.5 series
         self.register(
-            ModelInfo::new("gemini-2.0-flash-thinking-exp", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
-                .with_thinking()
+            ModelInfo::new("gemini-1.5-pro", 2_000_000, 8_192, TokenizerKind::Gemini, "gemini")
+        );
+        self.register(
+            ModelInfo::new("gemini-1.5-flash", 1_000_000, 8_192, TokenizerKind::Gemini, "gemini")
         );
 
         // ─────────────────────────────────────────────────────────────────────
         // xAI Grok Models
         // ─────────────────────────────────────────────────────────────────────
+        // Grok 4 series (latest)
         self.register(
-            ModelInfo::new("grok-2", 131_072, 4_096, TokenizerKind::GptLike, "grok")
+            ModelInfo::new("grok-4", 256_000, 32_768, TokenizerKind::GptLike, "grok")
+                .with_thinking()
         );
         self.register(
-            ModelInfo::new("grok-2-mini", 131_072, 4_096, TokenizerKind::GptLike, "grok")
+            ModelInfo::new("grok-4-fast-reasoning", 2_000_000, 32_768, TokenizerKind::GptLike, "grok")
+                .with_thinking()
         );
         self.register(
-            ModelInfo::new("grok-beta", 131_072, 4_096, TokenizerKind::GptLike, "grok")
+            ModelInfo::new("grok-4-fast-non-reasoning", 2_000_000, 32_768, TokenizerKind::GptLike, "grok")
+        );
+        self.register(
+            ModelInfo::new("grok-4-1-fast-reasoning", 2_000_000, 32_768, TokenizerKind::GptLike, "grok")
+                .with_thinking()
+        );
+        self.register(
+            ModelInfo::new("grok-4-1-fast-non-reasoning", 2_000_000, 32_768, TokenizerKind::GptLike, "grok")
+        );
+        self.register(
+            ModelInfo::new("grok-code-fast-1", 256_000, 32_768, TokenizerKind::GptLike, "grok")
+                .with_thinking()
+        );
+        // Grok 3 series
+        self.register(
+            ModelInfo::new("grok-3", 131_072, 16_384, TokenizerKind::GptLike, "grok")
+        );
+        self.register(
+            ModelInfo::new("grok-3-mini", 131_072, 16_384, TokenizerKind::GptLike, "grok")
+        );
+        // Grok 2 series (legacy)
+        self.register(
+            ModelInfo::new("grok-2-1212", 131_072, 8_192, TokenizerKind::GptLike, "grok")
+        );
+        self.register(
+            ModelInfo::new("grok-2-vision-1212", 32_768, 8_192, TokenizerKind::GptLike, "grok")
         );
 
         // ─────────────────────────────────────────────────────────────────────
@@ -283,7 +346,8 @@ mod tests {
     fn test_catalog_gemini() {
         let catalog = ModelCatalog::new();
         let info = catalog.get("gemini-1.5-pro").unwrap();
-        assert_eq!(info.max_context_tokens, 1_000_000);
+        // Updated for 2M context (TS-010 fix)
+        assert_eq!(info.max_context_tokens, 2_000_000);
     }
 
     #[test]
