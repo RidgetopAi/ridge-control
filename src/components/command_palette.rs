@@ -83,6 +83,11 @@ impl CommandRegistry {
             Command::new("llm_clear", "Clear Conversation", "Clear LLM conversation history", Action::LlmClearConversation),
             Command::new("conversation_toggle", "Toggle Conversation View", "Show/hide LLM conversation panel (Ctrl+L)", Action::ConversationToggle),
             Command::new("toggle_dangerous_mode", "Toggle Dangerous Mode", "Enable/disable dangerous tool execution", Action::ToolToggleDangerousMode),
+            // Settings Editor commands (TS-014)
+            Command::new("settings_editor_toggle", "Edit Settings", "Open settings editor (API keys, provider, model)", Action::SettingsToggle),
+            Command::new("settings_editor_show", "Open Settings Editor", "Open the full settings editor panel", Action::SettingsShow),
+            Command::new("settings_editor_close", "Close Settings Editor", "Close the settings editor panel", Action::SettingsClose),
+            Command::new("settings_save", "Save Settings", "Save current settings to disk (Ctrl+S in editor)", Action::SettingsSave),
             // Tab commands
             Command::new("tab_new", "New Tab", "Create a new tab (Ctrl+T)", Action::TabCreate),
             Command::new("tab_close", "Close Tab", "Close current tab (Ctrl+W)", Action::TabClose),
