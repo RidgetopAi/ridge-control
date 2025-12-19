@@ -183,6 +183,16 @@ impl App {
         // Initialize configuration system
         let config_manager = ConfigManager::new()?;
         
+        // Apply persisted LLM settings from llm.toml (TS-013)
+        let llm_config = config_manager.llm_config();
+        llm_manager.set_provider(&llm_config.defaults.provider);
+        llm_manager.set_model(&llm_config.defaults.model);
+        tracing::info!(
+            "Loaded LLM settings: provider={}, model={}",
+            llm_config.defaults.provider,
+            llm_config.defaults.model
+        );
+        
         // Set up config watcher if enabled
         let config_watcher = if config_manager.app_config().general.watch_config {
             let debounce_ms = config_manager.app_config().general.config_watch_debounce_ms;
