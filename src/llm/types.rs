@@ -59,7 +59,7 @@ pub struct ThinkingConfig {
 }
 
 /// A message in the conversation
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub role: Role,
     pub content: Vec<ContentBlock>,
@@ -89,7 +89,7 @@ pub enum Role {
 }
 
 /// Content block within a message
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContentBlock {
     /// Plain text
     Text(String),
@@ -107,13 +107,13 @@ pub enum ContentBlock {
     Thinking(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImageContent {
     pub source: ImageSource,
     pub media_type: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ImageSource {
     Base64(String),
     Url(String),
@@ -129,7 +129,7 @@ pub struct ToolDefinition {
 }
 
 /// Tool use request from the LLM
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolUse {
     /// Unique ID for this tool invocation
     pub id: String,
@@ -140,7 +140,7 @@ pub struct ToolUse {
 }
 
 /// Tool result to send back
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     /// ID of the tool use this responds to
     pub tool_use_id: String,
@@ -150,7 +150,7 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolResultContent {
     Text(String),
     Json(serde_json::Value),

@@ -5,10 +5,12 @@ use std::sync::RwLock;
 
 use uuid::Uuid;
 
+use serde::{Deserialize, Serialize};
+
 use super::context::ContextSegment;
 
 /// An agent conversation thread
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentThread {
     /// Unique thread identifier
     pub id: String,
@@ -106,7 +108,7 @@ pub trait ThreadStore: Send + Sync {
 }
 
 /// Summary info for thread listing
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadSummary {
     pub id: String,
     pub title: String,

@@ -2,13 +2,15 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
+
 use crate::llm::types::{LLMRequest, Message, ToolDefinition};
 
 use super::models::ModelCatalog;
 use super::tokens::TokenCounter;
 
 /// Kind of context segment for priority-based retention
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum SegmentKind {
     /// System prompt (highest priority - always kept)
     System,
@@ -25,7 +27,7 @@ pub enum SegmentKind {
 }
 
 /// A segment of context with its messages and metadata
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContextSegment {
     pub kind: SegmentKind,
     pub messages: Vec<Message>,
