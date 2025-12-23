@@ -134,6 +134,8 @@ pub struct App {
     // Phase 2: AgentEngine integration (P2-002)
     agent_engine: Option<AgentEngine<DiskThreadStore>>,
     agent_event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
+    // TP2-002-FIX-01: AgentEngine's internal LLM event receiver
+    agent_llm_event_rx: Option<mpsc::UnboundedReceiver<LLMEvent>>,
     current_thread_id: Option<String>,
 }
 
@@ -250,7 +252,7 @@ impl App {
         agent_llm_manager.set_provider(&llm_config.defaults.provider);
         agent_llm_manager.set_model(&llm_config.defaults.model);
         
-        let agent_engine = AgentEngine::new(
+        let mut agent_engine = AgentEngine::new(
             agent_llm_manager,
             context_manager,
             prompt_builder,
@@ -258,6 +260,9 @@ impl App {
             thread_store,
             agent_event_tx,
         );
+        
+        // TP2-002-FIX-01: Take the internal LLM event receiver for polling in run()
+        let agent_llm_event_rx = agent_engine.take_llm_event_rx();
 
         // Initialize session manager (TRC-012)
         let session_manager = match SessionManager::new() {
@@ -323,6 +328,8 @@ impl App {
             // Phase 2: AgentEngine initialized (TP2-002-04)
             agent_engine: Some(agent_engine),
             agent_event_rx: Some(agent_event_rx),
+            // TP2-002-FIX-01: Wire AgentEngine's internal LLM event receiver
+            agent_llm_event_rx,
             current_thread_id: None,
         })
     }
@@ -516,6 +523,25 @@ impl App {
             if let Some(ref mut rx) = llm_rx {
                 while let Ok(llm_event) = rx.try_recv() {
                     self.handle_llm_event(llm_event);
+                }
+            }
+            
+            // TP2-002-FIX-01: Poll AgentEngine's internal LLM events and forward to engine
+            // This is the critical wiring that was missing - LLMManager inside AgentEngine
+            // sends events to its internal channel, which we now poll and forward
+            let agent_llm_events: Vec<_> = if let Some(ref mut rx) = self.agent_llm_event_rx {
+                let mut events = Vec::new();
+                while let Ok(ev) = rx.try_recv() {
+                    events.push(ev);
+                }
+                events
+            } else {
+                Vec::new()
+            };
+            
+            for ev in agent_llm_events {
+                if let Some(ref mut engine) = self.agent_engine {
+                    engine.handle_llm_event(ev);
                 }
             }
             

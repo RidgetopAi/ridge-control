@@ -154,6 +154,12 @@ impl<S: ThreadStore> AgentEngine<S> {
         self.current_thread.as_mut()
     }
 
+    /// Take the internal LLMManager's event receiver for external polling
+    /// This allows the App to poll LLM events and forward them to handle_llm_event()
+    pub fn take_llm_event_rx(&mut self) -> Option<mpsc::UnboundedReceiver<LLMEvent>> {
+        self.llm.take_event_rx()
+    }
+
     /// Start a new conversation thread
     pub fn new_thread(&mut self, model: impl Into<String>) {
         let thread = AgentThread::new(model);
