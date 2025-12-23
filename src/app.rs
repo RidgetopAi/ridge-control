@@ -705,13 +705,49 @@ impl App {
         }
     }
     
-    /// Handle AgentEngine events (TP2-002-05)
-    /// This routes AgentEvent variants to appropriate handlers.
-    /// Full implementation in TP2-002-06.
+    /// Handle AgentEngine events (TP2-002-05, TP2-002-06)
+    /// Routes AgentEvent variants to appropriate handlers with full UI updates.
     fn handle_agent_event(&mut self, event: AgentEvent) {
+        use crate::agent::AgentState;
+        
         match event {
             AgentEvent::StateChanged(state) => {
                 tracing::debug!("AgentEngine state changed: {:?}", state);
+                
+                // Manage spinner based on state transitions
+                match state {
+                    AgentState::PreparingRequest | AgentState::StreamingResponse => {
+                        // Start LLM loading spinner
+                        self.spinner_manager.start(
+                            SpinnerKey::LlmLoading,
+                            Some("Thinking...".to_string()),
+                        );
+                    }
+                    AgentState::ExecutingTools => {
+                        // Update spinner label for tool execution
+                        self.spinner_manager.set_label(
+                            &SpinnerKey::LlmLoading,
+                            Some("Executing tools...".to_string()),
+                        );
+                    }
+                    AgentState::FinalizingTurn => {
+                        // Update spinner for finalization
+                        self.spinner_manager.set_label(
+                            &SpinnerKey::LlmLoading,
+                            Some("Finalizing...".to_string()),
+                        );
+                    }
+                    AgentState::Idle | AgentState::AwaitingUserInput => {
+                        // Stop spinner when idle or waiting for input
+                        self.spinner_manager.stop(&SpinnerKey::LlmLoading);
+                        // Re-enable auto-scroll for next response
+                        self.conversation_viewer.set_auto_scroll(true);
+                    }
+                    AgentState::Error => {
+                        // Stop spinner on error
+                        self.spinner_manager.stop(&SpinnerKey::LlmLoading);
+                    }
+                }
             }
             AgentEvent::Chunk(chunk) => {
                 // Forward to existing LLM event handler for streaming display
@@ -723,11 +759,58 @@ impl App {
             }
             AgentEvent::ToolExecuted { tool_use_id, success } => {
                 tracing::debug!("Tool {} executed: success={}", tool_use_id, success);
+                
+                // Update conversation viewer's tool status
+                // Note: The actual result is set via complete_tool when tool result arrives
+                // This event signals execution finished, so we log it but the UI update
+                // comes through the tool result path
+                if !success {
+                    // If execution failed, the tool call widget should show error state
+                    // However, the actual error details come via ToolResult
+                    // Just log here - the complete_tool call handles UI state
+                    tracing::warn!("Tool {} execution reported failure", tool_use_id);
+                }
             }
             AgentEvent::TurnComplete { stop_reason, usage } => {
                 tracing::debug!("Agent turn complete: {:?}, usage: {:?}", stop_reason, usage);
+                
+                // Stop any running spinners
+                self.spinner_manager.stop(&SpinnerKey::LlmLoading);
+                
+                // Re-enable auto-scroll for next response
+                self.conversation_viewer.set_auto_scroll(true);
+                
+                // Show usage info as notification if available
+                if let Some(ref u) = usage {
+                    tracing::info!(
+                        "Turn usage: {} input, {} output tokens",
+                        u.input_tokens,
+                        u.output_tokens
+                    );
+                }
+                
+                // Handle stop reason
+                match stop_reason {
+                    StopReason::EndTurn => {
+                        // Normal completion - no notification needed
+                    }
+                    StopReason::ToolUse => {
+                        // Tool use requested - spinner already managed by StateChanged
+                    }
+                    StopReason::MaxTokens => {
+                        self.notification_manager.warning("Response truncated (max tokens reached)");
+                    }
+                    StopReason::StopSequence => {
+                        // Normal stop sequence - no notification needed
+                    }
+                    StopReason::ContentFilter => {
+                        self.notification_manager.warning("Response filtered by content policy");
+                    }
+                }
             }
             AgentEvent::Error(err) => {
+                // Stop spinners on error
+                self.spinner_manager.stop(&SpinnerKey::LlmLoading);
                 self.notification_manager.error_with_message("Agent Error", err);
             }
             AgentEvent::ContextTruncated { segments_dropped, tokens_used, budget } => {
@@ -735,6 +818,12 @@ impl App {
                     "Context truncated: dropped {} segments, using {}/{} tokens",
                     segments_dropped, tokens_used, budget
                 );
+                
+                // Notify user that context was truncated
+                self.notification_manager.warning(format!(
+                    "Context trimmed: {} older segments removed ({}/{})",
+                    segments_dropped, tokens_used, budget
+                ));
             }
         }
     }

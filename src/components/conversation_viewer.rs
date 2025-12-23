@@ -95,6 +95,11 @@ impl ConversationViewer {
     pub fn set_thinking_collapsed(&mut self, collapsed: bool) {
         self.thinking_collapsed = collapsed;
     }
+    
+    /// Set auto-scroll state
+    pub fn set_auto_scroll(&mut self, enabled: bool) {
+        self.auto_scroll = enabled;
+    }
 
     pub fn set_inner_area(&mut self, area: Rect) {
         self.inner_area = area;
