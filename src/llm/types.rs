@@ -164,7 +164,14 @@ pub enum StreamChunk {
     Start { message_id: String },
 
     /// New content block started
-    BlockStart { index: usize, block_type: BlockType },
+    BlockStart {
+        index: usize,
+        block_type: BlockType,
+        /// Tool ID (only present for ToolUse blocks)
+        tool_id: Option<String>,
+        /// Tool name (only present for ToolUse blocks)
+        tool_name: Option<String>,
+    },
 
     /// Delta for current block
     Delta(StreamDelta),
@@ -196,8 +203,9 @@ pub enum StreamDelta {
 
     /// Tool use: partial JSON for input
     ToolInput {
-        id: String,
-        name: Option<String>,
+        /// Block index for matching with BlockStart/BlockStop
+        block_index: usize,
+        /// Partial JSON string to accumulate
         input_json: String,
     },
 

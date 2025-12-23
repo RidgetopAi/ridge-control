@@ -432,6 +432,8 @@ fn parse_sse_data(
             chunks.push(StreamChunk::BlockStart {
                 index: 0,
                 block_type: BlockType::Text,
+                tool_id: None,
+                tool_name: None,
             });
         }
     }
@@ -465,6 +467,12 @@ fn parse_sse_data(
                         chunks.push(StreamChunk::BlockStart {
                             index: tc_index + 1, // +1 because text is index 0
                             block_type: BlockType::ToolUse,
+                            tool_id: Some(current_tool_id.clone()),
+                            tool_name: if current_tool_name.is_empty() {
+                                None
+                            } else {
+                                Some(current_tool_name.clone())
+                            },
                         });
                         *block_index = tc_index + 2;
                     }
@@ -474,12 +482,7 @@ fn parse_sse_data(
                         if let Some(args) = func.get("arguments").and_then(|a| a.as_str()) {
                             if !args.is_empty() {
                                 chunks.push(StreamChunk::Delta(StreamDelta::ToolInput {
-                                    id: current_tool_id.clone(),
-                                    name: if current_tool_name.is_empty() {
-                                        None
-                                    } else {
-                                        Some(current_tool_name.clone())
-                                    },
+                                    block_index: tc_index + 1, // +1 because text is index 0
                                     input_json: args.to_string(),
                                 }));
                             }
@@ -498,6 +501,8 @@ fn parse_sse_data(
                         chunks.push(StreamChunk::BlockStart {
                             index: *block_index,
                             block_type: BlockType::Text,
+                            tool_id: None,
+                            tool_name: None,
                         });
                         *block_index += 1;
                     }

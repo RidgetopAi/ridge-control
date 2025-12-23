@@ -8,13 +8,87 @@ use tokio::sync::mpsc;
 
 use crate::config::{KeyId, KeyStore};
 
+use std::collections::HashMap;
+
 use super::anthropic::AnthropicProvider;
 use super::gemini::GeminiProvider;
 use super::grok::GrokProvider;
 use super::groq::GroqProvider;
 use super::openai::OpenAIProvider;
 use super::provider::{Provider, ProviderRegistry};
-use super::types::{LLMError, LLMRequest, Message, StreamChunk, ToolUse, ContentBlock, ToolResult, ToolDefinition};
+use super::types::{LLMError, LLMRequest, Message, StreamChunk, StreamDelta, BlockType, ToolUse, ContentBlock, ToolResult, ToolDefinition};
+
+/// Helper struct for assembling tool uses from streaming chunks
+struct PendingToolUse {
+    id: String,
+    name: String,
+    input_buf: String,
+}
+
+/// Tool use assembler that tracks pending tool uses by block index
+struct ToolAssembler {
+    pending_tools: HashMap<usize, PendingToolUse>,
+}
+
+impl ToolAssembler {
+    fn new() -> Self {
+        Self {
+            pending_tools: HashMap::new(),
+        }
+    }
+
+    /// Process a stream chunk and return any completed tool uses
+    fn process_chunk(&mut self, chunk: &StreamChunk) -> Option<ToolUse> {
+        match chunk {
+            StreamChunk::BlockStart { index, block_type, tool_id, tool_name } => {
+                if *block_type == BlockType::ToolUse {
+                    if let (Some(id), Some(name)) = (tool_id.clone(), tool_name.clone()) {
+                        self.pending_tools.insert(*index, PendingToolUse {
+                            id,
+                            name,
+                            input_buf: String::new(),
+                        });
+                    } else {
+                        tracing::warn!("ToolUse block_start without id/name at index {}", index);
+                    }
+                }
+                None
+            }
+            StreamChunk::Delta(StreamDelta::ToolInput { block_index, input_json }) => {
+                if let Some(p) = self.pending_tools.get_mut(block_index) {
+                    p.input_buf.push_str(input_json);
+                } else {
+                    tracing::trace!("Tool input delta for unknown block index {}", block_index);
+                }
+                None
+            }
+            StreamChunk::BlockStop { index } => {
+                if let Some(p) = self.pending_tools.remove(index) {
+                    match serde_json::from_str::<serde_json::Value>(&p.input_buf) {
+                        Ok(input_value) => {
+                            Some(ToolUse {
+                                id: p.id,
+                                name: p.name,
+                                input: input_value,
+                            })
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse tool input JSON for tool {}: {}",
+                                p.name,
+                                e
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+}
 
 /// Event from the LLM subsystem
 #[derive(Debug, Clone)]
@@ -271,6 +345,8 @@ impl LLMManager {
     
     /// Continue the conversation after a tool result (re-send to get LLM response)
     pub fn continue_after_tool(&mut self, system_prompt: Option<String>, tools: Vec<ToolDefinition>) {
+        tracing::debug!("continue_after_tool called with {} messages in conversation", self.conversation.len());
+        
         let provider = match self.registry.get(&self.current_provider) {
             Some(p) => p,
             None => {
@@ -300,11 +376,17 @@ impl LLMManager {
         tokio::spawn(async move {
             match provider.stream(request).await {
                 Ok(mut stream) => {
+                    let mut tool_assembler = ToolAssembler::new();
                     loop {
                         tokio::select! {
                             chunk = stream.next() => {
                                 match chunk {
                                     Some(Ok(c)) => {
+                                        // Check for completed tool uses
+                                        if let Some(tool_use) = tool_assembler.process_chunk(&c) {
+                                            let _ = event_tx.send(LLMEvent::ToolUseDetected(tool_use));
+                                        }
+                                        // Always forward the raw chunk for UI
                                         if event_tx.send(LLMEvent::Chunk(c)).is_err() {
                                             break;
                                         }
@@ -368,11 +450,17 @@ impl LLMManager {
         tokio::spawn(async move {
             match provider.stream(request).await {
                 Ok(mut stream) => {
+                    let mut tool_assembler = ToolAssembler::new();
                     loop {
                         tokio::select! {
                             chunk = stream.next() => {
                                 match chunk {
                                     Some(Ok(c)) => {
+                                        // Check for completed tool uses
+                                        if let Some(tool_use) = tool_assembler.process_chunk(&c) {
+                                            let _ = event_tx.send(LLMEvent::ToolUseDetected(tool_use));
+                                        }
+                                        // Always forward the raw chunk for UI
                                         if event_tx.send(LLMEvent::Chunk(c)).is_err() {
                                             break;
                                         }
@@ -457,12 +545,18 @@ impl LLMManager {
             match provider.stream(request).await {
                 Ok(mut stream) => {
                     tracing::debug!("Stream created successfully");
+                    let mut tool_assembler = ToolAssembler::new();
                     loop {
                         tokio::select! {
                             chunk = stream.next() => {
                                 match chunk {
                                     Some(Ok(c)) => {
                                         tracing::trace!("Got stream chunk: {:?}", c);
+                                        // Check for completed tool uses
+                                        if let Some(tool_use) = tool_assembler.process_chunk(&c) {
+                                            let _ = event_tx.send(LLMEvent::ToolUseDetected(tool_use));
+                                        }
+                                        // Always forward the raw chunk for UI
                                         if event_tx.send(LLMEvent::Chunk(c)).is_err() {
                                             tracing::warn!("Event channel closed");
                                             break;

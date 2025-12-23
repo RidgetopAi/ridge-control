@@ -95,16 +95,23 @@ impl AnthropicProvider {
                             "name": tool_use.name,
                             "input": tool_use.input
                         })),
-                        ContentBlock::ToolResult(result) => Some(json!({
-                            "type": "tool_result",
-                            "tool_use_id": result.tool_use_id,
-                            "content": match &result.content {
+                        ContentBlock::ToolResult(result) => {
+                            let content_str = match &result.content {
                                 super::types::ToolResultContent::Text(t) => t.clone(),
                                 super::types::ToolResultContent::Json(j) => j.to_string(),
                                 super::types::ToolResultContent::Image(_) => "[image]".to_string(),
-                            },
-                            "is_error": result.is_error
-                        })),
+                            };
+                            let mut tool_result = json!({
+                                "type": "tool_result",
+                                "tool_use_id": result.tool_use_id,
+                                "content": content_str
+                            });
+                            // Only include is_error if true (Anthropic API preference)
+                            if result.is_error {
+                                tool_result["is_error"] = json!(true);
+                            }
+                            Some(tool_result)
+                        },
                         _ => None,
                     })
                     .collect();
@@ -211,6 +218,11 @@ impl Provider for AnthropicProvider {
         req.stream = true;
 
         let body = self.build_request_body(&req);
+        
+        // Debug: log the full request body
+        if let Ok(body_str) = serde_json::to_string_pretty(&body) {
+            tracing::debug!("Anthropic request body:\n{}", body_str);
+        }
 
         let response = self
             .http_client
@@ -333,15 +345,28 @@ fn parse_sse_event(event_str: &str) -> Option<StreamChunk> {
         "content_block_start" => {
             let index = json["index"].as_u64()? as usize;
             let content_block = &json["content_block"];
-            let block_type = match content_block["type"].as_str()? {
-                "text" => BlockType::Text,
-                "tool_use" => BlockType::ToolUse,
-                "thinking" => BlockType::Thinking,
-                _ => BlockType::Text,
+            let content_type = content_block["type"].as_str()?;
+
+            let (block_type, tool_id, tool_name) = match content_type {
+                "text" => (BlockType::Text, None, None),
+                "tool_use" => (
+                    BlockType::ToolUse,
+                    content_block["id"].as_str().map(|s| s.to_string()),
+                    content_block["name"].as_str().map(|s| s.to_string()),
+                ),
+                "thinking" => (BlockType::Thinking, None, None),
+                _ => (BlockType::Text, None, None),
             };
-            Some(StreamChunk::BlockStart { index, block_type })
+
+            Some(StreamChunk::BlockStart {
+                index,
+                block_type,
+                tool_id,
+                tool_name,
+            })
         }
         "content_block_delta" => {
+            let index = json["index"].as_u64()? as usize;
             let delta = &json["delta"];
             let delta_type = delta["type"].as_str()?;
 
@@ -353,8 +378,7 @@ fn parse_sse_event(event_str: &str) -> Option<StreamChunk> {
                 "input_json_delta" => {
                     let partial_json = delta["partial_json"].as_str()?.to_string();
                     StreamDelta::ToolInput {
-                        id: String::new(),
-                        name: None,
+                        block_index: index,
                         input_json: partial_json,
                     }
                 }
@@ -395,6 +419,7 @@ fn parse_sse_event(event_str: &str) -> Option<StreamChunk> {
                 .as_str()
                 .unwrap_or("Unknown error")
                 .to_string();
+            tracing::error!("Anthropic SSE error event: {}", json);
             Some(StreamChunk::Error(LLMError::ProviderError {
                 status: 500,
                 message: error_msg,
@@ -405,12 +430,16 @@ fn parse_sse_event(event_str: &str) -> Option<StreamChunk> {
 }
 
 fn parse_error_response(status: u16, body: &str) -> LLMError {
+    tracing::error!("Anthropic API error - status: {}, body: {}", status, body);
+    
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         let message = json["error"]["message"]
             .as_str()
             .unwrap_or("Unknown error")
             .to_string();
         let error_type = json["error"]["type"].as_str().unwrap_or("");
+
+        tracing::error!("Anthropic error type: {}, message: {}", error_type, message);
 
         match error_type {
             "authentication_error" => LLMError::AuthError { message },
@@ -504,7 +533,7 @@ mod tests {
 
     #[test]
     fn test_parse_sse_text_delta() {
-        let event = "event: content_block_delta\ndata: {\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}";
+        let event = "event: content_block_delta\ndata: {\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}";
         let chunk = parse_sse_event(event);
         assert!(matches!(chunk, Some(StreamChunk::Delta(StreamDelta::Text(t))) if t == "Hello"));
     }
@@ -513,6 +542,32 @@ mod tests {
     fn test_parse_sse_block_start() {
         let event = "event: content_block_start\ndata: {\"index\":0,\"content_block\":{\"type\":\"text\"}}";
         let chunk = parse_sse_event(event);
-        assert!(matches!(chunk, Some(StreamChunk::BlockStart { index: 0, block_type: BlockType::Text })));
+        assert!(matches!(chunk, Some(StreamChunk::BlockStart { index: 0, block_type: BlockType::Text, .. })));
+    }
+    
+    #[test]
+    fn test_parse_sse_tool_use_block_start() {
+        let event = "event: content_block_start\ndata: {\"index\":1,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_123\",\"name\":\"read_file\"}}";
+        let chunk = parse_sse_event(event);
+        match chunk {
+            Some(StreamChunk::BlockStart { index: 1, block_type: BlockType::ToolUse, tool_id, tool_name }) => {
+                assert_eq!(tool_id, Some("toolu_123".to_string()));
+                assert_eq!(tool_name, Some("read_file".to_string()));
+            }
+            _ => panic!("Expected ToolUse BlockStart"),
+        }
+    }
+    
+    #[test]
+    fn test_parse_sse_tool_input_delta() {
+        let event = "event: content_block_delta\ndata: {\"index\":1,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"path\\\":\\\"test.txt\\\"\"}}";
+        let chunk = parse_sse_event(event);
+        match chunk {
+            Some(StreamChunk::Delta(StreamDelta::ToolInput { block_index, input_json })) => {
+                assert_eq!(block_index, 1);
+                assert_eq!(input_json, "{\"path\":\"test.txt\"");
+            }
+            _ => panic!("Expected ToolInput delta"),
+        }
     }
 }

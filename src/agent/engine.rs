@@ -269,6 +269,10 @@ impl<S: ThreadStore> AgentEngine<S> {
             }
             LLMEvent::ToolUseDetected(tool_use) => {
                 self.pending_tools.push(tool_use.clone());
+                // Add ToolUse to current_response so it's saved in assistant message
+                // This is required for tool_result to reference the tool_use_id
+                self.current_response
+                    .push(ContentBlock::ToolUse(tool_use.clone()));
                 self.emit(AgentEvent::ToolUseRequested(tool_use));
             }
         }
@@ -310,6 +314,20 @@ impl<S: ThreadStore> AgentEngine<S> {
 
         // Send via LLM manager
         self.llm.clear_conversation();
+        
+        // Debug: Log what we're sending to LLM
+        tracing::debug!("=== Sending {} messages to LLM ===", built.request.messages.len());
+        for (i, msg) in built.request.messages.iter().enumerate() {
+            let content_summary: Vec<String> = msg.content.iter().map(|b| match b {
+                ContentBlock::Text(t) => format!("Text({}...)", t.chars().take(50).collect::<String>()),
+                ContentBlock::ToolUse(tu) => format!("ToolUse({})", tu.name),
+                ContentBlock::ToolResult(r) => format!("ToolResult(err={})", r.is_error),
+                ContentBlock::Thinking(_) => "Thinking".to_string(),
+                ContentBlock::Image(_) => "Image".to_string(),
+            }).collect();
+            tracing::debug!("  [{}] {:?}: {:?}", i, msg.role, content_summary);
+        }
+        
         for msg in &built.request.messages {
             match msg.role {
                 Role::User => {

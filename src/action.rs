@@ -276,6 +276,10 @@ pub enum Action {
     // Thinking block actions (TRC-017)
     /// Toggle collapse/expand of all thinking blocks
     ThinkingToggleCollapse,
+    
+    // Tool result actions
+    /// Toggle collapse/expand of tool results (press 'R')
+    ToolResultToggleCollapse,
 
     // Context menu actions (TRC-020)
     /// Show context menu at position for target

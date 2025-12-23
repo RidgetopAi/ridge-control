@@ -433,6 +433,8 @@ fn parse_json_chunk(
                                 chunks.push(StreamChunk::BlockStart {
                                     index: *block_index,
                                     block_type: BlockType::Text,
+                                    tool_id: None,
+                                    tool_name: None,
                                 });
                             }
 
@@ -440,6 +442,9 @@ fn parse_json_chunk(
                         }
 
                         if let Some(function_call) = part.get("functionCall") {
+                            let name = function_call["name"].as_str().unwrap_or("").to_string();
+                            let tool_id = format!("call_{}", uuid::Uuid::new_v4());
+                            
                             if !*in_function_call {
                                 if *block_index > 0 {
                                     chunks.push(StreamChunk::BlockStop {
@@ -449,19 +454,23 @@ fn parse_json_chunk(
                                 chunks.push(StreamChunk::BlockStart {
                                     index: *block_index,
                                     block_type: BlockType::ToolUse,
+                                    tool_id: Some(tool_id.clone()),
+                                    tool_name: if name.is_empty() {
+                                        None
+                                    } else {
+                                        Some(name.clone())
+                                    },
                                 });
                                 *in_function_call = true;
                             }
 
-                            let name = function_call["name"].as_str().unwrap_or("").to_string();
                             let args = function_call
                                 .get("args")
                                 .map(|a| a.to_string())
                                 .unwrap_or_default();
 
                             chunks.push(StreamChunk::Delta(StreamDelta::ToolInput {
-                                id: format!("call_{}", uuid::Uuid::new_v4()),
-                                name: Some(name),
+                                block_index: *block_index,
                                 input_json: args,
                             }));
                         }

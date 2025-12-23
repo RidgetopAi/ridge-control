@@ -35,6 +35,8 @@ pub struct ConversationViewer {
     tool_navigation_mode: bool,
     /// Whether thinking blocks are collapsed (TRC-017)
     thinking_collapsed: bool,
+    /// Whether tool results are collapsed (press 'R' to toggle)
+    tool_results_collapsed: bool,
     /// Search state (TRC-021)
     search_state: SearchState,
     /// Cached text lines for search
@@ -68,6 +70,7 @@ impl ConversationViewer {
             tool_call_manager: ToolCallManager::new(),
             tool_navigation_mode: false,
             thinking_collapsed: false,
+            tool_results_collapsed: false,
             search_state: SearchState::new(),
             cached_text: Vec::new(),
             selection: None,
@@ -108,10 +111,21 @@ impl ConversationViewer {
         self.auto_scroll = true;
         self.tool_call_manager.clear();
         self.tool_navigation_mode = false;
+        self.tool_results_collapsed = false;
         self.search_state = SearchState::new();
         self.cached_text.clear();
         self.selection = None;
         self.selecting = false;
+    }
+    
+    /// Toggle tool results collapse state
+    pub fn toggle_tool_results_collapse(&mut self) {
+        self.tool_results_collapsed = !self.tool_results_collapsed;
+    }
+    
+    /// Get tool results collapse state
+    pub fn is_tool_results_collapsed(&self) -> bool {
+        self.tool_results_collapsed
     }
 
     pub fn set_inner_area(&mut self, area: Rect) {
@@ -576,22 +590,29 @@ impl ConversationViewer {
         let mut lines: Vec<Line> = Vec::new();
 
         for message in messages {
-            // Add role header
-            let (role_text, role_style) = match message.role {
-                Role::User => (
-                    "󰀄 User",
-                    Style::default()
-                        .fg(theme.colors.primary.to_color())
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Role::Assistant => (
-                    "󰚩 Assistant",
-                    Style::default()
-                        .fg(theme.colors.secondary.to_color())
-                        .add_modifier(Modifier::BOLD),
-                ),
-            };
-            lines.push(Line::from(Span::styled(role_text, role_style)));
+            // Check if this is a tool-result-only message (should not show "User:" header)
+            let is_tool_result_only = message.role == Role::User
+                && !message.content.is_empty()
+                && message.content.iter().all(|block| matches!(block, ContentBlock::ToolResult(_)));
+
+            // Add role header (skip for tool-result-only messages)
+            if !is_tool_result_only {
+                let (role_text, role_style) = match message.role {
+                    Role::User => (
+                        "󰀄 User",
+                        Style::default()
+                            .fg(theme.colors.primary.to_color())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Role::Assistant => (
+                        "󰚩 Assistant",
+                        Style::default()
+                            .fg(theme.colors.secondary.to_color())
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                };
+                lines.push(Line::from(Span::styled(role_text, role_style)));
+            }
 
             // Add content blocks
             for content_block in &message.content {
@@ -1008,16 +1029,13 @@ impl ConversationViewer {
     fn render_tool_result(&self, result: &ToolResult, theme: &Theme) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
-        let (icon, color) = if result.is_error {
+        let (status_icon, color) = if result.is_error {
             ("󰅚", theme.colors.error.to_color())
         } else {
             ("󰄬", theme.colors.success.to_color())
         };
-
-        lines.push(Line::from(Span::styled(
-            format!("  {} Tool Result", icon),
-            Style::default().fg(color).add_modifier(Modifier::BOLD),
-        )));
+        
+        let collapse_indicator = if self.tool_results_collapsed { "▶" } else { "▼" };
 
         // Render result content
         let content_str = match &result.content {
@@ -1027,29 +1045,58 @@ impl ConversationViewer {
             }
             crate::llm::ToolResultContent::Image(_) => "[Image result]".to_string(),
         };
-
-        let max_lines = 8;
+        
         let content_lines: Vec<&str> = content_str.lines().collect();
-        let truncated = content_lines.len() > max_lines;
+        let total_lines = content_lines.len();
 
-        for line in content_lines.iter().take(max_lines) {
-            lines.push(Line::from(Span::styled(
-                format!("    {}", line),
-                Style::default().fg(if result.is_error {
-                    theme.colors.error.to_color()
-                } else {
-                    theme.colors.foreground.to_color()
-                }),
-            )));
-        }
+        // Header with collapse indicator
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  {} ", collapse_indicator),
+                Style::default().fg(theme.colors.accent.to_color()),
+            ),
+            Span::styled(
+                format!("{} Tool Result", status_icon),
+                Style::default().fg(color).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" ({} lines)", total_lines),
+                Style::default().fg(theme.colors.muted.to_color()),
+            ),
+        ]));
 
-        if truncated {
+        if self.tool_results_collapsed {
+            // Collapsed: show summary only
             lines.push(Line::from(Span::styled(
-                format!("    ... ({} more lines)", content_lines.len() - max_lines),
+                "    [Collapsed - press 'R' to expand]",
                 Style::default()
                     .fg(theme.colors.muted.to_color())
-                    .add_modifier(Modifier::ITALIC),
+                    .add_modifier(Modifier::DIM),
             )));
+        } else {
+            // Expanded: show content with higher limit (50 lines)
+            let max_lines = 50;
+            let truncated = total_lines > max_lines;
+
+            for line in content_lines.iter().take(max_lines) {
+                lines.push(Line::from(Span::styled(
+                    format!("    {}", line),
+                    Style::default().fg(if result.is_error {
+                        theme.colors.error.to_color()
+                    } else {
+                        theme.colors.foreground.to_color()
+                    }),
+                )));
+            }
+
+            if truncated {
+                lines.push(Line::from(Span::styled(
+                    format!("    ... ({} more lines - press 'R' to collapse)", total_lines - max_lines),
+                    Style::default()
+                        .fg(theme.colors.muted.to_color())
+                        .add_modifier(Modifier::ITALIC),
+                )));
+            }
         }
 
         lines
@@ -1145,6 +1192,8 @@ impl Component for ConversationViewer {
             Action::ToolCallCollapseAll => self.collapse_all_tools(),
             // TRC-017: Handle thinking toggle
             Action::ThinkingToggleCollapse => self.toggle_thinking_collapse(),
+            // Tool result toggle
+            Action::ToolResultToggleCollapse => self.toggle_tool_results_collapse(),
             // TRC-021: Handle search actions
             Action::ConversationSearchStart => self.start_search(),
             Action::ConversationSearchClose => self.close_search(),
@@ -1248,6 +1297,10 @@ impl ConversationViewer {
             // TRC-017: Toggle thinking block collapse with 'T'
             KeyCode::Char('T') => {
                 Some(Action::ThinkingToggleCollapse)
+            }
+            // Toggle tool results collapse with 'R'
+            KeyCode::Char('R') => {
+                Some(Action::ToolResultToggleCollapse)
             }
             _ => None,
         }

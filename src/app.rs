@@ -252,6 +252,12 @@ impl App {
         agent_llm_manager.set_provider(&llm_config.defaults.provider);
         agent_llm_manager.set_model(&llm_config.defaults.model);
         
+        // Configure AgentEngine with tool definitions so continuation requests include tools
+        let agent_config = crate::agent::AgentConfig {
+            tools: tool_executor.tool_definitions_for_llm(),
+            ..Default::default()
+        };
+        
         let mut agent_engine = AgentEngine::new(
             agent_llm_manager,
             context_manager,
@@ -259,7 +265,7 @@ impl App {
             agent_tool_executor,
             thread_store,
             agent_event_tx,
-        );
+        ).with_config(agent_config);
         
         // TP2-002-FIX-01: Take the internal LLM event receiver for polling in run()
         let agent_llm_event_rx = agent_engine.take_llm_event_rx();
@@ -649,9 +655,18 @@ impl App {
         match event {
             LLMEvent::Chunk(chunk) => {
                 match chunk {
-                    StreamChunk::BlockStart { block_type, .. } => {
+                    StreamChunk::BlockStart { block_type, tool_id, tool_name, .. } => {
                         // TRC-017: Track what type of block we're receiving
                         self.current_block_type = Some(block_type);
+                        
+                        // If this is a tool use block, capture the tool id and name
+                        if block_type == BlockType::ToolUse {
+                            if let Some(id) = tool_id {
+                                self.current_tool_id = Some(id);
+                            }
+                            self.current_tool_name = tool_name;
+                            self.current_tool_input.clear();
+                        }
                     }
                     StreamChunk::Delta(delta) => {
                         match delta {
@@ -662,13 +677,8 @@ impl App {
                                 // TRC-017: Route thinking to separate buffer
                                 self.thinking_buffer.push_str(&text);
                             }
-                            StreamDelta::ToolInput { id, name, input_json } => {
-                                // Track tool use being built up
-                                if self.current_tool_id.is_none() || self.current_tool_id.as_ref() != Some(&id) {
-                                    self.current_tool_id = Some(id);
-                                    self.current_tool_name = name;
-                                    self.current_tool_input.clear();
-                                }
+                            StreamDelta::ToolInput { input_json, .. } => {
+                                // Accumulate tool input JSON
                                 self.current_tool_input.push_str(&input_json);
                             }
                         }
@@ -682,6 +692,14 @@ impl App {
                         
                         // When a tool use block stops, we have the complete tool use
                         if let (Some(id), Some(name)) = (self.current_tool_id.take(), self.current_tool_name.take()) {
+                            // IMPORTANT: Add assistant text message FIRST, before the tool_use
+                            // The tool_use will be appended to this assistant message
+                            // This ensures proper message ordering for Anthropic API
+                            if !self.llm_response_buffer.is_empty() {
+                                self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+                                self.llm_response_buffer.clear();
+                            }
+                            
                             let input: serde_json::Value = serde_json::from_str(&self.current_tool_input)
                                 .unwrap_or(serde_json::Value::Null);
                             self.current_tool_input.clear();
@@ -693,9 +711,10 @@ impl App {
                         // Clear current block type
                         self.current_block_type = None;
                     }
-                    StreamChunk::Stop { reason, .. } => {
-                        // If stop reason is ToolUse, the tool was already handled in BlockStop
-                        if reason != StopReason::ToolUse && !self.llm_response_buffer.is_empty() {
+                    StreamChunk::Stop { .. } => {
+                        // Note: Assistant text is now added in BlockStop before tool_use,
+                        // so we only handle remaining cases here (non-tool responses)
+                        if !self.llm_response_buffer.is_empty() {
                             self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
                             self.llm_response_buffer.clear();
                         }
@@ -893,7 +912,17 @@ impl App {
     }
     
     fn execute_tool(&mut self, pending: PendingToolUse) {
-        // Add the tool use to the conversation
+        // CRITICAL: Ensure there's an assistant message BEFORE adding tool_use
+        // The Anthropic API requires tool_use blocks to be in an assistant message,
+        // and tool_result must reference a tool_use in the PREVIOUS message.
+        // If llm_response_buffer has content, flush it first. If not, we still need
+        // an assistant message to exist so add_tool_use can append to it.
+        if !self.llm_response_buffer.is_empty() {
+            self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+            self.llm_response_buffer.clear();
+        }
+        
+        // Add the tool use to the conversation (appends to last assistant message)
         self.llm_manager.add_tool_use(pending.tool.clone());
         
         // Update tool state to Running in conversation viewer (TRC-016)
