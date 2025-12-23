@@ -174,6 +174,16 @@ impl<S: ThreadStore> AgentEngine<S> {
         Ok(())
     }
 
+    /// Manually save the current thread to storage
+    /// Returns Ok(()) on success, or an error message on failure.
+    /// This is for manual save operations - threads are also auto-saved on TurnComplete.
+    pub fn save_thread(&self) -> Result<(), String> {
+        match self.current_thread.as_ref() {
+            Some(thread) => self.thread_store.save(thread),
+            None => Err("No active thread to save".to_string()),
+        }
+    }
+
     /// Send a user message and start the agent loop
     pub fn send_message(&mut self, message: impl Into<String>) {
         let message = message.into();

@@ -2178,7 +2178,27 @@ impl App {
                 // Future: Show thread list UI
             }
             Action::ThreadSave => {
-                // TP2-002-10: Will be implemented in later task
+                // TP2-002-10: Manually save current thread to DiskThreadStore
+                if let Some(ref engine) = self.agent_engine {
+                    match engine.save_thread() {
+                        Ok(()) => {
+                            if let Some(thread) = engine.current_thread() {
+                                let title = thread.title.clone();
+                                self.notification_manager.success(format!("Thread saved: {}", title));
+                                tracing::info!("Manually saved thread: {} ({})", title, thread.id);
+                            } else {
+                                self.notification_manager.success("Thread saved");
+                            }
+                        }
+                        Err(e) => {
+                            self.notification_manager.error_with_message("Failed to save thread", e.clone());
+                            tracing::error!("Failed to save thread: {}", e);
+                        }
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                    tracing::warn!("Cannot save thread: AgentEngine not available");
+                }
             }
             Action::ThreadClear => {
                 // TP2-002-11: Will be implemented in later task
