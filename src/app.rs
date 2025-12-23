@@ -2136,8 +2136,43 @@ impl App {
                     tracing::warn!("Cannot create thread: AgentEngine not available");
                 }
             }
-            Action::ThreadLoad(_id) => {
-                // TP2-002-09: Will be implemented in next task
+            Action::ThreadLoad(id) => {
+                // TP2-002-09: Load existing thread by ID
+                if let Some(ref mut engine) = self.agent_engine {
+                    match engine.load_thread(&id) {
+                        Ok(()) => {
+                            // Update current thread ID
+                            self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
+                            
+                            // Clear conversation viewer state
+                            self.conversation_viewer.clear();
+                            
+                            // Re-populate tool calls from loaded thread segments
+                            if let Some(thread) = engine.current_thread() {
+                                for segment in thread.segments() {
+                                    for message in &segment.messages {
+                                        for content_block in &message.content {
+                                            if let crate::llm::ContentBlock::ToolUse(tool_use) = content_block {
+                                                self.conversation_viewer.register_tool_use(tool_use.clone());
+                                            }
+                                        }
+                                    }
+                                }
+                                
+                                let title = thread.title.clone();
+                                self.notification_manager.info(format!("Loaded thread: {}", title));
+                                tracing::info!("Loaded thread: {} ({})", title, id);
+                            }
+                        }
+                        Err(e) => {
+                            self.notification_manager.error_with_message("Failed to load thread", e.clone());
+                            tracing::error!("Failed to load thread {}: {}", id, e);
+                        }
+                    }
+                } else {
+                    tracing::warn!("Cannot load thread: AgentEngine not available");
+                    self.notification_manager.error("AgentEngine not available");
+                }
             }
             Action::ThreadList => {
                 // Future: Show thread list UI
