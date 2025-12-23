@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use crossterm::event::Event as CrosstermEvent;
+use crate::agent::AgentEvent;
 
 /// Main event enum per RIDGE-CONTROL-MASTER.md Section 3.1
 #[derive(Debug)]
@@ -21,6 +22,8 @@ pub enum Event {
     ConfigChanged(PathBuf),
     /// Async error from background task
     Error(AsyncError),
+    /// Agent engine events (Phase 2)
+    Agent(AgentEvent),
 }
 
 /// PTY-specific events
