@@ -226,6 +226,39 @@ impl App {
         let model_catalog = std::sync::Arc::new(ModelCatalog::new());
         let token_counter: std::sync::Arc<dyn TokenCounter> = std::sync::Arc::new(DefaultTokenCounter::new(model_catalog.clone()));
 
+        // Phase 2: Initialize AgentEngine (TP2-002-04)
+        let (agent_event_tx, agent_event_rx) = mpsc::unbounded_channel::<AgentEvent>();
+        let context_manager = std::sync::Arc::new(ContextManager::new(model_catalog.clone(), token_counter.clone()));
+        let prompt_builder = SystemPromptBuilder::ridge_control();
+        let agent_tool_executor: std::sync::Arc<dyn AgentToolExecutor> = std::sync::Arc::new(ConfirmationRequiredExecutor);
+        let thread_store = match DiskThreadStore::new() {
+            Ok(store) => std::sync::Arc::new(store),
+            Err(e) => {
+                tracing::warn!("Failed to create DiskThreadStore: {}, using default path", e);
+                // Fallback: try with temp directory
+                std::sync::Arc::new(DiskThreadStore::with_path(std::env::temp_dir().join("ridge-control-threads"))
+                    .expect("Failed to create fallback thread store"))
+            }
+        };
+        
+        // Create separate LLMManager for AgentEngine (with same provider registrations)
+        let mut agent_llm_manager = LLMManager::new();
+        if let Some(ref ks) = keystore {
+            agent_llm_manager.register_from_keystore(ks);
+        }
+        // Apply same provider/model settings
+        agent_llm_manager.set_provider(&llm_config.defaults.provider);
+        agent_llm_manager.set_model(&llm_config.defaults.model);
+        
+        let agent_engine = AgentEngine::new(
+            agent_llm_manager,
+            context_manager,
+            prompt_builder,
+            agent_tool_executor,
+            thread_store,
+            agent_event_tx,
+        );
+
         // Initialize session manager (TRC-012)
         let session_manager = match SessionManager::new() {
             Ok(sm) => Some(sm),
@@ -287,9 +320,9 @@ impl App {
             content_area: Rect::default(),
             model_catalog,
             token_counter,
-            // Phase 2: AgentEngine will be initialized in TP2-002-04
-            agent_engine: None,
-            agent_event_rx: None,
+            // Phase 2: AgentEngine initialized (TP2-002-04)
+            agent_engine: Some(agent_engine),
+            agent_event_rx: Some(agent_event_rx),
             current_thread_id: None,
         })
     }
