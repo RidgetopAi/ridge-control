@@ -2123,6 +2123,32 @@ impl App {
                 self.set_dangerous_mode(enabled);
             }
             
+            // Thread management actions (Phase 2)
+            Action::ThreadNew => {
+                if let Some(ref mut engine) = self.agent_engine {
+                    let model = self.llm_manager.current_model().to_string();
+                    engine.new_thread(model);
+                    self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
+                    self.conversation_viewer.clear();
+                    self.notification_manager.info("New conversation thread started");
+                    tracing::info!("Created new thread: {:?}", self.current_thread_id);
+                } else {
+                    tracing::warn!("Cannot create thread: AgentEngine not available");
+                }
+            }
+            Action::ThreadLoad(_id) => {
+                // TP2-002-09: Will be implemented in next task
+            }
+            Action::ThreadList => {
+                // Future: Show thread list UI
+            }
+            Action::ThreadSave => {
+                // TP2-002-10: Will be implemented in later task
+            }
+            Action::ThreadClear => {
+                // TP2-002-11: Will be implemented in later task
+            }
+            
             // Config actions
             Action::ConfigChanged(path) => {
                 tracing::info!("Config file changed: {}", path.display());

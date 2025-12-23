@@ -100,6 +100,19 @@ impl ConversationViewer {
     pub fn set_auto_scroll(&mut self, enabled: bool) {
         self.auto_scroll = enabled;
     }
+    
+    /// Clear the conversation viewer state for a new thread
+    pub fn clear(&mut self) {
+        self.scroll_offset = 0;
+        self.line_count = 0;
+        self.auto_scroll = true;
+        self.tool_call_manager.clear();
+        self.tool_navigation_mode = false;
+        self.search_state = SearchState::new();
+        self.cached_text.clear();
+        self.selection = None;
+        self.selecting = false;
+    }
 
     pub fn set_inner_area(&mut self, area: Rect) {
         self.inner_area = area;
