@@ -338,6 +338,7 @@ impl Widget for TabBar<'_> {
             InputMode::Normal => " NORMAL ",
             InputMode::PtyRaw => " PTY ",
             InputMode::CommandPalette => " CMD ",
+            InputMode::ThreadPicker => " THREADS ",
             InputMode::Insert { .. } => " INSERT ",
             InputMode::Confirm { .. } => " CONFIRM ",
         };

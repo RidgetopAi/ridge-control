@@ -92,6 +92,8 @@ impl CommandRegistry {
             Command::new("thread_new", "New Thread", "Start a new conversation thread", Action::ThreadNew),
             Command::new("thread_save", "Save Thread", "Save current thread to disk", Action::ThreadSave),
             Command::new("thread_clear", "Clear Thread", "Clear current thread (start fresh)", Action::ThreadClear),
+            Command::new("thread_continue", "Continue Thread", "Resume a saved conversation thread", Action::ThreadPickerShow),
+            Command::new("thread_rename", "Rename Thread", "Rename the current conversation thread", Action::ThreadStartRename),
             // Tab commands
             Command::new("tab_new", "New Tab", "Create a new tab (Ctrl+T)", Action::TabCreate),
             Command::new("tab_close", "Close Tab", "Close current tab (Ctrl+W)", Action::TabClose),

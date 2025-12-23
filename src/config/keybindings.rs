@@ -238,6 +238,11 @@ impl Default for KeybindingsConfig {
             ":".to_string(),
             ActionBinding { action: "open_command_palette".to_string(), args: vec![] },
         );
+        // Ctrl+P also opens command palette (VS Code style, in addition to vim-style :)
+        normal.bindings.insert(
+            "C-p".to_string(),
+            ActionBinding { action: "open_command_palette".to_string(), args: vec![] },
+        );
         normal.bindings.insert(
             "ret".to_string(),
             ActionBinding { action: "enter_pty_mode".to_string(), args: vec![] },
@@ -417,6 +422,7 @@ impl KeybindingsConfig {
             InputMode::PtyRaw => &self.pty_raw,
             InputMode::Insert { .. } => &self.insert,
             InputMode::CommandPalette => &self.command_palette,
+            InputMode::ThreadPicker => return None, // ThreadPicker handles its own keys
             InputMode::Confirm { .. } => return None,
         };
         

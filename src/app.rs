@@ -21,6 +21,7 @@ use crate::action::{Action, ContextMenuTarget, PaneBorder};
 use crate::cli::Cli;
 use crate::components::chat_input::ChatInput;
 use crate::components::command_palette::CommandPalette;
+use crate::components::thread_picker::ThreadPicker;
 use crate::components::config_panel::ConfigPanel;
 use crate::components::settings_editor::SettingsEditor;
 use crate::components::confirm_dialog::ConfirmDialog;
@@ -48,7 +49,7 @@ use crate::tabs::{TabId, TabManager, TabBar};
 use crate::agent::{
     AgentEngine, AgentEvent, ConfirmationRequiredExecutor, ContextManager, DiskThreadStore,
     ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats, SystemPromptBuilder,
-    ToolExecutor as AgentToolExecutor,
+    ThreadStore, ToolExecutor as AgentToolExecutor,
 };
 
 const TICK_INTERVAL_MS: u64 = 500;
@@ -78,6 +79,8 @@ pub struct App {
     pending_tool: Option<PendingToolUse>,
     // Command palette
     command_palette: CommandPalette,
+    // Thread picker dialog (P2-003)
+    thread_picker: ThreadPicker,
     // Tracking tool use during streaming
     current_tool_id: Option<String>,
     current_tool_name: Option<String>,
@@ -137,6 +140,8 @@ pub struct App {
     // TP2-002-FIX-01: AgentEngine's internal LLM event receiver
     agent_llm_event_rx: Option<mpsc::UnboundedReceiver<LLMEvent>>,
     current_thread_id: Option<String>,
+    // Thread rename buffer for inline editing
+    thread_rename_buffer: String,
 }
 
 impl App {
@@ -298,6 +303,7 @@ impl App {
             confirm_dialog: ConfirmDialog::new(),
             pending_tool: None,
             command_palette: CommandPalette::new(),
+            thread_picker: ThreadPicker::new(),
             current_tool_id: None,
             current_tool_name: None,
             current_tool_input: String::new(),
@@ -337,6 +343,7 @@ impl App {
             // TP2-002-FIX-01: Wire AgentEngine's internal LLM event receiver
             agent_llm_event_rx,
             current_thread_id: None,
+            thread_rename_buffer: String::new(),
         })
     }
 
@@ -1048,6 +1055,11 @@ impl App {
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
+        let show_thread_picker = self.thread_picker.is_visible();
+        let show_thread_rename = matches!(
+            self.input_mode,
+            InputMode::Insert { target: crate::input::mode::InsertTarget::ThreadRename }
+        );
         let show_context_menu = self.context_menu.is_visible();
         let has_notifications = self.notification_manager.has_notifications();
         let _show_tabs = self.tab_manager.count() > 1; // Kept for potential future use
@@ -1385,7 +1397,55 @@ impl App {
                 if show_palette {
                     self.command_palette.render(frame, size, &theme);
                 }
-                
+
+                // P2-003: Thread picker overlay
+                if show_thread_picker {
+                    self.thread_picker.render(frame, size, &theme);
+                }
+
+                // Thread rename dialog overlay
+                if show_thread_rename {
+                    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+                    use ratatui::layout::{Alignment, Rect as RatatuiRect};
+                    use ratatui::style::{Modifier, Style};
+                    use ratatui::text::{Line, Span};
+
+                    // Calculate dialog size (centered, fixed width)
+                    let dialog_width = 50u16.min(size.width.saturating_sub(4));
+                    let dialog_height = 5u16;
+                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                    let dialog_area = RatatuiRect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                    // Clear background
+                    frame.render_widget(Clear, dialog_area);
+
+                    // Render dialog block
+                    let block = Block::default()
+                        .title(" Rename Thread ")
+                        .title_style(Style::default().fg(theme.command_palette.border.to_color()).add_modifier(Modifier::BOLD))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.command_palette.border.to_color()));
+
+                    let inner = block.inner(dialog_area);
+                    frame.render_widget(block, dialog_area);
+
+                    // Render input with cursor
+                    let input_line = Line::from(vec![
+                        Span::styled(": ", Style::default().fg(theme.colors.primary.to_color()).add_modifier(Modifier::BOLD)),
+                        Span::styled(&self.thread_rename_buffer, Style::default().fg(theme.command_palette.input_fg.to_color())),
+                        Span::styled("▎", Style::default().fg(theme.colors.primary.to_color())),
+                    ]);
+                    frame.render_widget(Paragraph::new(input_line), inner);
+
+                    // Render help text
+                    let help_area = RatatuiRect::new(inner.x, inner.y + 2, inner.width, 1);
+                    let help_text = Paragraph::new("Enter to confirm, Esc to cancel")
+                        .style(Style::default().fg(theme.command_palette.description_fg.to_color()))
+                        .alignment(Alignment::Center);
+                    frame.render_widget(help_text, help_area);
+                }
+
                 // TRC-020: Context menu overlay (highest z-index)
                 if show_context_menu {
                     self.context_menu.render(frame, size, &theme);
@@ -1427,6 +1487,9 @@ impl App {
             }
             InputMode::CommandPalette => {
                 self.command_palette.handle_event(&CrosstermEvent::Key(key))
+            }
+            InputMode::ThreadPicker => {
+                self.thread_picker.handle_event(&CrosstermEvent::Key(key))
             }
             InputMode::PtyRaw => {
                 // First check configurable keybindings
@@ -1578,7 +1641,22 @@ impl App {
                         _ => {}
                     }
                 }
-                
+
+                // Handle thread rename input
+                if matches!(target, crate::input::mode::InsertTarget::ThreadRename) {
+                    match key.code {
+                        KeyCode::Esc => return Some(Action::ThreadCancelRename),
+                        KeyCode::Enter => {
+                            // Confirm rename with current buffer
+                            let new_title = self.thread_rename_buffer.clone();
+                            return Some(Action::ThreadRename(new_title));
+                        }
+                        KeyCode::Backspace => return Some(Action::ThreadRenameBackspace),
+                        KeyCode::Char(c) => return Some(Action::ThreadRenameInput(c)),
+                        _ => {}
+                    }
+                }
+
                 // Fall back to configurable keybindings for other insert targets
                 if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
                     return Some(action);
@@ -1866,6 +1944,72 @@ impl App {
                 self.command_palette.hide();
                 self.input_mode = InputMode::Normal;
             }
+            Action::ThreadPickerShow => {
+                // Load thread summaries from disk store and show picker
+                if let Some(ref engine) = self.agent_engine {
+                    let threads = engine.thread_store().list_summary();
+                    self.thread_picker.show(threads);
+                    self.input_mode = InputMode::ThreadPicker;
+                } else {
+                    self.notification_manager.warning("No thread store available".to_string());
+                }
+            }
+            Action::ThreadPickerHide => {
+                self.thread_picker.hide();
+                self.input_mode = InputMode::Normal;
+            }
+
+            // Thread rename actions
+            Action::ThreadStartRename => {
+                if let Some(ref engine) = self.agent_engine {
+                    if let Some(thread) = engine.current_thread() {
+                        // Pre-fill buffer with current title
+                        self.thread_rename_buffer = thread.title.clone();
+                        self.input_mode = InputMode::Insert {
+                            target: crate::input::mode::InsertTarget::ThreadRename
+                        };
+                        self.notification_manager.info(format!("Renaming thread: {}", thread.title));
+                    } else {
+                        self.notification_manager.warning("No active thread to rename");
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                }
+            }
+            Action::ThreadCancelRename => {
+                self.thread_rename_buffer.clear();
+                self.input_mode = InputMode::Normal;
+                self.notification_manager.info("Rename cancelled");
+            }
+            Action::ThreadRenameInput(c) => {
+                self.thread_rename_buffer.push(c);
+            }
+            Action::ThreadRenameBackspace => {
+                self.thread_rename_buffer.pop();
+            }
+            Action::ThreadRename(new_title) => {
+                if let Some(ref mut engine) = self.agent_engine {
+                    if new_title.trim().is_empty() {
+                        self.notification_manager.warning("Thread name cannot be empty");
+                    } else {
+                        match engine.rename_thread(&new_title) {
+                            Ok(()) => {
+                                self.notification_manager.success(format!("Thread renamed to: {}", new_title));
+                                tracing::info!("Renamed thread to: {}", new_title);
+                            }
+                            Err(e) => {
+                                self.notification_manager.error_with_message("Failed to rename thread", e.clone());
+                                tracing::error!("Failed to rename thread: {}", e);
+                            }
+                        }
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                }
+                self.thread_rename_buffer.clear();
+                self.input_mode = InputMode::Normal;
+            }
+
             Action::FocusNext => {
                 let skip_chat = !self.show_conversation;
                 self.focus.next_skip_chat(skip_chat);
@@ -2231,12 +2375,18 @@ impl App {
             }
             Action::ThreadLoad(id) => {
                 // TP2-002-09: Load existing thread by ID
+                // P2-003-11: Always ensure we exit ThreadPicker mode and hide picker
+                tracing::debug!("ThreadLoad: hiding picker, mode was {:?}", self.input_mode);
+                self.thread_picker.hide();
+                self.input_mode = InputMode::Normal; // Always reset to Normal
+                tracing::debug!("ThreadLoad: mode now {:?}", self.input_mode);
+
                 if let Some(ref mut engine) = self.agent_engine {
                     match engine.load_thread(&id) {
                         Ok(()) => {
                             // Update current thread ID
                             self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
-                            
+
                             // Clear conversation viewer state
                             self.conversation_viewer.clear();
                             
@@ -2255,6 +2405,10 @@ impl App {
                                 let title = thread.title.clone();
                                 self.notification_manager.info(format!("Loaded thread: {}", title));
                                 tracing::info!("Loaded thread: {} ({})", title, id);
+
+                                // Show conversation view and set focus
+                                self.show_conversation = true;
+                                self.focus.focus(FocusArea::StreamViewer);
                             }
                         }
                         Err(e) => {

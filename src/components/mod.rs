@@ -16,6 +16,7 @@ pub mod spinner;
 pub mod spinner_manager;
 pub mod stream_viewer;
 pub mod terminal;
+pub mod thread_picker;
 pub mod tool_call_widget;
 
 use crossterm::event::Event;

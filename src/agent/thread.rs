@@ -87,6 +87,12 @@ impl AgentThread {
         self.model = model.into();
         self.updated_at = chrono::Utc::now();
     }
+
+    /// Update the thread title
+    pub fn set_title(&mut self, title: impl Into<String>) {
+        self.title = title.into();
+        self.updated_at = chrono::Utc::now();
+    }
 }
 
 /// Trait for thread storage backends
@@ -228,5 +234,18 @@ mod tests {
 
         store.delete(&thread.id).unwrap();
         assert!(store.get(&thread.id).is_none());
+    }
+
+    #[test]
+    fn test_set_title() {
+        let mut thread = AgentThread::new("gpt-4o");
+        assert_eq!(thread.title, "New conversation");
+
+        let old_updated = thread.updated_at;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        thread.set_title("My Custom Thread");
+        assert_eq!(thread.title, "My Custom Thread");
+        assert!(thread.updated_at > old_updated);
     }
 }

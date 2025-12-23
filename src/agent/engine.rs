@@ -12,6 +12,39 @@ use super::prompt::SystemPromptBuilder;
 use super::thread::{AgentThread, ThreadStore};
 use super::tools::ToolExecutor;
 
+/// Maximum length for auto-generated thread titles
+const MAX_TITLE_LENGTH: usize = 60;
+
+/// Generate a thread title from the first user message.
+/// - Takes the first line only
+/// - Truncates to MAX_TITLE_LENGTH characters
+/// - Appends ellipsis if truncated
+/// - Falls back to "New conversation" if empty
+fn generate_title_from_message(message: &str) -> String {
+    // Get first line only, trimmed
+    let first_line = message
+        .lines()
+        .next()
+        .unwrap_or("")
+        .trim();
+
+    // Handle empty or whitespace-only messages
+    if first_line.is_empty() {
+        return "New conversation".to_string();
+    }
+
+    // Truncate if too long
+    if first_line.chars().count() > MAX_TITLE_LENGTH {
+        let truncated: String = first_line
+            .chars()
+            .take(MAX_TITLE_LENGTH - 3) // Leave room for ellipsis
+            .collect();
+        format!("{}...", truncated)
+    } else {
+        first_line.to_string()
+    }
+}
+
 /// Agent state machine states
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentState {
@@ -154,6 +187,11 @@ impl<S: ThreadStore> AgentEngine<S> {
         self.current_thread.as_mut()
     }
 
+    /// Get access to the thread store
+    pub fn thread_store(&self) -> &S {
+        &self.thread_store
+    }
+
     /// Take the internal LLMManager's event receiver for external polling
     /// This allows the App to poll LLM events and forward them to handle_llm_event()
     pub fn take_llm_event_rx(&mut self) -> Option<mpsc::UnboundedReceiver<LLMEvent>> {
@@ -190,6 +228,17 @@ impl<S: ThreadStore> AgentEngine<S> {
         }
     }
 
+    /// Rename the current thread and save to storage
+    pub fn rename_thread(&mut self, new_title: impl Into<String>) -> Result<(), String> {
+        match self.current_thread.as_mut() {
+            Some(thread) => {
+                thread.set_title(new_title);
+                self.thread_store.save(thread)
+            }
+            None => Err("No active thread to rename".to_string()),
+        }
+    }
+
     /// Send a user message and start the agent loop
     pub fn send_message(&mut self, message: impl Into<String>) {
         let message = message.into();
@@ -201,6 +250,13 @@ impl<S: ThreadStore> AgentEngine<S> {
                 return;
             }
         };
+
+        // Auto-name thread on first message if still using default title
+        if thread.segments.is_empty() && thread.title == "New conversation" {
+            let auto_title = generate_title_from_message(&message);
+            thread.set_title(&auto_title);
+            tracing::info!("Auto-named thread: {}", auto_title);
+        }
 
         // Add user message as a chat segment
         let user_msg = Message::user(message);
@@ -494,5 +550,40 @@ mod tests {
         // Should have received state change event
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, AgentEvent::StateChanged(AgentState::AwaitingUserInput)));
+    }
+
+    #[test]
+    fn test_generate_title_simple() {
+        let title = generate_title_from_message("What is the capital of France?");
+        assert_eq!(title, "What is the capital of France?");
+    }
+
+    #[test]
+    fn test_generate_title_multiline() {
+        let title = generate_title_from_message("First line here\nSecond line\nThird line");
+        assert_eq!(title, "First line here");
+    }
+
+    #[test]
+    fn test_generate_title_truncation() {
+        let long_message = "This is a very long message that exceeds the maximum title length and should be truncated with an ellipsis at the end";
+        let title = generate_title_from_message(long_message);
+        assert!(title.ends_with("..."));
+        assert!(title.len() <= MAX_TITLE_LENGTH + 3); // +3 for "..."
+    }
+
+    #[test]
+    fn test_generate_title_empty() {
+        let title = generate_title_from_message("");
+        assert_eq!(title, "New conversation");
+
+        let title_whitespace = generate_title_from_message("   \n  \t  ");
+        assert_eq!(title_whitespace, "New conversation");
+    }
+
+    #[test]
+    fn test_generate_title_trims_whitespace() {
+        let title = generate_title_from_message("   Hello world   ");
+        assert_eq!(title, "Hello world");
     }
 }

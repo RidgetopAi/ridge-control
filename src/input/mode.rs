@@ -13,6 +13,8 @@ pub enum InputMode {
     Insert { target: InsertTarget },
     /// Fuzzy command search (nucleo integration)
     CommandPalette,
+    /// Thread picker dialog for resuming saved conversations
+    ThreadPicker,
     /// Confirmation dialog mode (e.g., for tool execution)
     Confirm { title: String, message: String },
 }
@@ -23,6 +25,7 @@ pub enum InsertTarget {
     ProcessFilter,
     StreamFilter,
     TabRename,
+    ThreadRename,
     Search,
 }
 
@@ -42,7 +45,11 @@ impl InputMode {
     pub fn is_command_palette(&self) -> bool {
         matches!(self, InputMode::CommandPalette)
     }
-    
+
+    pub fn is_thread_picker(&self) -> bool {
+        matches!(self, InputMode::ThreadPicker)
+    }
+
     pub fn is_confirm(&self) -> bool {
         matches!(self, InputMode::Confirm { .. })
     }

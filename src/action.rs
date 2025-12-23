@@ -128,6 +128,24 @@ pub enum Action {
     /// Clear current thread (start fresh without deleting)
     ThreadClear,
 
+    // Thread picker actions (P2-003)
+    /// Show thread picker dialog for selecting a thread to resume
+    ThreadPickerShow,
+    /// Hide thread picker dialog
+    ThreadPickerHide,
+
+    // Thread rename actions
+    /// Start rename mode for current thread
+    ThreadStartRename,
+    /// Cancel thread rename (revert)
+    ThreadCancelRename,
+    /// Input character for thread rename
+    ThreadRenameInput(char),
+    /// Delete character from thread rename buffer
+    ThreadRenameBackspace,
+    /// Confirm thread rename with new name
+    ThreadRename(String),
+
     // Config actions
     /// Configuration file changed (hot-reload trigger)
     ConfigChanged(PathBuf),
