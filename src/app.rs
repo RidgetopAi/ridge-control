@@ -2201,7 +2201,26 @@ impl App {
                 }
             }
             Action::ThreadClear => {
-                // TP2-002-11: Will be implemented in later task
+                // TP2-002-11: Clear current thread (start fresh without deleting)
+                if let Some(ref mut engine) = self.agent_engine {
+                    if engine.current_thread_mut().is_some() {
+                        // Clear the thread segments
+                        if let Some(thread) = engine.current_thread_mut() {
+                            thread.clear();
+                        }
+                        // Clear the UI
+                        self.conversation_viewer.clear();
+                        // Notify user
+                        self.notification_manager.info("Conversation cleared");
+                        tracing::debug!("ThreadClear: cleared current thread and conversation viewer");
+                    } else {
+                        self.notification_manager.warning("No active conversation to clear");
+                        tracing::warn!("ThreadClear: no current thread to clear");
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                    tracing::warn!("Cannot clear thread: AgentEngine not available");
+                }
             }
             
             // Config actions
