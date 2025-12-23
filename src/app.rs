@@ -2076,7 +2076,7 @@ impl App {
                     // Update tool state in conversation viewer (TRC-016)
                     self.conversation_viewer.reject_tool(&pending.tool.id);
                     
-                    // Send an error result back to the LLM
+                    // Create rejection result
                     let error_result = crate::llm::ToolResult {
                         tool_use_id: pending.tool.id.clone(),
                         content: crate::llm::ToolResultContent::Text(
@@ -2084,11 +2084,20 @@ impl App {
                         ),
                         is_error: true,
                     };
-                    self.llm_manager.add_tool_use(pending.tool);
-                    self.llm_manager.add_tool_result(error_result);
-                    // Continue conversation with the rejection
-                    let tools = self.tool_executor.tool_definitions_for_llm();
-                    self.llm_manager.continue_after_tool(None, tools);
+                    
+                    // TP2-002-12: Bridge tool rejection to AgentEngine if active
+                    if self.agent_engine.is_some() {
+                        if let Some(ref mut engine) = self.agent_engine {
+                            tracing::debug!("Routing tool rejection through AgentEngine: {}", pending.tool.id);
+                            engine.continue_after_tools(vec![error_result]);
+                        }
+                    } else {
+                        // Legacy path: direct LLMManager interaction
+                        self.llm_manager.add_tool_use(pending.tool);
+                        self.llm_manager.add_tool_result(error_result);
+                        let tools = self.tool_executor.tool_definitions_for_llm();
+                        self.llm_manager.continue_after_tool(None, tools);
+                    }
                 }
             }
             Action::ToolResult(result) => {
@@ -2108,12 +2117,25 @@ impl App {
                     );
                 }
                 
-                // Tool execution completed, send result back to LLM
-                self.llm_manager.add_tool_result(result);
-                self.pending_tool = None;
-                // Continue the conversation
-                let tools = self.tool_executor.tool_definitions_for_llm();
-                self.llm_manager.continue_after_tool(None, tools);
+                // TP2-002-12: Bridge tool result to AgentEngine if active
+                // AgentEngine manages the full agentic loop including tool execution flow
+                if self.agent_engine.is_some() {
+                    // Route through AgentEngine for proper thread/context management
+                    if let Some(ref mut engine) = self.agent_engine {
+                        tracing::debug!("Routing tool result through AgentEngine: {}", result.tool_use_id);
+                        engine.continue_after_tools(vec![result]);
+                        
+                        // Emit ToolExecuted event for UI tracking
+                        // The AgentEngine will handle continuing the conversation
+                    }
+                    self.pending_tool = None;
+                } else {
+                    // Legacy path: direct LLMManager interaction
+                    self.llm_manager.add_tool_result(result);
+                    self.pending_tool = None;
+                    let tools = self.tool_executor.tool_definitions_for_llm();
+                    self.llm_manager.continue_after_tool(None, tools);
+                }
             }
             Action::ToolToggleDangerousMode => {
                 let current = self.dangerous_mode;
