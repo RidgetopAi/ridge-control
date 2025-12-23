@@ -2024,7 +2024,9 @@ impl App {
                     if agent_engine.current_thread().is_none() {
                         let model = self.llm_manager.current_model();
                         agent_engine.new_thread(model);
-                        tracing::info!("Created new AgentEngine thread");
+                        // TP2-002-15: Update current_thread_id when auto-creating thread
+                        self.current_thread_id = agent_engine.current_thread().map(|t| t.id.clone());
+                        tracing::info!("Created new AgentEngine thread: {:?}", self.current_thread_id);
                     }
                     
                     // Send message through AgentEngine
