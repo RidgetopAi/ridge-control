@@ -45,7 +45,11 @@ use crate::llm::{
 };
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
 use crate::tabs::{TabId, TabManager, TabBar};
-use crate::agent::{ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats};
+use crate::agent::{
+    AgentEngine, AgentEvent, ConfirmationRequiredExecutor, ContextManager, DiskThreadStore,
+    ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats, SystemPromptBuilder,
+    ToolExecutor as AgentToolExecutor,
+};
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -127,6 +131,10 @@ pub struct App {
     // Phase 3: Context indicator - token counting infrastructure
     model_catalog: std::sync::Arc<ModelCatalog>,
     token_counter: std::sync::Arc<dyn TokenCounter>,
+    // Phase 2: AgentEngine integration (P2-002)
+    agent_engine: Option<AgentEngine<DiskThreadStore>>,
+    agent_event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
+    current_thread_id: Option<String>,
 }
 
 impl App {
@@ -279,6 +287,10 @@ impl App {
             content_area: Rect::default(),
             model_catalog,
             token_counter,
+            // Phase 2: AgentEngine will be initialized in TP2-002-04
+            agent_engine: None,
+            agent_event_rx: None,
+            current_thread_id: None,
         })
     }
 
