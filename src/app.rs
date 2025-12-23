@@ -2003,12 +2003,28 @@ impl App {
                 if !self.show_conversation {
                     self.show_conversation = true;
                 }
-                tracing::debug!("LLM manager configured: {}", self.llm_manager.is_configured());
-                tracing::debug!("Current provider: {}", self.llm_manager.current_provider());
-                tracing::debug!("Current model: {}", self.llm_manager.current_model());
-                let tools = self.tool_executor.tool_definitions_for_llm();
-                self.llm_manager.send_message(msg, None, tools);
-                tracing::info!("Message sent to LLM manager");
+                
+                // Route through AgentEngine if available, otherwise fall back to direct LLM
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    // Ensure we have an active thread
+                    if agent_engine.current_thread().is_none() {
+                        let model = self.llm_manager.current_model();
+                        agent_engine.new_thread(model);
+                        tracing::info!("Created new AgentEngine thread");
+                    }
+                    
+                    // Send message through AgentEngine
+                    agent_engine.send_message(msg);
+                    tracing::info!("Message sent through AgentEngine");
+                } else {
+                    // Fallback to direct LLM manager (legacy path)
+                    tracing::debug!("LLM manager configured: {}", self.llm_manager.is_configured());
+                    tracing::debug!("Current provider: {}", self.llm_manager.current_provider());
+                    tracing::debug!("Current model: {}", self.llm_manager.current_model());
+                    let tools = self.tool_executor.tool_definitions_for_llm();
+                    self.llm_manager.send_message(msg, None, tools);
+                    tracing::info!("Message sent to LLM manager (fallback)");
+                }
             }
             Action::LlmCancel => {
                 self.llm_manager.cancel();
