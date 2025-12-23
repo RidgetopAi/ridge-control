@@ -519,6 +519,22 @@ impl App {
                 }
             }
             
+            // Poll AgentEngine events (TP2-002-05)
+            // Collect first, then dispatch to avoid borrow issues
+            let agent_events: Vec<_> = if let Some(ref mut rx) = self.agent_event_rx {
+                let mut events = Vec::new();
+                while let Ok(event) = rx.try_recv() {
+                    events.push(event);
+                }
+                events
+            } else {
+                Vec::new()
+            };
+            
+            for agent_event in agent_events {
+                self.handle_agent_event(agent_event);
+            }
+            
             // Poll tool execution results - collect first, then dispatch to avoid borrow issues
             let tool_results: Vec<_> = if let Some(ref mut rx) = self.tool_result_rx {
                 let mut results = Vec::new();
@@ -685,6 +701,40 @@ impl App {
             }
             LLMEvent::ToolUseDetected(tool_use) => {
                 self.handle_tool_use_request(tool_use);
+            }
+        }
+    }
+    
+    /// Handle AgentEngine events (TP2-002-05)
+    /// This routes AgentEvent variants to appropriate handlers.
+    /// Full implementation in TP2-002-06.
+    fn handle_agent_event(&mut self, event: AgentEvent) {
+        match event {
+            AgentEvent::StateChanged(state) => {
+                tracing::debug!("AgentEngine state changed: {:?}", state);
+            }
+            AgentEvent::Chunk(chunk) => {
+                // Forward to existing LLM event handler for streaming display
+                self.handle_llm_event(LLMEvent::Chunk(chunk));
+            }
+            AgentEvent::ToolUseRequested(tool_use) => {
+                // Forward to existing tool use handler
+                self.handle_tool_use_request(tool_use);
+            }
+            AgentEvent::ToolExecuted { tool_use_id, success } => {
+                tracing::debug!("Tool {} executed: success={}", tool_use_id, success);
+            }
+            AgentEvent::TurnComplete { stop_reason, usage } => {
+                tracing::debug!("Agent turn complete: {:?}, usage: {:?}", stop_reason, usage);
+            }
+            AgentEvent::Error(err) => {
+                self.notification_manager.error_with_message("Agent Error", err);
+            }
+            AgentEvent::ContextTruncated { segments_dropped, tokens_used, budget } => {
+                tracing::info!(
+                    "Context truncated: dropped {} segments, using {}/{} tokens",
+                    segments_dropped, tokens_used, budget
+                );
             }
         }
     }
