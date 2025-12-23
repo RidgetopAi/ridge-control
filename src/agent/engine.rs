@@ -240,6 +240,10 @@ impl<S: ThreadStore> AgentEngine<S> {
         );
         thread.add_segment(segment);
 
+        // Clear state for next turn - tools have been handled
+        self.pending_tools.clear();
+        self.current_response.clear();
+
         // Continue the loop
         self.prepare_and_send();
     }
