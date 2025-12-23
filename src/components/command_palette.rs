@@ -88,6 +88,10 @@ impl CommandRegistry {
             Command::new("settings_editor_show", "Open Settings Editor", "Open the full settings editor panel", Action::SettingsShow),
             Command::new("settings_editor_close", "Close Settings Editor", "Close the settings editor panel", Action::SettingsClose),
             Command::new("settings_save", "Save Settings", "Save current settings to disk (Ctrl+S in editor)", Action::SettingsSave),
+            // Thread management commands (Phase 2 - AgentEngine)
+            Command::new("thread_new", "New Thread", "Start a new conversation thread", Action::ThreadNew),
+            Command::new("thread_save", "Save Thread", "Save current thread to disk", Action::ThreadSave),
+            Command::new("thread_clear", "Clear Thread", "Clear current thread (start fresh)", Action::ThreadClear),
             // Tab commands
             Command::new("tab_new", "New Tab", "Create a new tab (Ctrl+T)", Action::TabCreate),
             Command::new("tab_close", "Close Tab", "Close current tab (Ctrl+W)", Action::TabClose),
