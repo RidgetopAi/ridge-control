@@ -116,6 +116,18 @@ pub enum Action {
     /// Set dangerous mode explicitly (used by CLI flag --dangerously-allow-all)
     ToolSetDangerousMode(bool),
 
+    // Thread management actions (Phase 2)
+    /// Create a new conversation thread
+    ThreadNew,
+    /// Load an existing thread by ID
+    ThreadLoad(String),
+    /// List all available threads
+    ThreadList,
+    /// Save current thread to disk
+    ThreadSave,
+    /// Clear current thread (start fresh without deleting)
+    ThreadClear,
+
     // Config actions
     /// Configuration file changed (hot-reload trigger)
     ConfigChanged(PathBuf),

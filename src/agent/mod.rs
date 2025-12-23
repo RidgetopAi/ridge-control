@@ -16,6 +16,7 @@ pub mod tokens;
 pub mod context;
 pub mod prompt;
 pub mod thread;
+pub mod disk_store;
 pub mod tools;
 pub mod engine;
 
@@ -24,6 +25,7 @@ pub use tokens::{TokenCounter, DefaultTokenCounter};
 pub use context::{ContextSegment, SegmentKind, ContextManager, BuildContextParams, BuiltContext, ContextStats};
 pub use prompt::{SystemPromptBuilder, PlatformInfo, RepoContextInfo};
 pub use thread::{AgentThread, ThreadStore, InMemoryThreadStore};
+pub use disk_store::DiskThreadStore;
 pub use tools::ToolExecutor;
 pub use engine::{AgentEngine, AgentState, AgentEvent};
 
