@@ -40,7 +40,7 @@ use crate::event::PtyEvent;
 use crate::input::focus::{FocusArea, FocusManager};
 use crate::input::mode::InputMode;
 use crate::llm::{
-    BlockType, LLMManager, LLMEvent, StreamChunk, StreamDelta, StopReason,
+    BlockType, LLMManager, LLMEvent, Message, StreamChunk, StreamDelta, StopReason,
     ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolUse,
 };
 use crate::streams::{StreamEvent, StreamManager, StreamsConfig, ConnectionState};
@@ -1003,7 +1003,21 @@ impl App {
         let show_settings_editor = self.show_settings_editor;
         let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
-        let messages = self.llm_manager.conversation().to_vec();
+        // TP2-002-14: Get messages from AgentThread segments if available, otherwise fallback to llm_manager
+        let messages: Vec<Message> = if let Some(engine) = &self.agent_engine {
+            if let Some(thread) = engine.current_thread() {
+                // Extract all messages from thread segments
+                thread.segments().iter()
+                    .flat_map(|segment| segment.messages.clone())
+                    .collect()
+            } else {
+                // AgentEngine exists but no thread yet - use empty or fallback
+                self.llm_manager.conversation().to_vec()
+            }
+        } else {
+            // No AgentEngine - fallback to llm_manager conversation
+            self.llm_manager.conversation().to_vec()
+        };
         let streaming_buffer = self.llm_response_buffer.clone();
         // TRC-017: Clone thinking buffer for rendering
         let thinking_buffer = self.thinking_buffer.clone();
