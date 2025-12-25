@@ -1105,6 +1105,8 @@ impl App {
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
         let show_thread_picker = self.thread_picker.is_visible();
+        let show_thread_rename = self.thread_rename_buffer.is_some();
+        let thread_rename_text = self.thread_rename_buffer.clone().unwrap_or_default();
         let show_context_menu = self.context_menu.is_visible();
         let has_notifications = self.notification_manager.has_notifications();
         let _show_tabs = self.tab_manager.count() > 1; // Kept for potential future use
@@ -1446,6 +1448,48 @@ impl App {
                 // P2-003: Thread picker overlay
                 if show_thread_picker {
                     self.thread_picker.render(frame, size, &theme);
+                }
+
+                // P2-003: Thread rename dialog overlay
+                if show_thread_rename {
+                    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+                    use ratatui::text::{Line, Span};
+                    use ratatui::style::{Modifier, Style};
+                    use ratatui::layout::Alignment;
+
+                    // Calculate dialog size (centered, fixed width)
+                    let dialog_width = 50u16.min(size.width.saturating_sub(4));
+                    let dialog_height = 5u16;
+                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                    let dialog_area = ratatui::layout::Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                    // Clear background
+                    frame.render_widget(Clear, dialog_area);
+
+                    // Dialog block
+                    let block = Block::default()
+                        .title(" Rename Thread ")
+                        .title_style(Style::default().fg(theme.command_palette.border.to_color()).add_modifier(Modifier::BOLD))
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(theme.command_palette.border.to_color()));
+
+                    let inner = block.inner(dialog_area);
+                    frame.render_widget(block, dialog_area);
+
+                    // Input line with cursor
+                    let input_line = Line::from(vec![
+                        Span::styled(&thread_rename_text, Style::default().fg(theme.command_palette.input_fg.to_color())),
+                        Span::styled("▎", Style::default().fg(theme.colors.primary.to_color())),
+                    ]);
+                    frame.render_widget(Paragraph::new(input_line), inner);
+
+                    // Help text below
+                    let help_area = ratatui::layout::Rect::new(inner.x, inner.y + 1, inner.width, 1);
+                    let help_text = Paragraph::new("Enter to confirm, Esc to cancel")
+                        .style(Style::default().fg(theme.command_palette.description_fg.to_color()))
+                        .alignment(Alignment::Center);
+                    frame.render_widget(help_text, help_area);
                 }
 
                 // TRC-020: Context menu overlay (highest z-index)
