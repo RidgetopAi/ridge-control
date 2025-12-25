@@ -41,6 +41,13 @@ pub struct ConversationViewer {
     search_state: SearchState,
     /// Cached text lines for search
     cached_text: Vec<String>,
+    /// Mapping from visual line index to cached_text index (accounts for text wrapping)
+    visual_to_cached: Vec<usize>,
+    /// Inner width used for wrapping calculation (to calculate column offset in wrapped lines)
+    cached_width: u16,
+    /// Visible lines extracted from terminal buffer (what's actually displayed on screen)
+    /// This is the source of truth for text selection - indexed by visible row
+    visible_lines: Vec<String>,
     /// Text selection state for copy support
     selection: Option<TextSelection>,
     /// Whether we're currently dragging to select
@@ -73,6 +80,9 @@ impl ConversationViewer {
             tool_results_collapsed: false,
             search_state: SearchState::new(),
             cached_text: Vec::new(),
+            visual_to_cached: Vec::new(),
+            cached_width: 0,
+            visible_lines: Vec::new(),
             selection: None,
             selecting: false,
         }
@@ -114,6 +124,9 @@ impl ConversationViewer {
         self.tool_results_collapsed = false;
         self.search_state = SearchState::new();
         self.cached_text.clear();
+        self.visual_to_cached.clear();
+        self.cached_width = 0;
+        self.visible_lines.clear();
         self.selection = None;
         self.selecting = false;
     }
@@ -144,8 +157,28 @@ impl ConversationViewer {
     }
     
     /// Register a new tool use from LLM
+    /// For file_write, captures original file content for diff view
     pub fn register_tool_use(&mut self, tool_use: ToolUse) {
-        self.tool_call_manager.add_tool_call(tool_use);
+        if tool_use.name == "file_write" {
+            // Extract path and read original content for diff view
+            let original_content = tool_use.input.get("path")
+                .and_then(|v| v.as_str())
+                .and_then(|path| {
+                    // Expand ~ to home directory
+                    let expanded_path = if path.starts_with("~/") {
+                        dirs::home_dir()
+                            .map(|home| home.join(&path[2..]))
+                            .unwrap_or_else(|| std::path::PathBuf::from(path))
+                    } else {
+                        std::path::PathBuf::from(path)
+                    };
+                    // Read existing file content (None if file doesn't exist)
+                    std::fs::read_to_string(&expanded_path).ok()
+                });
+            self.tool_call_manager.add_tool_call_with_original(tool_use, original_content);
+        } else {
+            self.tool_call_manager.add_tool_call(tool_use);
+        }
     }
     
     /// Start execution of a tool by ID
@@ -248,25 +281,29 @@ impl ConversationViewer {
     // Text Selection Support
     // =====================================================================
 
-    /// Convert screen coordinates to text position (line, column)
+    /// Convert screen coordinates to text position (visible_row, column)
+    /// Returns position indexed into visible_lines (what's currently on screen)
     fn screen_to_text_pos(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
         if self.inner_area.width == 0 || self.inner_area.height == 0 {
             return None;
         }
-        
+
         if screen_x < self.inner_area.x || screen_y < self.inner_area.y {
             return None;
         }
-        if screen_x >= self.inner_area.x + self.inner_area.width 
+        if screen_x >= self.inner_area.x + self.inner_area.width
             || screen_y >= self.inner_area.y + self.inner_area.height {
             return None;
         }
-        
-        let col = (screen_x - self.inner_area.x) as usize;
+
+        let screen_col = (screen_x - self.inner_area.x) as usize;
         let visible_row = (screen_y - self.inner_area.y) as usize;
-        let line = (self.scroll_offset as usize) + visible_row;
-        
-        Some((line, col))
+
+        // Return visible row directly - it indexes into visible_lines
+        // Clamp to valid range
+        let line = visible_row.min(self.visible_lines.len().saturating_sub(1));
+
+        Some((line, screen_col))
     }
 
     /// Start text selection at screen coordinates
@@ -315,35 +352,37 @@ impl ConversationViewer {
     }
 
     /// Get the currently selected text
+    /// Uses visible_lines (extracted from terminal buffer) for accurate selection
     pub fn get_selected_text(&self) -> Option<String> {
         let sel = self.selection?;
-        
-        if self.cached_text.is_empty() {
+
+        if self.visible_lines.is_empty() {
             return None;
         }
-        
+
         // Normalize selection (start should be before end)
-        let (start, end) = if sel.start.0 < sel.end.0 
+        let (start, end) = if sel.start.0 < sel.end.0
             || (sel.start.0 == sel.end.0 && sel.start.1 <= sel.end.1) {
             (sel.start, sel.end)
         } else {
             (sel.end, sel.start)
         };
-        
+
         let start_line = start.0;
         let start_col = start.1;
         let end_line = end.0;
         let end_col = end.1;
-        
+
         let mut result = String::new();
-        
-        for (i, line_text) in self.cached_text.iter().enumerate() {
+
+        // Use visible_lines which contains exactly what's displayed on screen
+        for (i, line_text) in self.visible_lines.iter().enumerate() {
             if i < start_line || i > end_line {
                 continue;
             }
-            
+
             let line_chars: Vec<char> = line_text.chars().collect();
-            
+
             if i == start_line && i == end_line {
                 // Single line selection
                 let start_idx = start_col.min(line_chars.len());
@@ -366,7 +405,7 @@ impl ConversationViewer {
                 result.push('\n');
             }
         }
-        
+
         if result.is_empty() {
             None
         } else {
@@ -429,46 +468,43 @@ impl ConversationViewer {
     }
 
     /// Render selection highlight overlay on the frame buffer
+    /// Selection line indices are visible row indices (0 = top of visible window)
     fn render_selection_highlight(&self, frame: &mut Frame, inner: Rect, theme: &Theme) {
         let sel = match self.selection {
             Some(s) => s,
             None => return,
         };
 
-        // Normalize selection
-        let (start, end) = if sel.start.0 < sel.end.0 
+        // Normalize selection (start before end)
+        let (start, end) = if sel.start.0 < sel.end.0
             || (sel.start.0 == sel.end.0 && sel.start.1 <= sel.end.1) {
             (sel.start, sel.end)
         } else {
             (sel.end, sel.start)
         };
 
-        let scroll = self.scroll_offset as usize;
-        let visible_start = scroll;
-        let visible_end = scroll + inner.height as usize;
-
-        // Selection highlight style - invert colors for visibility
+        // Selection highlight style
         let highlight_style = Style::default()
             .bg(theme.colors.primary.to_color())
             .fg(theme.colors.background.to_color());
 
         let buf = frame.buffer_mut();
 
+        // Selection line indices are now visible row indices (0 to visible_height-1)
         for line in start.0..=end.0 {
-            // Skip lines not in visible range
-            if line < visible_start || line >= visible_end {
+            // Skip lines outside visible window
+            if line >= inner.height as usize {
                 continue;
             }
 
-            let screen_y = inner.y + (line - scroll) as u16;
-            if screen_y >= inner.y + inner.height {
-                continue;
-            }
+            // Screen Y = inner.y + visible_row
+            let screen_y = inner.y + line as u16;
 
-            // Determine column range for this line
+            // Determine column range
             let col_start = if line == start.0 { start.1 } else { 0 };
             let col_end = if line == end.0 { end.1 } else { inner.width as usize - 1 };
 
+            // Render highlight
             for col in col_start..=col_end {
                 let screen_x = inner.x + col as u16;
                 if screen_x >= inner.x + inner.width {
@@ -535,6 +571,74 @@ impl ConversationViewer {
             for line in streaming_buffer.lines() {
                 self.cached_text.push(line.to_string());
             }
+        }
+    }
+
+    /// Cache rendered lines for text selection
+    /// Each entry in cached_text corresponds to one Line from the render.
+    /// Note: Text wrapping may cause visual lines to differ from cached_text indices,
+    /// but this provides reasonable selection for most content.
+    fn cache_rendered_lines(&mut self, lines: &[Line], width: u16) {
+        self.cached_text.clear();
+        self.visual_to_cached.clear();
+        self.cached_width = width;
+
+        for line in lines.iter() {
+            // Extract text content from the line (concatenate all spans)
+            let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+            self.cached_text.push(text);
+        }
+
+        // Initial 1:1 mapping - will be rebuilt after we know line_count
+        for i in 0..self.cached_text.len() {
+            self.visual_to_cached.push(i);
+        }
+    }
+
+    /// Build the visual-to-cached mapping
+    /// Simple 1:1 mapping - visual line index equals cached line index (clamped)
+    fn build_visual_to_cached_mapping(&mut self) {
+        let cached_count = self.cached_text.len();
+        let visual_count = self.line_count;
+
+        self.visual_to_cached.clear();
+
+        if cached_count == 0 || visual_count == 0 {
+            return;
+        }
+
+        // Simple 1:1 mapping, clamped to valid range
+        for i in 0..visual_count {
+            self.visual_to_cached.push(i.min(cached_count - 1));
+        }
+    }
+
+    /// Extract visible text from the terminal buffer after rendering
+    /// This gives us exactly what's displayed on screen for accurate text selection
+    fn extract_visible_text(&mut self, frame: &mut Frame, inner: Rect) {
+        self.visible_lines.clear();
+        let buf = frame.buffer_mut();
+
+        // We need to extract ALL visual lines, not just the visible window
+        // The scroll_offset tells us which visual line starts at the top of the window
+        // So we need to store: scroll_offset + row -> visible_lines[row]
+        //
+        // For text selection to work correctly with scrolling, we'll store lines
+        // indexed by their absolute visual position (scroll_offset + visible_row)
+
+        for row in 0..inner.height {
+            let y = inner.y + row;
+            let mut line = String::new();
+
+            for col in 0..inner.width {
+                let x = inner.x + col;
+                if let Some(cell) = buf.cell((x, y)) {
+                    line.push_str(cell.symbol());
+                }
+            }
+
+            // Trim trailing whitespace but preserve leading whitespace (indentation)
+            self.visible_lines.push(line.trim_end().to_string());
         }
     }
 
@@ -745,6 +849,9 @@ impl ConversationViewer {
             )));
         }
 
+        // Cache rendered lines for text selection (must happen before paragraph takes ownership)
+        self.cache_rendered_lines(&lines, inner.width);
+
         // Create paragraph with wrap to measure actual wrapped line count
         let paragraph = Paragraph::new(lines)
             .block(block.clone())
@@ -753,6 +860,10 @@ impl ConversationViewer {
         // Calculate actual line count after text wrapping
         // This accounts for long lines that wrap to multiple visual lines
         self.line_count = paragraph.line_count(inner.width);
+
+        // Now that we know the actual visual line count, rebuild the mapping
+        // This ensures visual line indices map correctly to cached text indices
+        self.build_visual_to_cached_mapping();
 
         // Auto-scroll to bottom if enabled and new content
         if self.auto_scroll && self.line_count > self.visible_height as usize {
@@ -766,6 +877,9 @@ impl ConversationViewer {
         // Apply scroll offset and render
         let scrolled_paragraph = paragraph.scroll((self.scroll_offset, 0));
         frame.render_widget(scrolled_paragraph, conversation_area);
+
+        // Extract visible text from buffer for accurate text selection
+        self.extract_visible_text(frame, inner);
 
         // Render selection highlight overlay
         self.render_selection_highlight(frame, inner, theme);
@@ -884,14 +998,28 @@ impl ConversationViewer {
             model.as_str()
         };
         
-        // For Claude models, simplify to key parts
+        // For Claude models, simplify to key parts with version
+        // Model formats: claude-3-5-haiku-*, claude-opus-4-5-*, claude-sonnet-4-*, etc.
         if without_date.contains("claude") {
+            // Extract version number from model name
+            let version = if without_date.contains("4-5") || without_date.contains("4.5") {
+                "4.5"
+            } else if without_date.contains("-4-") || without_date.ends_with("-4") {
+                "4"
+            } else if without_date.contains("3-5") || without_date.contains("3.5") {
+                "3.5"
+            } else if without_date.contains("-3-") || without_date.ends_with("-3") {
+                "3"
+            } else {
+                "" // Unknown version
+            };
+
             if without_date.contains("opus") {
-                return "opus-4".to_string();
+                return if version.is_empty() { "opus".to_string() } else { format!("opus-{}", version) };
             } else if without_date.contains("sonnet") {
-                return "sonnet-4".to_string();
+                return if version.is_empty() { "sonnet".to_string() } else { format!("sonnet-{}", version) };
             } else if without_date.contains("haiku") {
-                return "haiku-3".to_string();
+                return if version.is_empty() { "haiku".to_string() } else { format!("haiku-{}", version) };
             }
         }
         

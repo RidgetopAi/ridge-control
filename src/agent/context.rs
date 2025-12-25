@@ -201,8 +201,34 @@ impl ContextManager {
 
         let tools_tokens = self.count_tools(&params.model, &params.tools);
 
+        // Debug: log input segments
+        tracing::info!("🏗️ BUILD_REQUEST: {} input segments", params.segments.len());
+        for (i, seg) in params.segments.iter().enumerate() {
+            let seg_summary: Vec<String> = seg.messages.iter().map(|m| {
+                let content_summary: Vec<String> = m.content.iter().map(|b| match b {
+                    crate::llm::types::ContentBlock::Text(t) => format!("Text({})", t.len()),
+                    crate::llm::types::ContentBlock::ToolUse(tu) => format!("TU({})", tu.id),
+                    crate::llm::types::ContentBlock::ToolResult(r) => format!("TR({})", r.tool_use_id),
+                    _ => "?".to_string(),
+                }).collect();
+                format!("{:?}:{:?}", m.role, content_summary)
+            }).collect();
+            tracing::info!("🏗️   input[{}] seq={} kind={:?}: {:?}", i, seg.sequence, seg.kind, seg_summary);
+        }
+
         // Find and preserve the last user turn (including any tool exchanges)
         let (last_turn_segments, older_segments) = self.split_last_turn(&params.segments);
+
+        // Debug: log split result
+        tracing::info!("🏗️ SPLIT_RESULT: last_turn={} segments, older={} segments",
+            last_turn_segments.len(), older_segments.len());
+        for (i, seg) in last_turn_segments.iter().enumerate() {
+            tracing::info!("🏗️   last_turn[{}] seq={} kind={:?}", i, seg.sequence, seg.kind);
+        }
+        for (i, seg) in older_segments.iter().enumerate() {
+            tracing::info!("🏗️   older[{}] seq={} kind={:?}", i, seg.sequence, seg.kind);
+        }
+
         let last_turn_tokens: u32 = last_turn_segments
             .iter()
             .map(|s| self.count_segment(&params.model, s))
@@ -254,6 +280,55 @@ impl ContextManager {
         }
         for seg in &last_turn_segments {
             messages.extend(seg.messages.clone());
+        }
+
+        // Debug: log final message order and VALIDATE tool_use/tool_result pairing
+        tracing::info!("🏗️ FINAL_MESSAGES: {} messages", messages.len());
+        let mut seen_tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut validation_errors: Vec<String> = Vec::new();
+
+        for (i, msg) in messages.iter().enumerate() {
+            let content_summary: Vec<String> = msg.content.iter().map(|b| match b {
+                crate::llm::types::ContentBlock::Text(t) => format!("Text({})", t.len()),
+                crate::llm::types::ContentBlock::ToolUse(tu) => format!("TU({})", tu.id),
+                crate::llm::types::ContentBlock::ToolResult(r) => format!("TR({})", r.tool_use_id),
+                _ => "?".to_string(),
+            }).collect();
+            tracing::info!("🏗️   msg[{}] {:?}: {:?}", i, msg.role, content_summary);
+
+            // Collect ToolUse IDs from assistant messages
+            if matches!(msg.role, crate::llm::types::Role::Assistant) {
+                for block in &msg.content {
+                    if let crate::llm::types::ContentBlock::ToolUse(tu) = block {
+                        seen_tool_use_ids.insert(tu.id.clone());
+                    }
+                }
+            }
+
+            // Validate ToolResult references
+            if matches!(msg.role, crate::llm::types::Role::User) {
+                for block in &msg.content {
+                    if let crate::llm::types::ContentBlock::ToolResult(tr) = block {
+                        if !seen_tool_use_ids.contains(&tr.tool_use_id) {
+                            let err = format!(
+                                "❌ ORPHANED_TOOL_RESULT at msg[{}]: TR({}) has no matching ToolUse!",
+                                i, tr.tool_use_id
+                            );
+                            tracing::error!("{}", err);
+                            validation_errors.push(err);
+                        } else {
+                            tracing::info!("🏗️   ✓ TR({}) validated - matching TU exists", tr.tool_use_id);
+                        }
+                    }
+                }
+            }
+        }
+
+        if !validation_errors.is_empty() {
+            tracing::error!("❌ BUILD_REQUEST VALIDATION FAILED: {} errors", validation_errors.len());
+            for err in &validation_errors {
+                tracing::error!("  {}", err);
+            }
         }
 
         let total_tokens = budget.saturating_sub(remaining_budget);

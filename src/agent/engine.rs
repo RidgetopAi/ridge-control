@@ -187,11 +187,6 @@ impl<S: ThreadStore> AgentEngine<S> {
         self.current_thread.as_mut()
     }
 
-    /// Get access to the thread store
-    pub fn thread_store(&self) -> &S {
-        &self.thread_store
-    }
-
     /// Take the internal LLMManager's event receiver for external polling
     /// This allows the App to poll LLM events and forward them to handle_llm_event()
     pub fn take_llm_event_rx(&mut self) -> Option<mpsc::UnboundedReceiver<LLMEvent>> {
@@ -228,14 +223,18 @@ impl<S: ThreadStore> AgentEngine<S> {
         }
     }
 
-    /// Rename the current thread and save to storage
-    pub fn rename_thread(&mut self, new_title: impl Into<String>) -> Result<(), String> {
-        match self.current_thread.as_mut() {
-            Some(thread) => {
-                thread.set_title(new_title);
-                self.thread_store.save(thread)
-            }
-            None => Err("No active thread to rename".to_string()),
+    /// Get a reference to the thread store for listing threads
+    pub fn thread_store(&self) -> &Arc<S> {
+        &self.thread_store
+    }
+
+    /// Rename the current thread
+    pub fn rename_thread(&mut self, new_title: &str) -> Result<(), String> {
+        if let Some(thread) = self.current_thread.as_mut() {
+            thread.set_title(new_title.to_string());
+            self.thread_store.save(thread)
+        } else {
+            Err("No active thread to rename".to_string())
         }
     }
 
@@ -278,6 +277,33 @@ impl<S: ThreadStore> AgentEngine<S> {
 
     /// Continue after tool execution
     pub fn continue_after_tools(&mut self, results: Vec<ToolResult>) {
+        // GUARD: Warn if called in wrong state (should only be called in ExecutingTools)
+        if self.state != AgentState::ExecutingTools {
+            tracing::warn!(
+                "⚠️ continue_after_tools called while in state {:?} (expected ExecutingTools)",
+                self.state
+            );
+        }
+
+        // Validate that results match pending tools
+        let expected_ids: std::collections::HashSet<_> = 
+            self.pending_tools.iter().map(|tu| tu.id.clone()).collect();
+        let got_ids: std::collections::HashSet<_> = 
+            results.iter().map(|r| r.tool_use_id.clone()).collect();
+        
+        if expected_ids != got_ids {
+            tracing::warn!(
+                "⚠️ Tool result mismatch! expected={:?}, got={:?}",
+                expected_ids, got_ids
+            );
+        }
+
+        tracing::info!(
+            "🔄 CONTINUE_AFTER_TOOLS: {} results for {} pending tools",
+            results.len(),
+            self.pending_tools.len()
+        );
+
         let thread = match self.current_thread.as_mut() {
             Some(t) => t,
             None => {
@@ -289,9 +315,12 @@ impl<S: ThreadStore> AgentEngine<S> {
         // Add tool results as messages
         let tool_messages: Vec<Message> = results
             .into_iter()
-            .map(|r| Message {
-                role: Role::User,
-                content: vec![ContentBlock::ToolResult(r)],
+            .map(|r| {
+                tracing::info!("🔄 -> Adding ToolResult for tool_use_id={}", r.tool_use_id);
+                Message {
+                    role: Role::User,
+                    content: vec![ContentBlock::ToolResult(r)],
+                }
             })
             .collect();
 
@@ -301,6 +330,7 @@ impl<S: ThreadStore> AgentEngine<S> {
             thread.peek_sequence(),
         );
         thread.add_segment(segment);
+        tracing::info!("🔄 Added ToolExchange segment seq={}", thread.peek_sequence().saturating_sub(1));
 
         // Clear state for next turn - tools have been handled
         self.pending_tools.clear();
@@ -324,12 +354,20 @@ impl<S: ThreadStore> AgentEngine<S> {
                 self.transition(AgentState::Error);
             }
             LLMEvent::ToolUseDetected(tool_use) => {
+                tracing::info!(
+                    "🔧 TOOL_DETECTED: id={} name={} (buffering, NOT emitting yet)",
+                    tool_use.id, tool_use.name
+                );
                 self.pending_tools.push(tool_use.clone());
                 // Add ToolUse to current_response so it's saved in assistant message
                 // This is required for tool_result to reference the tool_use_id
                 self.current_response
-                    .push(ContentBlock::ToolUse(tool_use.clone()));
-                self.emit(AgentEvent::ToolUseRequested(tool_use));
+                    .push(ContentBlock::ToolUse(tool_use));
+                // CRITICAL FIX: Do NOT emit ToolUseRequested here!
+                // We must wait until handle_completion() has saved the assistant message
+                // with all ToolUse blocks. Otherwise, tool execution can complete and
+                // continue_after_tools() can be called BEFORE the assistant ToolUse
+                // message is persisted to the thread, causing orphaned ToolResult errors.
             }
         }
     }
@@ -443,7 +481,14 @@ impl<S: ThreadStore> AgentEngine<S> {
     fn handle_completion(&mut self) {
         self.turn_count += 1;
 
-        // Save assistant response to thread
+        tracing::info!(
+            "📦 HANDLE_COMPLETION: current_response has {} blocks, pending_tools has {} tools",
+            self.current_response.len(),
+            self.pending_tools.len()
+        );
+
+        // Save assistant response to thread FIRST
+        // This ensures ToolUse blocks are persisted BEFORE we start tool execution
         if let Some(thread) = self.current_thread.as_mut() {
             if !self.current_response.is_empty() {
                 let assistant_msg = Message {
@@ -456,12 +501,29 @@ impl<S: ThreadStore> AgentEngine<S> {
                     thread.peek_sequence(),
                 );
                 thread.add_segment(segment);
+                tracing::info!(
+                    "📦 SAVED assistant segment seq={} with {} content blocks",
+                    thread.peek_sequence().saturating_sub(1),
+                    self.current_response.len()
+                );
             }
         }
 
         // Check if we have pending tools
         if !self.pending_tools.is_empty() {
             self.transition(AgentState::ExecutingTools);
+            
+            // CRITICAL FIX: Now that the assistant message with ToolUse blocks is saved,
+            // we can safely emit ToolUseRequested events to trigger tool execution.
+            // This ensures tool results will always have matching ToolUse in the thread.
+            tracing::info!(
+                "📦 EMITTING {} ToolUseRequested events AFTER assistant message saved",
+                self.pending_tools.len()
+            );
+            for tool_use in self.pending_tools.iter().cloned() {
+                tracing::info!("📦 -> ToolUseRequested: id={} name={}", tool_use.id, tool_use.name);
+                self.emit(AgentEvent::ToolUseRequested(tool_use));
+            }
             // UI will handle tool execution and call continue_after_tools
         } else {
             self.finalize_turn(StopReason::EndTurn, None);
@@ -568,8 +630,8 @@ mod tests {
     fn test_generate_title_truncation() {
         let long_message = "This is a very long message that exceeds the maximum title length and should be truncated with an ellipsis at the end";
         let title = generate_title_from_message(long_message);
+        assert!(title.len() <= 60);
         assert!(title.ends_with("..."));
-        assert!(title.len() <= MAX_TITLE_LENGTH + 3); // +3 for "..."
     }
 
     #[test]

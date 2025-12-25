@@ -1,12 +1,13 @@
 //! Agent thread management - conversation persistence and storage
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 
+use crate::llm::types::{ContentBlock, Role};
 use super::context::ContextSegment;
 
 /// An agent conversation thread
@@ -92,6 +93,68 @@ impl AgentThread {
     pub fn set_title(&mut self, title: impl Into<String>) {
         self.title = title.into();
         self.updated_at = chrono::Utc::now();
+    }
+
+    /// Repair corrupted thread data by removing orphaned ToolResult blocks.
+    /// Returns the number of orphaned ToolResults that were removed.
+    ///
+    /// This fixes threads where ToolUse blocks were lost (e.g., due to streaming bugs)
+    /// but their corresponding ToolResult blocks were saved, causing API errors like:
+    /// "unexpected tool_use_id found in tool_result blocks"
+    pub fn repair_orphaned_tool_results(&mut self) -> usize {
+        let mut removed_count = 0;
+
+        // Collect all valid tool_use IDs from assistant messages
+        let mut valid_tool_use_ids: HashSet<String> = HashSet::new();
+
+        for segment in &self.segments {
+            for message in &segment.messages {
+                if message.role == Role::Assistant {
+                    for block in &message.content {
+                        if let ContentBlock::ToolUse(tool_use) = block {
+                            valid_tool_use_ids.insert(tool_use.id.clone());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Now remove any ToolResult blocks that don't have a matching ToolUse
+        for segment in &mut self.segments {
+            for message in &mut segment.messages {
+                if message.role == Role::User {
+                    let original_len = message.content.len();
+                    message.content.retain(|block| {
+                        if let ContentBlock::ToolResult(result) = block {
+                            if !valid_tool_use_ids.contains(&result.tool_use_id) {
+                                tracing::warn!(
+                                    "Removing orphaned ToolResult: {} (no matching ToolUse)",
+                                    result.tool_use_id
+                                );
+                                return false;
+                            }
+                        }
+                        true
+                    });
+                    removed_count += original_len - message.content.len();
+                }
+            }
+        }
+
+        // Remove any segments that are now empty (only had orphaned ToolResults)
+        self.segments.retain(|segment| {
+            !segment.messages.iter().all(|m| m.content.is_empty())
+        });
+
+        if removed_count > 0 {
+            tracing::info!(
+                "Repaired thread {}: removed {} orphaned ToolResult blocks",
+                self.id, removed_count
+            );
+            self.updated_at = chrono::Utc::now();
+        }
+
+        removed_count
     }
 }
 

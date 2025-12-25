@@ -4,6 +4,7 @@ pub mod config_panel;
 pub mod confirm_dialog;
 pub mod context_menu;
 pub mod conversation_viewer;
+pub mod diff_view;
 pub mod gpu_monitor;
 pub mod log_viewer;
 pub mod menu;

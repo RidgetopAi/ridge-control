@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use std::collections::HashMap;
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -21,11 +22,11 @@ use crate::action::{Action, ContextMenuTarget, PaneBorder};
 use crate::cli::Cli;
 use crate::components::chat_input::ChatInput;
 use crate::components::command_palette::CommandPalette;
-use crate::components::thread_picker::ThreadPicker;
 use crate::components::config_panel::ConfigPanel;
 use crate::components::settings_editor::SettingsEditor;
 use crate::components::confirm_dialog::ConfirmDialog;
 use crate::components::context_menu::{ContextMenu, ContextMenuItem};
+use crate::components::thread_picker::ThreadPicker;
 use crate::components::conversation_viewer::ConversationViewer;
 use crate::components::log_viewer::LogViewer;
 use crate::components::menu::Menu;
@@ -49,7 +50,7 @@ use crate::tabs::{TabId, TabManager, TabBar};
 use crate::agent::{
     AgentEngine, AgentEvent, ConfirmationRequiredExecutor, ContextManager, DiskThreadStore,
     ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats, SystemPromptBuilder,
-    ThreadStore, ToolExecutor as AgentToolExecutor,
+    ToolExecutor as AgentToolExecutor, ThreadStore,
 };
 
 const TICK_INTERVAL_MS: u64 = 500;
@@ -76,17 +77,26 @@ pub struct App {
     // Tool execution
     tool_executor: ToolExecutor,
     confirm_dialog: ConfirmDialog,
-    pending_tool: Option<PendingToolUse>,
+    /// Multi-tool tracking: maps tool_use_id -> PendingToolUse
+    pending_tools: HashMap<String, PendingToolUse>,
+    /// How many tools we're expecting results for (set when ToolUseRequested events arrive)
+    expected_tool_count: usize,
+    /// Collected results waiting to be sent to engine
+    collected_results: HashMap<String, crate::llm::ToolResult>,
+    /// Tool ID currently being shown in confirmation dialog (if any)
+    confirming_tool_id: Option<String>,
     // Command palette
     command_palette: CommandPalette,
-    // Thread picker dialog (P2-003)
+    // Thread picker for resuming conversations (P2-003)
     thread_picker: ThreadPicker,
+    // Thread rename state
+    thread_rename_buffer: Option<String>,
     // Tracking tool use during streaming
     current_tool_id: Option<String>,
     current_tool_name: Option<String>,
     current_tool_input: String,
-    // Tool execution result receiver
-    tool_result_rx: Option<mpsc::UnboundedReceiver<std::result::Result<crate::llm::ToolResult, crate::llm::ToolError>>>,
+    // Tool execution result receivers: maps tool_use_id -> receiver
+    tool_result_rxs: HashMap<String, mpsc::UnboundedReceiver<std::result::Result<crate::llm::ToolResult, crate::llm::ToolError>>>,
     // Configuration system
     config_manager: ConfigManager,
     config_watcher: Option<ConfigWatcherMode>,
@@ -140,8 +150,6 @@ pub struct App {
     // TP2-002-FIX-01: AgentEngine's internal LLM event receiver
     agent_llm_event_rx: Option<mpsc::UnboundedReceiver<LLMEvent>>,
     current_thread_id: Option<String>,
-    // Thread rename buffer for inline editing
-    thread_rename_buffer: String,
 }
 
 impl App {
@@ -301,13 +309,17 @@ impl App {
             last_tick: Instant::now(),
             tool_executor,
             confirm_dialog: ConfirmDialog::new(),
-            pending_tool: None,
+            pending_tools: HashMap::new(),
+            expected_tool_count: 0,
+            collected_results: HashMap::new(),
+            confirming_tool_id: None,
             command_palette: CommandPalette::new(),
             thread_picker: ThreadPicker::new(),
+            thread_rename_buffer: None,
             current_tool_id: None,
             current_tool_name: None,
             current_tool_input: String::new(),
-            tool_result_rx: None,
+            tool_result_rxs: HashMap::new(),
             config_manager,
             config_watcher,
             tab_manager,
@@ -343,7 +355,6 @@ impl App {
             // TP2-002-FIX-01: Wire AgentEngine's internal LLM event receiver
             agent_llm_event_rx,
             current_thread_id: None,
-            thread_rename_buffer: String::new(),
         })
     }
 
@@ -574,35 +585,37 @@ impl App {
                 self.handle_agent_event(agent_event);
             }
             
-            // Poll tool execution results - collect first, then dispatch to avoid borrow issues
-            let tool_results: Vec<_> = if let Some(ref mut rx) = self.tool_result_rx {
+            // Poll tool execution results from all receivers
+            // Collect (tool_id, result) pairs first, then dispatch to avoid borrow issues
+            let tool_results: Vec<(String, std::result::Result<crate::llm::ToolResult, crate::llm::ToolError>)> = {
                 let mut results = Vec::new();
-                while let Ok(result) = rx.try_recv() {
-                    results.push(result);
+                for (tool_id, rx) in self.tool_result_rxs.iter_mut() {
+                    while let Ok(result) = rx.try_recv() {
+                        results.push((tool_id.clone(), result));
+                    }
                 }
                 results
-            } else {
-                Vec::new()
             };
             
-            for result in tool_results {
+            for (tool_id, result) in tool_results {
                 match result {
                     Ok(tool_result) => {
                         self.dispatch(Action::ToolResult(tool_result))?;
                     }
                     Err(e) => {
-                        // Create an error result
-                        if let Some(pending) = &self.pending_tool {
-                            let error_result = crate::llm::ToolResult {
-                                tool_use_id: pending.tool.id.clone(),
-                                content: crate::llm::ToolResultContent::Text(e.to_string()),
-                                is_error: true,
-                            };
-                            self.dispatch(Action::ToolResult(error_result))?;
-                        }
+                        // Create an error result using the tool_id we tracked
+                        let error_result = crate::llm::ToolResult {
+                            tool_use_id: tool_id,
+                            content: crate::llm::ToolResultContent::Text(e.to_string()),
+                            is_error: true,
+                        };
+                        self.dispatch(Action::ToolResult(error_result))?;
                     }
                 }
             }
+            
+            // Clean up completed receivers (those with no pending tools)
+            self.tool_result_rxs.retain(|id, _| self.pending_tools.contains_key(id));
 
             if self.last_tick.elapsed() >= Duration::from_millis(TICK_INTERVAL_MS) {
                 self.dispatch(Action::Tick)?;
@@ -699,20 +712,32 @@ impl App {
                         
                         // When a tool use block stops, we have the complete tool use
                         if let (Some(id), Some(name)) = (self.current_tool_id.take(), self.current_tool_name.take()) {
-                            // IMPORTANT: Add assistant text message FIRST, before the tool_use
-                            // The tool_use will be appended to this assistant message
-                            // This ensures proper message ordering for Anthropic API
-                            if !self.llm_response_buffer.is_empty() {
-                                self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-                                self.llm_response_buffer.clear();
+                            // RACE FIX: When AgentEngine is active, it owns tool orchestration.
+                            // It buffers ToolUseRequested until AFTER the assistant message is saved.
+                            // If we trigger tools here, we bypass that buffering and cause
+                            // "orphaned tool_result" errors from the API.
+                            if self.agent_engine.is_some() {
+                                // Just discard tool input - AgentEngine has its own state
+                                self.current_tool_input.clear();
+                                tracing::debug!(
+                                    "🚫 LEGACY_BLOCKSTOP: Skipping tool {} (AgentEngine handles this)",
+                                    id
+                                );
+                            } else {
+                                // LEGACY PATH (no AgentEngine): behavior unchanged
+                                // Add assistant text message FIRST, before the tool_use
+                                if !self.llm_response_buffer.is_empty() {
+                                    self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
+                                    self.llm_response_buffer.clear();
+                                }
+                                
+                                let input: serde_json::Value = serde_json::from_str(&self.current_tool_input)
+                                    .unwrap_or(serde_json::Value::Null);
+                                self.current_tool_input.clear();
+                                
+                                let tool_use = ToolUse { id, name, input };
+                                self.handle_tool_use_request(tool_use);
                             }
-                            
-                            let input: serde_json::Value = serde_json::from_str(&self.current_tool_input)
-                                .unwrap_or(serde_json::Value::Null);
-                            self.current_tool_input.clear();
-                            
-                            let tool_use = ToolUse { id, name, input };
-                            self.handle_tool_use_request(tool_use);
                         }
                         
                         // Clear current block type
@@ -752,6 +777,15 @@ impl App {
                 self.current_tool_input.clear();
             }
             LLMEvent::ToolUseDetected(tool_use) => {
+                // RACE FIX: When AgentEngine is active, skip legacy tool detection.
+                // AgentEngine handles tool orchestration via AgentEvent::ToolUseRequested.
+                if self.agent_engine.is_some() {
+                    tracing::debug!(
+                        "🚫 LEGACY_TOOL_DETECTED: Skipping tool {} (AgentEngine handles this)",
+                        tool_use.id
+                    );
+                    return;
+                }
                 self.handle_tool_use_request(tool_use);
             }
         }
@@ -806,6 +840,12 @@ impl App {
                 self.handle_llm_event(LLMEvent::Chunk(chunk));
             }
             AgentEvent::ToolUseRequested(tool_use) => {
+                // Track expected tool count - increments for each tool requested
+                self.expected_tool_count += 1;
+                tracing::info!(
+                    "⚡ TOOL_REQUESTED: id={} name={}, expected_count now={}",
+                    tool_use.id, tool_use.name, self.expected_tool_count
+                );
                 // Forward to existing tool use handler
                 self.handle_tool_use_request(tool_use);
             }
@@ -884,6 +924,8 @@ impl App {
         // Register tool use in conversation viewer for UI tracking (TRC-016)
         self.conversation_viewer.register_tool_use(tool_use.clone());
         
+        let tool_id = tool_use.id.clone();
+        
         // Check if the tool can be executed
         let check = self.tool_executor.can_execute(&tool_use, false);
         
@@ -896,7 +938,8 @@ impl App {
             ToolExecutionCheck::RequiresConfirmation => {
                 // Show confirmation dialog
                 let pending = PendingToolUse::new(tool_use, check);
-                self.pending_tool = Some(pending.clone());
+                self.pending_tools.insert(tool_id.clone(), pending.clone());
+                self.confirming_tool_id = Some(tool_id);
                 self.confirm_dialog.show(pending);
                 self.input_mode = InputMode::Confirm {
                     title: "Tool Execution".to_string(),
@@ -908,7 +951,8 @@ impl App {
             | ToolExecutionCheck::UnknownTool => {
                 // Show dialog explaining why it can't run
                 let pending = PendingToolUse::new(tool_use, check);
-                self.pending_tool = Some(pending.clone());
+                self.pending_tools.insert(tool_id.clone(), pending.clone());
+                self.confirming_tool_id = Some(tool_id);
                 self.confirm_dialog.show(pending);
                 self.input_mode = InputMode::Confirm {
                     title: "Tool Blocked".to_string(),
@@ -935,6 +979,8 @@ impl App {
         // Update tool state to Running in conversation viewer (TRC-016)
         self.conversation_viewer.start_tool_execution(&pending.tool.id);
         
+        let tool_id = pending.tool.id.clone();
+        
         // Execute the tool asynchronously
         let tool = pending.tool.clone();
         let working_dir = std::env::current_dir().unwrap_or_else(|_| {
@@ -944,9 +990,12 @@ impl App {
         // We need to create a new executor for the async task
         let dangerous_mode = self.tool_executor.registry().is_dangerous_mode();
         
-        // Spawn the tool execution
+        // Spawn the tool execution with its own result channel
         let (result_tx, result_rx) = mpsc::unbounded_channel();
-        self.tool_result_rx = Some(result_rx);
+        self.tool_result_rxs.insert(tool_id.clone(), result_rx);
+        
+        tracing::info!("⚡ EXECUTE_TOOL: id={} name={}, active_receivers={}",
+            tool_id, pending.tool.name, self.tool_result_rxs.len());
         
         tokio::spawn(async move {
             let mut executor = ToolExecutor::new(working_dir);
@@ -956,8 +1005,8 @@ impl App {
             let _ = result_tx.send(result);
         });
         
-        // Store the pending tool for reference
-        self.pending_tool = Some(pending);
+        // Store the pending tool in the HashMap for reference
+        self.pending_tools.insert(tool_id, pending);
     }
 
     fn handle_stream_event(&mut self, event: StreamEvent) {
@@ -1056,10 +1105,6 @@ impl App {
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
         let show_thread_picker = self.thread_picker.is_visible();
-        let show_thread_rename = matches!(
-            self.input_mode,
-            InputMode::Insert { target: crate::input::mode::InsertTarget::ThreadRename }
-        );
         let show_context_menu = self.context_menu.is_visible();
         let has_notifications = self.notification_manager.has_notifications();
         let _show_tabs = self.tab_manager.count() > 1; // Kept for potential future use
@@ -1403,49 +1448,6 @@ impl App {
                     self.thread_picker.render(frame, size, &theme);
                 }
 
-                // Thread rename dialog overlay
-                if show_thread_rename {
-                    use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-                    use ratatui::layout::{Alignment, Rect as RatatuiRect};
-                    use ratatui::style::{Modifier, Style};
-                    use ratatui::text::{Line, Span};
-
-                    // Calculate dialog size (centered, fixed width)
-                    let dialog_width = 50u16.min(size.width.saturating_sub(4));
-                    let dialog_height = 5u16;
-                    let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
-                    let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
-                    let dialog_area = RatatuiRect::new(dialog_x, dialog_y, dialog_width, dialog_height);
-
-                    // Clear background
-                    frame.render_widget(Clear, dialog_area);
-
-                    // Render dialog block
-                    let block = Block::default()
-                        .title(" Rename Thread ")
-                        .title_style(Style::default().fg(theme.command_palette.border.to_color()).add_modifier(Modifier::BOLD))
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(theme.command_palette.border.to_color()));
-
-                    let inner = block.inner(dialog_area);
-                    frame.render_widget(block, dialog_area);
-
-                    // Render input with cursor
-                    let input_line = Line::from(vec![
-                        Span::styled(": ", Style::default().fg(theme.colors.primary.to_color()).add_modifier(Modifier::BOLD)),
-                        Span::styled(&self.thread_rename_buffer, Style::default().fg(theme.command_palette.input_fg.to_color())),
-                        Span::styled("▎", Style::default().fg(theme.colors.primary.to_color())),
-                    ]);
-                    frame.render_widget(Paragraph::new(input_line), inner);
-
-                    // Render help text
-                    let help_area = RatatuiRect::new(inner.x, inner.y + 2, inner.width, 1);
-                    let help_text = Paragraph::new("Enter to confirm, Esc to cancel")
-                        .style(Style::default().fg(theme.command_palette.description_fg.to_color()))
-                        .alignment(Alignment::Center);
-                    frame.render_widget(help_text, help_area);
-                }
-
                 // TRC-020: Context menu overlay (highest z-index)
                 if show_context_menu {
                     self.context_menu.render(frame, size, &theme);
@@ -1487,9 +1489,6 @@ impl App {
             }
             InputMode::CommandPalette => {
                 self.command_palette.handle_event(&CrosstermEvent::Key(key))
-            }
-            InputMode::ThreadPicker => {
-                self.thread_picker.handle_event(&CrosstermEvent::Key(key))
             }
             InputMode::PtyRaw => {
                 // First check configurable keybindings
@@ -1642,17 +1641,35 @@ impl App {
                     }
                 }
 
-                // Handle thread rename input
+                // P2-003: Handle inline thread rename input
                 if matches!(target, crate::input::mode::InsertTarget::ThreadRename) {
                     match key.code {
-                        KeyCode::Esc => return Some(Action::ThreadCancelRename),
-                        KeyCode::Enter => {
-                            // Confirm rename with current buffer
-                            let new_title = self.thread_rename_buffer.clone();
-                            return Some(Action::ThreadRename(new_title));
+                        KeyCode::Esc => {
+                            self.thread_rename_buffer = None;
+                            self.input_mode = InputMode::Normal;
+                            return Some(Action::ThreadCancelRename);
                         }
-                        KeyCode::Backspace => return Some(Action::ThreadRenameBackspace),
-                        KeyCode::Char(c) => return Some(Action::ThreadRenameInput(c)),
+                        KeyCode::Enter => {
+                            // Confirm rename
+                            if let Some(new_name) = self.thread_rename_buffer.take() {
+                                self.input_mode = InputMode::Normal;
+                                return Some(Action::ThreadRename(new_name));
+                            }
+                            self.input_mode = InputMode::Normal;
+                            return None;
+                        }
+                        KeyCode::Backspace => {
+                            if let Some(ref mut buffer) = self.thread_rename_buffer {
+                                buffer.pop();
+                            }
+                            return None;
+                        }
+                        KeyCode::Char(c) => {
+                            if let Some(ref mut buffer) = self.thread_rename_buffer {
+                                buffer.push(c);
+                            }
+                            return None;
+                        }
                         _ => {}
                     }
                 }
@@ -1660,6 +1677,17 @@ impl App {
                 // Fall back to configurable keybindings for other insert targets
                 if let Some(action) = self.config_manager.keybindings().get_action(&self.input_mode, &key) {
                     return Some(action);
+                }
+                None
+            }
+            InputMode::ThreadPicker => {
+                // P2-003: Route keyboard events to thread picker component
+                if let Some(action) = self.thread_picker.handle_event(&CrosstermEvent::Key(key)) {
+                    return Some(action);
+                }
+                // If picker was hidden (Esc pressed), return to normal mode
+                if !self.thread_picker.is_visible() {
+                    self.input_mode = InputMode::Normal;
                 }
                 None
             }
@@ -1944,72 +1972,6 @@ impl App {
                 self.command_palette.hide();
                 self.input_mode = InputMode::Normal;
             }
-            Action::ThreadPickerShow => {
-                // Load thread summaries from disk store and show picker
-                if let Some(ref engine) = self.agent_engine {
-                    let threads = engine.thread_store().list_summary();
-                    self.thread_picker.show(threads);
-                    self.input_mode = InputMode::ThreadPicker;
-                } else {
-                    self.notification_manager.warning("No thread store available".to_string());
-                }
-            }
-            Action::ThreadPickerHide => {
-                self.thread_picker.hide();
-                self.input_mode = InputMode::Normal;
-            }
-
-            // Thread rename actions
-            Action::ThreadStartRename => {
-                if let Some(ref engine) = self.agent_engine {
-                    if let Some(thread) = engine.current_thread() {
-                        // Pre-fill buffer with current title
-                        self.thread_rename_buffer = thread.title.clone();
-                        self.input_mode = InputMode::Insert {
-                            target: crate::input::mode::InsertTarget::ThreadRename
-                        };
-                        self.notification_manager.info(format!("Renaming thread: {}", thread.title));
-                    } else {
-                        self.notification_manager.warning("No active thread to rename");
-                    }
-                } else {
-                    self.notification_manager.error("AgentEngine not available");
-                }
-            }
-            Action::ThreadCancelRename => {
-                self.thread_rename_buffer.clear();
-                self.input_mode = InputMode::Normal;
-                self.notification_manager.info("Rename cancelled");
-            }
-            Action::ThreadRenameInput(c) => {
-                self.thread_rename_buffer.push(c);
-            }
-            Action::ThreadRenameBackspace => {
-                self.thread_rename_buffer.pop();
-            }
-            Action::ThreadRename(new_title) => {
-                if let Some(ref mut engine) = self.agent_engine {
-                    if new_title.trim().is_empty() {
-                        self.notification_manager.warning("Thread name cannot be empty");
-                    } else {
-                        match engine.rename_thread(&new_title) {
-                            Ok(()) => {
-                                self.notification_manager.success(format!("Thread renamed to: {}", new_title));
-                                tracing::info!("Renamed thread to: {}", new_title);
-                            }
-                            Err(e) => {
-                                self.notification_manager.error_with_message("Failed to rename thread", e.clone());
-                                tracing::error!("Failed to rename thread: {}", e);
-                            }
-                        }
-                    }
-                } else {
-                    self.notification_manager.error("AgentEngine not available");
-                }
-                self.thread_rename_buffer.clear();
-                self.input_mode = InputMode::Normal;
-            }
-
             Action::FocusNext => {
                 let skip_chat = !self.show_conversation;
                 self.focus.next_skip_chat(skip_chat);
@@ -2273,13 +2235,16 @@ impl App {
                 self.confirm_dialog.dismiss();
                 self.input_mode = InputMode::Normal;
                 
-                if let Some(pending) = self.pending_tool.take() {
-                    // Update check to Allowed since user confirmed
-                    let confirmed_pending = PendingToolUse::new(
-                        pending.tool,
-                        ToolExecutionCheck::Allowed
-                    );
-                    self.execute_tool(confirmed_pending);
+                // Get the tool from pending_tools using confirming_tool_id
+                if let Some(tool_id) = self.confirming_tool_id.take() {
+                    if let Some(pending) = self.pending_tools.remove(&tool_id) {
+                        // Update check to Allowed since user confirmed
+                        let confirmed_pending = PendingToolUse::new(
+                            pending.tool,
+                            ToolExecutionCheck::Allowed
+                        );
+                        self.execute_tool(confirmed_pending);
+                    }
                 }
             }
             Action::ToolReject => {
@@ -2287,42 +2252,52 @@ impl App {
                 self.confirm_dialog.dismiss();
                 self.input_mode = InputMode::Normal;
                 
-                if let Some(pending) = self.pending_tool.take() {
-                    // Update tool state in conversation viewer (TRC-016)
-                    self.conversation_viewer.reject_tool(&pending.tool.id);
-                    
-                    // Create rejection result
-                    let error_result = crate::llm::ToolResult {
-                        tool_use_id: pending.tool.id.clone(),
-                        content: crate::llm::ToolResultContent::Text(
-                            "User rejected tool execution".to_string()
-                        ),
-                        is_error: true,
-                    };
-                    
-                    // TP2-002-12: Bridge tool rejection to AgentEngine if active
-                    if self.agent_engine.is_some() {
-                        if let Some(ref mut engine) = self.agent_engine {
-                            tracing::debug!("Routing tool rejection through AgentEngine: {}", pending.tool.id);
-                            engine.continue_after_tools(vec![error_result]);
+                // Get the tool from pending_tools using confirming_tool_id
+                if let Some(tool_id) = self.confirming_tool_id.take() {
+                    if let Some(pending) = self.pending_tools.remove(&tool_id) {
+                        // Update tool state in conversation viewer (TRC-016)
+                        self.conversation_viewer.reject_tool(&pending.tool.id);
+                        
+                        // Create rejection result
+                        let error_result = crate::llm::ToolResult {
+                            tool_use_id: pending.tool.id.clone(),
+                            content: crate::llm::ToolResultContent::Text(
+                                "User rejected tool execution".to_string()
+                            ),
+                            is_error: true,
+                        };
+                        
+                        // TP2-002-12: Bridge tool rejection to AgentEngine if active
+                        if self.agent_engine.is_some() {
+                            // Collect rejection as a result
+                            self.collected_results.insert(pending.tool.id.clone(), error_result);
+                            
+                            // Check if we have all results now
+                            if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
+                                let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
+                                if let Some(ref mut engine) = self.agent_engine {
+                                    engine.continue_after_tools(all_results);
+                                }
+                                self.expected_tool_count = 0;
+                            }
+                        } else {
+                            // Legacy path: direct LLMManager interaction
+                            self.llm_manager.add_tool_use(pending.tool);
+                            self.llm_manager.add_tool_result(error_result);
+                            let tools = self.tool_executor.tool_definitions_for_llm();
+                            self.llm_manager.continue_after_tool(None, tools);
                         }
-                    } else {
-                        // Legacy path: direct LLMManager interaction
-                        self.llm_manager.add_tool_use(pending.tool);
-                        self.llm_manager.add_tool_result(error_result);
-                        let tools = self.tool_executor.tool_definitions_for_llm();
-                        self.llm_manager.continue_after_tool(None, tools);
                     }
                 }
             }
             Action::ToolResult(result) => {
+                let tool_use_id = result.tool_use_id.clone();
+                
                 // Update tool state in conversation viewer (TRC-016)
-                let tool_name = self.pending_tool.as_ref()
+                let tool_name = self.pending_tools.get(&tool_use_id)
                     .map(|p| p.tool_name().to_string())
                     .unwrap_or_else(|| "Tool".to_string());
-                if let Some(ref pending) = self.pending_tool {
-                    self.conversation_viewer.complete_tool(&pending.tool.id, result.clone());
-                }
+                self.conversation_viewer.complete_tool(&tool_use_id, result.clone());
                 
                 // TRC-023: Notify on tool completion
                 if result.is_error {
@@ -2332,22 +2307,40 @@ impl App {
                     );
                 }
                 
+                // Remove from pending_tools since we got the result
+                self.pending_tools.remove(&tool_use_id);
+                
                 // TP2-002-12: Bridge tool result to AgentEngine if active
                 // AgentEngine manages the full agentic loop including tool execution flow
                 if self.agent_engine.is_some() {
-                    // Route through AgentEngine for proper thread/context management
-                    if let Some(ref mut engine) = self.agent_engine {
-                        tracing::debug!("Routing tool result through AgentEngine: {}", result.tool_use_id);
-                        engine.continue_after_tools(vec![result]);
+                    // Collect this result
+                    self.collected_results.insert(tool_use_id.clone(), result);
+                    
+                    tracing::info!(
+                        "📥 TOOL_RESULT collected: id={}, collected={}/{} expected",
+                        tool_use_id, self.collected_results.len(), self.expected_tool_count
+                    );
+                    
+                    // Only continue when we have ALL expected results
+                    if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
+                        // Collect all results and send them together
+                        let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
                         
-                        // Emit ToolExecuted event for UI tracking
-                        // The AgentEngine will handle continuing the conversation
+                        tracing::info!(
+                            "✅ ALL_TOOLS_COMPLETE: sending {} results to engine",
+                            all_results.len()
+                        );
+                        
+                        if let Some(ref mut engine) = self.agent_engine {
+                            engine.continue_after_tools(all_results);
+                        }
+                        
+                        // Reset tracking state for next tool batch
+                        self.expected_tool_count = 0;
                     }
-                    self.pending_tool = None;
                 } else {
-                    // Legacy path: direct LLMManager interaction
+                    // Legacy path: direct LLMManager interaction (single tool at a time)
                     self.llm_manager.add_tool_result(result);
-                    self.pending_tool = None;
                     let tools = self.tool_executor.tool_definitions_for_llm();
                     self.llm_manager.continue_after_tool(None, tools);
                 }
@@ -2375,18 +2368,12 @@ impl App {
             }
             Action::ThreadLoad(id) => {
                 // TP2-002-09: Load existing thread by ID
-                // P2-003-11: Always ensure we exit ThreadPicker mode and hide picker
-                tracing::debug!("ThreadLoad: hiding picker, mode was {:?}", self.input_mode);
-                self.thread_picker.hide();
-                self.input_mode = InputMode::Normal; // Always reset to Normal
-                tracing::debug!("ThreadLoad: mode now {:?}", self.input_mode);
-
                 if let Some(ref mut engine) = self.agent_engine {
                     match engine.load_thread(&id) {
                         Ok(()) => {
                             // Update current thread ID
                             self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
-
+                            
                             // Clear conversation viewer state
                             self.conversation_viewer.clear();
                             
@@ -2405,10 +2392,6 @@ impl App {
                                 let title = thread.title.clone();
                                 self.notification_manager.info(format!("Loaded thread: {}", title));
                                 tracing::info!("Loaded thread: {} ({})", title, id);
-
-                                // Show conversation view and set focus
-                                self.show_conversation = true;
-                                self.focus.focus(FocusArea::StreamViewer);
                             }
                         }
                         Err(e) => {
@@ -2469,7 +2452,80 @@ impl App {
                     tracing::warn!("Cannot clear thread: AgentEngine not available");
                 }
             }
-            
+
+            // P2-003: Thread picker actions
+            Action::ThreadPickerShow => {
+                if let Some(ref engine) = self.agent_engine {
+                    // Get thread summaries from DiskThreadStore
+                    let summaries = engine.thread_store().list_summary();
+                    if summaries.is_empty() {
+                        self.notification_manager.warning("No saved threads to continue");
+                    } else {
+                        self.thread_picker.show(summaries);
+                        self.input_mode = InputMode::ThreadPicker;
+                        tracing::debug!("ThreadPickerShow: showing thread picker");
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                }
+            }
+            Action::ThreadPickerHide => {
+                self.thread_picker.hide();
+                self.input_mode = InputMode::Normal;
+                tracing::debug!("ThreadPickerHide: hiding thread picker");
+            }
+
+            // P2-003: Thread rename actions
+            Action::ThreadStartRename => {
+                if let Some(ref engine) = self.agent_engine {
+                    if let Some(thread) = engine.current_thread() {
+                        // Initialize rename buffer with current title
+                        self.thread_rename_buffer = Some(thread.title.clone());
+                        self.input_mode = InputMode::Insert { target: crate::input::mode::InsertTarget::ThreadRename };
+                        self.notification_manager.info("Editing thread name (Enter to confirm, Esc to cancel)");
+                        tracing::debug!("ThreadStartRename: started rename mode with title '{}'", thread.title);
+                    } else {
+                        self.notification_manager.warning("No active thread to rename");
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                }
+            }
+            Action::ThreadCancelRename => {
+                self.thread_rename_buffer = None;
+                self.input_mode = InputMode::Normal;
+                self.notification_manager.info("Rename cancelled");
+                tracing::debug!("ThreadCancelRename: cancelled rename");
+            }
+            Action::ThreadRenameInput(c) => {
+                if let Some(ref mut buffer) = self.thread_rename_buffer {
+                    buffer.push(c);
+                }
+            }
+            Action::ThreadRenameBackspace => {
+                if let Some(ref mut buffer) = self.thread_rename_buffer {
+                    buffer.pop();
+                }
+            }
+            Action::ThreadRename(new_name) => {
+                if let Some(ref mut engine) = self.agent_engine {
+                    match engine.rename_thread(&new_name) {
+                        Ok(()) => {
+                            self.notification_manager.success(format!("Thread renamed to '{}'", new_name));
+                            tracing::info!("ThreadRename: renamed thread to '{}'", new_name);
+                        }
+                        Err(e) => {
+                            self.notification_manager.error_with_message("Failed to rename thread", e.clone());
+                            tracing::error!("ThreadRename: failed to rename - {}", e);
+                        }
+                    }
+                } else {
+                    self.notification_manager.error("AgentEngine not available");
+                }
+                self.thread_rename_buffer = None;
+                self.input_mode = InputMode::Normal;
+            }
+
             // Config actions
             Action::ConfigChanged(path) => {
                 tracing::info!("Config file changed: {}", path.display());

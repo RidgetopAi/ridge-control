@@ -64,7 +64,14 @@ impl ToolAssembler {
             }
             StreamChunk::BlockStop { index } => {
                 if let Some(p) = self.pending_tools.remove(index) {
-                    match serde_json::from_str::<serde_json::Value>(&p.input_buf) {
+                    // Handle empty input: Anthropic sometimes sends empty string for tools with no required params
+                    let input_to_parse = if p.input_buf.trim().is_empty() {
+                        "{}".to_string()
+                    } else {
+                        p.input_buf.clone()
+                    };
+                    
+                    match serde_json::from_str::<serde_json::Value>(&input_to_parse) {
                         Ok(input_value) => {
                             Some(ToolUse {
                                 id: p.id,
@@ -78,7 +85,12 @@ impl ToolAssembler {
                                 p.name,
                                 e
                             );
-                            None
+                            // Still emit the tool so we can return an error result to the API
+                            Some(ToolUse {
+                                id: p.id,
+                                name: p.name,
+                                input: serde_json::json!({"_parse_error": e.to_string()}),
+                            })
                         }
                     }
                 } else {

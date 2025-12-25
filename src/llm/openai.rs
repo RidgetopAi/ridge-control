@@ -114,7 +114,7 @@ impl OpenAIProvider {
                         }));
                     }
                 }
-            } else if content != json!(null) && content != json!([]) {
+            } else {
                 // Check if we have tool calls (assistant message with tool use)
                 let tool_calls: Vec<serde_json::Value> = m.content.iter()
                     .filter_map(|c| {
@@ -133,16 +133,29 @@ impl OpenAIProvider {
                     })
                     .collect();
 
-                let mut msg = json!({
-                    "role": role,
-                    "content": content
-                });
+                // Include message if it has content OR tool_calls
+                // (assistant messages can have only tool_calls with no text)
+                let has_content = content != json!(null) && content != json!([]);
+                let has_tool_calls = !tool_calls.is_empty();
 
-                if !tool_calls.is_empty() {
-                    msg["tool_calls"] = json!(tool_calls);
+                if has_content || has_tool_calls {
+                    let mut msg = json!({
+                        "role": role
+                    });
+
+                    // OpenAI requires content field, use null if empty
+                    if has_content {
+                        msg["content"] = content;
+                    } else {
+                        msg["content"] = json!(null);
+                    }
+
+                    if has_tool_calls {
+                        msg["tool_calls"] = json!(tool_calls);
+                    }
+
+                    messages.push(msg);
                 }
-
-                messages.push(msg);
             }
         }
 
@@ -450,8 +463,9 @@ fn parse_sse_data(
                     
                     // New tool call starting
                     if let Some(id) = tool_call["id"].as_str() {
-                        // End previous block if we were in text mode
-                        if !*in_tool_block && *block_index > 0 {
+                        // End previous block (text OR tool) before starting new tool
+                        // Critical for multi-tool: each tool needs BlockStop before next BlockStart
+                        if *block_index > 0 {
                             chunks.push(StreamChunk::BlockStop { index: *block_index - 1 });
                         }
                         

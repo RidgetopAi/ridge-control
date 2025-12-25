@@ -387,15 +387,30 @@ mod integration_tests {
             input: serde_json::json!({"path": "/test.txt"}),
         };
         
+        // CRITICAL FIX TEST: ToolUseRequested is NOT emitted immediately on ToolUseDetected.
+        // It is only emitted after LLMEvent::Complete when the assistant message is saved.
+        // This prevents race conditions where tool execution completes before the ToolUse
+        // message is persisted to the thread.
+        
         engine.handle_llm_event(LLMEvent::ToolUseDetected(tool_use.clone()));
         
-        // Should emit ToolUseRequested event
+        // Should NOT emit ToolUseRequested yet - should be empty
+        assert!(rx.try_recv().is_err(), "No event should be emitted on ToolUseDetected");
+        
+        // Now simulate stream completion
+        engine.handle_llm_event(LLMEvent::Complete);
+        
+        // Should emit StateChanged(ExecutingTools) then ToolUseRequested
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, AgentEvent::StateChanged(AgentState::ExecutingTools)),
+            "Expected StateChanged(ExecutingTools), got {:?}", event);
+        
         let event = rx.try_recv().unwrap();
         if let AgentEvent::ToolUseRequested(tu) = event {
             assert_eq!(tu.name, "read_file");
             assert_eq!(tu.id, "tool-1");
         } else {
-            panic!("Expected ToolUseRequested event");
+            panic!("Expected ToolUseRequested event, got {:?}", event);
         }
     }
 

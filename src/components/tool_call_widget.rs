@@ -10,6 +10,7 @@ use std::time::Instant;
 use crate::config::Theme;
 use crate::llm::{ToolUse, ToolResult, ToolResultContent};
 use crate::components::spinner::Spinner;
+use crate::components::diff_view::{DiffComputer, DiffRenderer};
 
 /// Status of a tool execution
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -61,6 +62,10 @@ pub struct ToolCall {
     pub expanded: bool,
     pub start_time: Option<Instant>,
     pub end_time: Option<Instant>,
+    /// For file_write: original file content (None if new file)
+    pub original_content: Option<String>,
+    /// For file_write: whether original content was captured
+    pub original_captured: bool,
 }
 
 impl ToolCall {
@@ -72,7 +77,38 @@ impl ToolCall {
             expanded: true,  // Start expanded by default
             start_time: None,
             end_time: None,
+            original_content: None,
+            original_captured: false,
         }
+    }
+
+    /// Create a tool call with original file content (for file_write diff view)
+    pub fn with_original_content(mut self, content: Option<String>) -> Self {
+        self.original_content = content;
+        self.original_captured = true;
+        self
+    }
+
+    /// Get the new content for file_write (extracts and unescapes from tool input)
+    pub fn get_file_write_content(&self) -> Option<String> {
+        if self.tool_use.name != "file_write" {
+            return None;
+        }
+        self.tool_use.input.get("content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Get the file path for file_write/file_read
+    pub fn get_file_path(&self) -> Option<String> {
+        self.tool_use.input.get("path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Check if this is a file_write tool call
+    pub fn is_file_write(&self) -> bool {
+        self.tool_use.name == "file_write"
     }
     
     pub fn with_status(mut self, status: ToolStatus) -> Self {
@@ -264,35 +300,12 @@ impl<'a> ToolCallWidget<'a> {
         
         // Expanded content
         if self.tool_call.expanded {
-            // Show input parameters
-            let input_str = serde_json::to_string_pretty(&self.tool_call.tool_use.input)
-                .unwrap_or_else(|_| self.tool_call.tool_use.input.to_string());
-            
-            let max_input_lines = 8;
-            let input_lines: Vec<&str> = input_str.lines().collect();
-            let input_truncated = input_lines.len() > max_input_lines;
-            
-            lines.push(Line::from(Span::styled(
-                "    Input:",
-                Style::default()
-                    .fg(self.theme.colors.primary.to_color())
-                    .add_modifier(Modifier::ITALIC),
-            )));
-            
-            for line in input_lines.iter().take(max_input_lines) {
-                lines.push(Line::from(Span::styled(
-                    format!("      {}", line),
-                    Style::default().fg(self.theme.colors.muted.to_color()),
-                )));
-            }
-            
-            if input_truncated {
-                lines.push(Line::from(Span::styled(
-                    format!("      ... ({} more lines)", input_lines.len() - max_input_lines),
-                    Style::default()
-                        .fg(self.theme.colors.muted.to_color())
-                        .add_modifier(Modifier::ITALIC),
-                )));
+            // Special handling for file_write: show diff view
+            if self.tool_call.is_file_write() && self.tool_call.original_captured {
+                lines.extend(self.render_file_write_diff());
+            } else {
+                // Default: show JSON input parameters
+                lines.extend(self.render_json_input());
             }
             
             // Show result if available
@@ -368,7 +381,71 @@ impl<'a> ToolCallWidget<'a> {
         
         lines
     }
-    
+
+    /// Render file_write as a diff view
+    fn render_file_write_diff(&self) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        let path = self.tool_call.get_file_path().unwrap_or_else(|| "<unknown>".to_string());
+        let new_content = self.tool_call.get_file_write_content().unwrap_or_default();
+
+        let computer = DiffComputer::new();
+        let renderer = DiffRenderer::new(self.theme);
+
+        let diff_lines = if let Some(original) = &self.tool_call.original_content {
+            // File exists: compute actual diff
+            computer.compute(original, &new_content, &path)
+        } else {
+            // New file: all lines are additions
+            computer.compute_new_file(&new_content, &path)
+        };
+
+        // Add summary line
+        lines.push(renderer.render_summary(&diff_lines));
+
+        // Render diff with max 40 lines
+        lines.extend(renderer.render(&diff_lines, 40));
+
+        lines
+    }
+
+    /// Render JSON input (default for non-file_write tools)
+    fn render_json_input(&self) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        let input_str = serde_json::to_string_pretty(&self.tool_call.tool_use.input)
+            .unwrap_or_else(|_| self.tool_call.tool_use.input.to_string());
+
+        let max_input_lines = 8;
+        let input_lines: Vec<&str> = input_str.lines().collect();
+        let input_truncated = input_lines.len() > max_input_lines;
+
+        lines.push(Line::from(Span::styled(
+            "    Input:",
+            Style::default()
+                .fg(self.theme.colors.primary.to_color())
+                .add_modifier(Modifier::ITALIC),
+        )));
+
+        for line in input_lines.iter().take(max_input_lines) {
+            lines.push(Line::from(Span::styled(
+                format!("      {}", line),
+                Style::default().fg(self.theme.colors.muted.to_color()),
+            )));
+        }
+
+        if input_truncated {
+            lines.push(Line::from(Span::styled(
+                format!("      ... ({} more lines)", input_lines.len() - max_input_lines),
+                Style::default()
+                    .fg(self.theme.colors.muted.to_color())
+                    .add_modifier(Modifier::ITALIC),
+            )));
+        }
+
+        lines
+    }
+
     fn status_color(&self) -> Color {
         match self.tool_call.status {
             ToolStatus::Pending => self.theme.colors.warning.to_color(),
@@ -401,6 +478,13 @@ impl ToolCallManager {
         let tool_call = ToolCall::new(tool_use);
         self.tool_calls.push(tool_call);
         // Select the newly added tool call
+        self.selected_index = Some(self.tool_calls.len() - 1);
+    }
+
+    /// Register a new tool call with original file content (for file_write diff view)
+    pub fn add_tool_call_with_original(&mut self, tool_use: ToolUse, original_content: Option<String>) {
+        let tool_call = ToolCall::new(tool_use).with_original_content(original_content);
+        self.tool_calls.push(tool_call);
         self.selected_index = Some(self.tool_calls.len() - 1);
     }
     

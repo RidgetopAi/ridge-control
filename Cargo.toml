@@ -92,6 +92,7 @@ tiktoken-rs = "0.6"  # OpenAI tokenizer (cl100k_base for GPT-4)
 # Utilities
 # ─────────────────────────────────────────────────────────────────────────────
 regex = "1"  # Pattern matching for filtering/grep (TRC-022)
+similar = "2"  # Diff algorithm for file_write diff view
 dirs = "5"  # Home directory lookup for tool execution
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
