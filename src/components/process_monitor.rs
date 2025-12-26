@@ -280,15 +280,19 @@ impl ProcessMonitor {
         self.inner_area = area;
     }
     
-    /// TRC-020: Get PID at a specific row index (for context menu targeting)
-    pub fn get_pid_at_row(&self, row: usize) -> Option<i32> {
-        // Account for header row (row 0) and GPU indicator (if visible, takes 3 rows)
-        let gpu_rows = if self.gpu_available() { 3 } else { 0 };
-        let header_row = 1;
-        let data_row = row.saturating_sub(gpu_rows + header_row);
-        
+    /// TRC-020: Get PID at screen Y coordinate (for context menu targeting)
+    /// Uses same calculation as left-click handler for consistency
+    pub fn get_pid_at_screen_y(&self, screen_y: u16) -> Option<i32> {
+        // Use same offset as left-click: inner_area.y + 4 (GPU area 3 + table border 1)
+        // This matches the left-click handler calculation exactly
+        let row_in_table = screen_y.saturating_sub(self.inner_area.y + 4);
+
+        // Add scroll offset to convert visual row to actual list index
+        let scroll_offset = self.table_state.borrow().offset();
+        let actual_row_index = (row_in_table as usize) + scroll_offset;
+
         self.filtered_processes()
-            .get(data_row)
+            .get(actual_row_index)
             .map(|p| p.pid)
     }
 }

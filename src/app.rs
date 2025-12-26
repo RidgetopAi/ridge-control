@@ -1949,9 +1949,8 @@ impl App {
             })
         } else if y < right_bottom_y {
             // Process monitor area
-            // Try to find which process was clicked
-            let inner_y = y.saturating_sub(content_y + 1); // Account for border
-            let selected_pid = self.process_monitor.get_pid_at_row(inner_y as usize);
+            // Try to find which process was clicked - pass raw screen Y
+            let selected_pid = self.process_monitor.get_pid_at_screen_y(y);
             
             if let Some(pid) = selected_pid {
                 Some(Action::ContextMenuShow {
