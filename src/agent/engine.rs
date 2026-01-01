@@ -387,6 +387,10 @@ impl<S: ThreadStore> AgentEngine<S> {
         };
 
         // Build context with truncation
+        tracing::info!("AgentEngine: config.tools.len() = {}", self.config.tools.len());
+        for tool in &self.config.tools {
+            tracing::debug!("  Tool: {}", tool.name);
+        }
         let params = BuildContextParams {
             model: thread.model.clone(),
             system_prompt: Some(self.prompt_builder.build()),

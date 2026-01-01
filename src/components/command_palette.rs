@@ -12,7 +12,7 @@ use ratatui::{
 };
 
 use crate::action::Action;
-use crate::config::Theme;
+use crate::config::{SubagentsConfig, Theme};
 
 /// A command that can be executed from the command palette
 #[derive(Debug, Clone)]
@@ -145,7 +145,7 @@ impl CommandRegistry {
     /// Set available models for current provider (removes old model commands and adds new ones)
     pub fn set_models(&mut self, models: &[&str], current_model: &str) {
         self.remove_commands_with_prefix("model:");
-        
+
         for model in models {
             let is_current = *model == current_model;
             let name = if is_current {
@@ -154,13 +154,50 @@ impl CommandRegistry {
                 format!("Model: {}", model)
             };
             let description = format!("Switch to {} model", model);
-            
+
             self.commands.push(Command::new(
                 format!("model:{}", model),
                 name,
                 description,
                 Action::LlmSelectModel(model.to_string()),
             ));
+        }
+    }
+
+    /// Set available models for each subagent type (T2.1b)
+    ///
+    /// # Arguments
+    /// * `subagent_config` - Current subagent configuration
+    /// * `available_models` - Map of provider name to available model names
+    pub fn set_subagent_models(
+        &mut self,
+        subagent_config: &SubagentsConfig,
+        available_models: &std::collections::HashMap<String, Vec<String>>,
+    ) {
+        self.remove_commands_with_prefix("subagent:");
+
+        for (agent_type, config) in subagent_config.iter() {
+            // Get models available for this agent's provider
+            if let Some(models) = available_models.get(&config.provider) {
+                for model in models {
+                    let is_current = *model == config.model;
+                    let name = if is_current {
+                        format!("Subagent {}: {} ✓", agent_type, model)
+                    } else {
+                        format!("Subagent {}: {}", agent_type, model)
+                    };
+
+                    self.commands.push(Command::new(
+                        format!("subagent:{}:{}", agent_type, model),
+                        name,
+                        format!("Use {} for {} subagent", model, agent_type),
+                        Action::SubagentSelectModel {
+                            agent_type: agent_type.to_string(),
+                            model: model.to_string(),
+                        },
+                    ));
+                }
+            }
         }
     }
 }
@@ -223,6 +260,15 @@ impl CommandPalette {
     /// Set available models in the command palette
     pub fn set_models(&mut self, models: &[&str], current_model: &str) {
         self.registry.set_models(models, current_model);
+    }
+
+    /// Set available models for subagents in the command palette
+    pub fn set_subagent_models(
+        &mut self,
+        subagent_config: &SubagentsConfig,
+        available_models: &std::collections::HashMap<String, Vec<String>>,
+    ) {
+        self.registry.set_subagent_models(subagent_config, available_models);
     }
 
     pub fn hide(&mut self) {

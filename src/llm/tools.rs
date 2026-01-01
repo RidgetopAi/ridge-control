@@ -4,13 +4,16 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
+use tokio::sync::RwLock;
 use tokio::time::timeout;
 
 use super::types::{ToolDefinition, ToolResult, ToolResultContent, ToolUse};
+use crate::agent::mandrel::MandrelClient;
 
 /// Tool execution policy
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,24 +54,30 @@ pub enum ToolExecutionCheck {
 pub enum ToolError {
     #[error("Tool not found: {0}")]
     NotFound(String),
-    
+
     #[error("Execution failed: {0}")]
     ExecutionFailed(String),
-    
+
     #[error("Timeout after {0}s")]
     Timeout(u64),
-    
+
     #[error("Path not allowed: {0}")]
     PathNotAllowed(String),
-    
+
     #[error("Dangerous mode required")]
     DangerousModeRequired,
-    
+
     #[error("I/O error: {0}")]
     IoError(String),
-    
+
     #[error("Parse error: {0}")]
     ParseError(String),
+
+    #[error("Mandrel not configured")]
+    MandrelNotConfigured,
+
+    #[error("Mandrel error: {0}")]
+    MandrelError(String),
 }
 
 /// Tool registry with policies
@@ -198,6 +207,130 @@ impl ToolRegistry {
             timeout_secs: 30,
             max_output_bytes: 102_400,
             allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // task - spawn sub-agents, no confirmation needed (sub-agents have their own tool restrictions)
+        self.policies.insert("task".to_string(), ToolPolicy {
+            name: "task".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 300, // 5 minutes for sub-agent execution
+            max_output_bytes: 1_048_576, // 1MB for sub-agent results
+            allowed_paths: vec![], // No path restrictions
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Mandrel Cross-Session Memory Tools
+        // ─────────────────────────────────────────────────────────────────────
+
+        // project_switch - switch active Mandrel project
+        self.policies.insert("project_switch".to_string(), ToolPolicy {
+            name: "project_switch".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 8192,
+            allowed_paths: vec![],
+        });
+
+        // project_current - get current project info
+        self.policies.insert("project_current".to_string(), ToolPolicy {
+            name: "project_current".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 8192,
+            allowed_paths: vec![],
+        });
+
+        // context_store - store context for cross-session memory
+        self.policies.insert("context_store".to_string(), ToolPolicy {
+            name: "context_store".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 8192,
+            allowed_paths: vec![],
+        });
+
+        // context_get_recent - get recent contexts
+        self.policies.insert("context_get_recent".to_string(), ToolPolicy {
+            name: "context_get_recent".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400, // 100KB for context list
+            allowed_paths: vec![],
+        });
+
+        // context_search - semantic search contexts
+        self.policies.insert("context_search".to_string(), ToolPolicy {
+            name: "context_search".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400, // 100KB for search results
+            allowed_paths: vec![],
+        });
+
+        // task_create - create task in Mandrel
+        self.policies.insert("task_create".to_string(), ToolPolicy {
+            name: "task_create".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 8192,
+            allowed_paths: vec![],
+        });
+
+        // task_update - update task status
+        self.policies.insert("task_update".to_string(), ToolPolicy {
+            name: "task_update".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 8192,
+            allowed_paths: vec![],
+        });
+
+        // task_list - list tasks
+        self.policies.insert("task_list".to_string(), ToolPolicy {
+            name: "task_list".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400, // 100KB for task list
+            allowed_paths: vec![],
+        });
+
+        // task_details - get task details
+        self.policies.insert("task_details".to_string(), ToolPolicy {
+            name: "task_details".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 16384,
+            allowed_paths: vec![],
+        });
+
+        // task_progress_summary - get progress overview
+        self.policies.insert("task_progress_summary".to_string(), ToolPolicy {
+            name: "task_progress_summary".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 16384,
+            allowed_paths: vec![],
+        });
+
+        // smart_search - cross-entity intelligent search
+        self.policies.insert("smart_search".to_string(), ToolPolicy {
+            name: "smart_search".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 60, // Can be slower for semantic search
+            max_output_bytes: 102_400, // 100KB for search results
+            allowed_paths: vec![],
         });
     }
     
@@ -509,6 +642,212 @@ impl ToolRegistry {
                     "required": ["file_path", "old_string", "new_string"]
                 }),
             },
+            ToolDefinition {
+                name: "task".to_string(),
+                description: "Spawn a sub-agent to handle complex tasks autonomously. \
+                    Use 'explore' for codebase research and file discovery, \
+                    'plan' for architecture decisions and implementation planning, \
+                    'review' for code review. Sub-agents return summarized results.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": "Task description for the sub-agent"
+                        },
+                        "agent_type": {
+                            "type": "string",
+                            "enum": ["explore", "plan", "review", "general"],
+                            "default": "explore",
+                            "description": "Type of sub-agent: explore (research), plan (architecture), review (code review)"
+                        },
+                        "run_in_background": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Run asynchronously and retrieve results later"
+                        }
+                    },
+                    "required": ["prompt"]
+                }),
+            },
+            // ─────────────────────────────────────────────────────────────────────
+            // Mandrel Cross-Session Memory Tools
+            // ─────────────────────────────────────────────────────────────────────
+            ToolDefinition {
+                name: "project_switch".to_string(),
+                description: "Switch to a different Mandrel project. Use this to set the context for cross-session memory operations.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "project": {
+                            "type": "string",
+                            "description": "Project name to switch to"
+                        }
+                    },
+                    "required": ["project"]
+                }),
+            },
+            ToolDefinition {
+                name: "project_current".to_string(),
+                description: "Get information about the currently active Mandrel project.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "context_store".to_string(),
+                description: "Store context in Mandrel for cross-session memory. Use for important findings, \
+                    decisions, completions, handoff notes, or any information that should persist across sessions. \
+                    Contexts are automatically embedded for semantic search.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The context content to store"
+                        },
+                        "type": {
+                            "type": "string",
+                            "enum": ["code", "decision", "error", "discussion", "planning", "completion", "milestone", "reflections", "handoff"],
+                            "description": "Context type: code, decision, error, discussion, planning, completion, milestone, reflections, handoff"
+                        },
+                        "tags": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional tags for categorization (e.g., ['bug-fix', 'authentication'])"
+                        }
+                    },
+                    "required": ["content", "type"]
+                }),
+            },
+            ToolDefinition {
+                name: "context_get_recent".to_string(),
+                description: "Get recent contexts in chronological order (newest first). Use at session start \
+                    for continuity or to review recent work.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum contexts to return (default: 5)"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "context_search".to_string(),
+                description: "Search stored contexts using semantic similarity. Use before re-investigating \
+                    something that may have been explored in previous sessions.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query using semantic similarity"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
+            ToolDefinition {
+                name: "task_create".to_string(),
+                description: "Create a new task in Mandrel for coordination and tracking. Tasks persist \
+                    across sessions and can be updated as work progresses.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "title": {
+                            "type": "string",
+                            "description": "Task title"
+                        },
+                        "description": {
+                            "type": "string",
+                            "description": "Optional detailed description"
+                        },
+                        "priority": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "Task priority level"
+                        }
+                    },
+                    "required": ["title"]
+                }),
+            },
+            ToolDefinition {
+                name: "task_update".to_string(),
+                description: "Update a task's status. Use to mark tasks as in_progress, completed, blocked, or cancelled.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "Task ID to update"
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": ["todo", "in_progress", "blocked", "completed", "cancelled"],
+                            "description": "New status"
+                        }
+                    },
+                    "required": ["task_id", "status"]
+                }),
+            },
+            ToolDefinition {
+                name: "task_list".to_string(),
+                description: "List tasks with optional status filter. Use to see what work is pending or in progress.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "status": {
+                            "type": "string",
+                            "enum": ["todo", "in_progress", "blocked", "completed", "cancelled"],
+                            "description": "Filter by status (optional)"
+                        }
+                    },
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "task_details".to_string(),
+                description: "Get detailed information about a specific task including full description and history.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "Task ID to get details for"
+                        }
+                    },
+                    "required": ["task_id"]
+                }),
+            },
+            ToolDefinition {
+                name: "task_progress_summary".to_string(),
+                description: "Get task progress summary with completion percentages and status breakdown.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
+            ToolDefinition {
+                name: "smart_search".to_string(),
+                description: "Intelligent search across all Mandrel data sources (contexts, tasks, decisions). \
+                    Use for broad discovery across the project's history.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
         ]
     }
 }
@@ -523,6 +862,8 @@ impl Default for ToolRegistry {
 pub struct ToolExecutor {
     registry: ToolRegistry,
     working_dir: PathBuf,
+    /// Optional Mandrel client for cross-session memory
+    mandrel_client: Option<Arc<RwLock<MandrelClient>>>,
 }
 
 impl ToolExecutor {
@@ -530,17 +871,28 @@ impl ToolExecutor {
         Self {
             registry: ToolRegistry::new(),
             working_dir,
+            mandrel_client: None,
         }
     }
-    
+
+    /// Set the Mandrel client for cross-session memory tools
+    pub fn set_mandrel_client(&mut self, client: Arc<RwLock<MandrelClient>>) {
+        self.mandrel_client = Some(client);
+    }
+
+    /// Check if Mandrel is available
+    pub fn has_mandrel(&self) -> bool {
+        self.mandrel_client.is_some()
+    }
+
     pub fn registry(&self) -> &ToolRegistry {
         &self.registry
     }
-    
+
     pub fn registry_mut(&mut self) -> &mut ToolRegistry {
         &mut self.registry
     }
-    
+
     pub fn set_dangerous_mode(&mut self, enabled: bool) {
         self.registry.set_dangerous_mode(enabled);
     }
@@ -617,19 +969,33 @@ impl ToolExecutor {
     pub async fn execute(&self, tool: &ToolUse) -> Result<ToolResult, ToolError> {
         let policy = self.registry.get_policy(&tool.name)
             .ok_or_else(|| ToolError::NotFound(tool.name.clone()))?;
-        
+
         let result = match tool.name.as_str() {
+            // File operations
             "file_read" => self.execute_file_read(tool, policy).await,
             "file_write" => self.execute_file_write(tool, policy).await,
             "list_directory" => self.execute_list_directory(tool, policy).await,
             "bash_execute" => self.execute_bash(tool, policy).await,
             "file_delete" => self.execute_file_delete(tool, policy).await,
+            // Search tools
             "grep" => self.execute_grep(tool, policy).await,
             "glob" => self.execute_glob(tool, policy).await,
             "tree" => self.execute_tree(tool, policy).await,
             "find_symbol" => self.execute_find_symbol(tool, policy).await,
             "ast_search" => self.execute_ast_search(tool, policy).await,
             "edit" => self.execute_edit(tool, policy).await,
+            // Mandrel cross-session memory tools
+            "project_switch" => self.execute_mandrel_project_switch(tool).await,
+            "project_current" => self.execute_mandrel_project_current(tool).await,
+            "context_store" => self.execute_mandrel_context_store(tool).await,
+            "context_get_recent" => self.execute_mandrel_context_get_recent(tool).await,
+            "context_search" => self.execute_mandrel_context_search(tool).await,
+            "task_create" => self.execute_mandrel_task_create(tool).await,
+            "task_update" => self.execute_mandrel_task_update(tool).await,
+            "task_list" => self.execute_mandrel_task_list(tool).await,
+            "task_details" => self.execute_mandrel_task_details(tool).await,
+            "task_progress_summary" => self.execute_mandrel_task_progress_summary(tool).await,
+            "smart_search" => self.execute_mandrel_smart_search(tool).await,
             _ => Err(ToolError::NotFound(tool.name.clone())),
         };
         
@@ -1419,10 +1785,10 @@ impl ToolExecutor {
             .unwrap_or(30) as usize;
 
         // Build ast-grep command
-        // Use 'sg' binary (ast-grep CLI) with --json output
+        // Use 'sg' binary (ast-grep CLI) with --json=stream for newline-delimited JSON
         let mut cmd = Command::new("sg");
         cmd.arg("--pattern").arg(pattern)
-            .arg("--json")
+            .arg("--json=stream")
             .arg(&resolved)
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
@@ -1621,7 +1987,7 @@ impl ToolExecutor {
 
     fn resolve_path(&self, path: &str) -> PathBuf {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
-        
+
         if let Some(stripped) = path.strip_prefix("~/") {
             home_dir.join(stripped)
         } else if path.starts_with('/') {
@@ -1629,6 +1995,293 @@ impl ToolExecutor {
         } else {
             self.working_dir.join(path)
         }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Mandrel Cross-Session Memory Tool Execution
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Get the Mandrel client or return error
+    fn get_mandrel_client(&self) -> Result<&Arc<RwLock<MandrelClient>>, ToolError> {
+        self.mandrel_client
+            .as_ref()
+            .ok_or(ToolError::MandrelNotConfigured)
+    }
+
+    async fn execute_mandrel_project_switch(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+        let project = tool.input.get("project")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'project' parameter".to_string()))?;
+
+        let mut client_guard = client.write().await;
+        let result = client_guard.project_switch(project).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "project": {
+                "id": result.id,
+                "name": result.name,
+                "description": result.description,
+                "status": result.status
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_project_current(&self, _tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+        let client_guard = client.read().await;
+        let result = client_guard.project_current().await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "project": {
+                "id": result.id,
+                "name": result.name,
+                "description": result.description,
+                "status": result.status,
+                "context_count": result.context_count
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_context_store(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let content = tool.input.get("content")
+            .and_then(|c| c.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'content' parameter".to_string()))?;
+
+        let context_type = tool.input.get("type")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'type' parameter".to_string()))?;
+
+        let tags: Vec<String> = tool.input.get("tags")
+            .and_then(|t| t.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default();
+
+        let client_guard = client.read().await;
+        let result = client_guard.context_store(content, context_type, &tags).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "context": {
+                "id": result.id,
+                "type": result.context_type,
+                "tags": result.tags
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_context_get_recent(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let limit = tool.input.get("limit")
+            .and_then(|l| l.as_u64())
+            .map(|l| l as u32);
+
+        let client_guard = client.read().await;
+        let contexts = client_guard.context_get_recent(limit).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        let contexts_json: Vec<serde_json::Value> = contexts.iter().map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "content": c.content,
+                "type": c.context_type,
+                "tags": c.tags,
+                "created_at": c.created_at
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "contexts": contexts_json,
+            "count": contexts.len()
+        }).to_string())
+    }
+
+    async fn execute_mandrel_context_search(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let query = tool.input.get("query")
+            .and_then(|q| q.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'query' parameter".to_string()))?;
+
+        let client_guard = client.read().await;
+        let contexts = client_guard.context_search(query).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        let contexts_json: Vec<serde_json::Value> = contexts.iter().map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "content": c.content,
+                "type": c.context_type,
+                "tags": c.tags,
+                "similarity": c.similarity
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "results": contexts_json,
+            "count": contexts.len()
+        }).to_string())
+    }
+
+    async fn execute_mandrel_task_create(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let title = tool.input.get("title")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'title' parameter".to_string()))?;
+
+        let description = tool.input.get("description").and_then(|d| d.as_str());
+        let priority = tool.input.get("priority").and_then(|p| p.as_str());
+
+        let client_guard = client.read().await;
+        let task = client_guard.task_create(title, description, priority).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "task": {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status,
+                "priority": task.priority
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_task_update(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let task_id = tool.input.get("task_id")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'task_id' parameter".to_string()))?;
+
+        let status = tool.input.get("status")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'status' parameter".to_string()))?;
+
+        let client_guard = client.read().await;
+        let task = client_guard.task_update(task_id, status).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "task": {
+                "id": task.id,
+                "title": task.title,
+                "status": task.status
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_task_list(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let status = tool.input.get("status").and_then(|s| s.as_str());
+
+        let client_guard = client.read().await;
+        let tasks = client_guard.task_list(status).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        let tasks_json: Vec<serde_json::Value> = tasks.iter().map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "title": t.title,
+                "status": t.status,
+                "priority": t.priority
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "tasks": tasks_json,
+            "count": tasks.len()
+        }).to_string())
+    }
+
+    async fn execute_mandrel_task_details(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let task_id = tool.input.get("task_id")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'task_id' parameter".to_string()))?;
+
+        let client_guard = client.read().await;
+        let task = client_guard.task_details(task_id).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "task": {
+                "id": task.id,
+                "title": task.title,
+                "description": task.description,
+                "status": task.status,
+                "priority": task.priority,
+                "created_at": task.created_at,
+                "updated_at": task.updated_at
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_task_progress_summary(&self, _tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let client_guard = client.read().await;
+        let progress = client_guard.task_progress_summary().await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        Ok(serde_json::json!({
+            "progress": {
+                "total": progress.total,
+                "completed": progress.completed,
+                "in_progress": progress.in_progress,
+                "blocked": progress.blocked,
+                "completion_percentage": progress.completion_percentage,
+                "by_status": progress.by_status
+            }
+        }).to_string())
+    }
+
+    async fn execute_mandrel_smart_search(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let client = self.get_mandrel_client()?;
+
+        let query = tool.input.get("query")
+            .and_then(|q| q.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'query' parameter".to_string()))?;
+
+        let client_guard = client.read().await;
+        let result = client_guard.smart_search(query).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
+
+        let contexts_json: Vec<serde_json::Value> = result.contexts.iter().map(|c| {
+            serde_json::json!({
+                "id": c.id,
+                "content": c.content,
+                "type": c.context_type,
+                "tags": c.tags
+            })
+        }).collect();
+
+        let tasks_json: Vec<serde_json::Value> = result.tasks.iter().map(|t| {
+            serde_json::json!({
+                "id": t.id,
+                "title": t.title,
+                "status": t.status
+            })
+        }).collect();
+
+        Ok(serde_json::json!({
+            "results": {
+                "contexts": contexts_json,
+                "tasks": tasks_json,
+                "total_results": result.total_results
+            }
+        }).to_string())
     }
 }
 

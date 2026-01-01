@@ -19,6 +19,8 @@ pub mod thread;
 pub mod disk_store;
 pub mod tools;
 pub mod engine;
+pub mod subagent;
+pub mod mandrel;
 
 pub use models::{ModelInfo, ModelCatalog, TokenizerKind};
 pub use tokens::{TokenCounter, DefaultTokenCounter};
@@ -28,6 +30,8 @@ pub use thread::{AgentThread, ThreadStore, InMemoryThreadStore};
 pub use disk_store::DiskThreadStore;
 pub use tools::{ToolExecutor, ConfirmationRequiredExecutor};
 pub use engine::{AgentEngine, AgentState, AgentEvent, AgentConfig};
+pub use subagent::{SubagentManager, SubagentResult, SubagentStatus, SubagentError};
+pub use mandrel::{MandrelClient, MandrelConfig, MandrelError, Context as MandrelContext, Task as MandrelTask};
 
 #[cfg(test)]
 mod integration_tests {

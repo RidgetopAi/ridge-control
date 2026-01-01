@@ -391,6 +391,88 @@ provider = "openai"
 
 ---
 
+### Task 2.1b: Command Palette Subagent Model Selection
+
+**Goal**: Allow runtime configuration of subagent models via command palette (matching existing provider/model selection UX)
+
+**Files**:
+- `src/action.rs` - New action variants
+- `src/components/command_palette.rs` - New registry methods
+- `src/app.rs` - Handle actions, update command palette
+
+**New Action Variants** (`src/action.rs`):
+```rust
+/// Select model for a specific subagent type
+SubagentSelectModel { agent_type: String, model: String },
+/// Select provider for a specific subagent type
+SubagentSelectProvider { agent_type: String, provider: String },
+```
+
+**CommandRegistry Methods** (`src/components/command_palette.rs`):
+```rust
+/// Set available models for each subagent type
+pub fn set_subagent_models(&mut self, subagent_configs: &SubagentsConfig, available_models: &HashMap<String, Vec<String>>) {
+    self.remove_commands_with_prefix("subagent:");
+
+    for (agent_type, config) in [
+        ("explore", &subagent_configs.explore),
+        ("plan", &subagent_configs.plan),
+        ("review", &subagent_configs.review),
+    ] {
+        // Get models for this agent's provider
+        if let Some(models) = available_models.get(&config.provider) {
+            for model in models {
+                let is_current = *model == config.model;
+                let name = if is_current {
+                    format!("Subagent {}: {} ✓", agent_type, model)
+                } else {
+                    format!("Subagent {}: {}", agent_type, model)
+                };
+
+                self.commands.push(Command::new(
+                    format!("subagent:{}:{}", agent_type, model),
+                    name,
+                    format!("Use {} for {} subagent", model, agent_type),
+                    Action::SubagentSelectModel {
+                        agent_type: agent_type.to_string(),
+                        model: model.to_string(),
+                    },
+                ));
+            }
+        }
+    }
+}
+```
+
+**App Integration** (`src/app.rs`):
+```rust
+// In handle_action match:
+Action::SubagentSelectModel { agent_type, model } => {
+    match agent_type.as_str() {
+        "explore" => self.subagent_config.explore.model = model,
+        "plan" => self.subagent_config.plan.model = model,
+        "review" => self.subagent_config.review.model = model,
+        _ => {}
+    }
+    // Refresh command palette to show updated checkmarks
+    self.refresh_subagent_commands();
+}
+```
+
+**UX**:
+- Commands appear as: `Subagent explore: claude-haiku ✓`
+- Typing "subagent" or "explore" filters to relevant options
+- Current model shows checkmark (✓)
+- Changes take effect immediately for next subagent spawn
+
+**Test Cases**:
+- [ ] Subagent commands appear in palette
+- [ ] Checkmark shows current model per agent type
+- [ ] Selection updates config and refreshes palette
+- [ ] Works with all configured providers
+
+---
+
 ### Task 2.2: Task Tool (Sub-agent Spawning)
 
 **File**: `src/llm/tools.rs`
@@ -826,8 +908,9 @@ ToolDefinition {
 
 ### Sprint 2 (Days 4-7): Phase 2a - Sub-agents
 1. Task 2.1: SubagentConfig
-2. Task 2.2: Task tool + SubagentManager
-3. Task 2.4: ask_user tool
+2. Task 2.1b: Command palette subagent model selection
+3. Task 2.2: Task tool + SubagentManager
+4. Task 2.4: ask_user tool
 
 ### Sprint 3 (Days 8-10): Phase 2b - Mandrel
 1. Task 2.3: MandrelClient

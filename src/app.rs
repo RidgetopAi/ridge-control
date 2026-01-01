@@ -16,7 +16,8 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     Terminal,
 };
-use tokio::sync::mpsc;
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
 
 use crate::action::{Action, ContextMenuTarget, PaneBorder};
 use crate::cli::Cli;
@@ -50,7 +51,8 @@ use crate::tabs::{TabId, TabManager, TabBar};
 use crate::agent::{
     AgentEngine, AgentEvent, ConfirmationRequiredExecutor, ContextManager, DiskThreadStore,
     ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats, SystemPromptBuilder,
-    ToolExecutor as AgentToolExecutor, ThreadStore,
+    SubagentManager, ToolExecutor as AgentToolExecutor, ThreadStore,
+    MandrelClient,
 };
 
 const TICK_INTERVAL_MS: u64 = 500;
@@ -150,6 +152,10 @@ pub struct App {
     // TP2-002-FIX-01: AgentEngine's internal LLM event receiver
     agent_llm_event_rx: Option<mpsc::UnboundedReceiver<LLMEvent>>,
     current_thread_id: Option<String>,
+    // T2.2: SubagentManager for spawning sub-agents
+    subagent_manager: Option<SubagentManager>,
+    // T2.3: MandrelClient for cross-session memory
+    mandrel_client: Arc<RwLock<MandrelClient>>,
 }
 
 impl App {
@@ -201,11 +207,25 @@ impl App {
         let working_dir = std::env::current_dir().unwrap_or_else(|_| {
             dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
         });
-        let tool_executor = ToolExecutor::new(working_dir);
-        
+        let mut tool_executor = ToolExecutor::new(working_dir);
+
         // Initialize configuration system
         let config_manager = ConfigManager::new()?;
-        
+
+        // T2.3: Initialize MandrelClient for cross-session memory
+        let mandrel_config = config_manager.mandrel_config().clone();
+        let mandrel_client = Arc::new(RwLock::new(MandrelClient::new(mandrel_config)));
+        if config_manager.mandrel_config().enabled {
+            tracing::info!(
+                "Mandrel integration enabled: url={}, project={}",
+                config_manager.mandrel_config().base_url,
+                config_manager.mandrel_config().project
+            );
+            tool_executor.set_mandrel_client(mandrel_client.clone());
+        } else {
+            tracing::info!("Mandrel integration disabled");
+        }
+
         // Apply persisted LLM settings from llm.toml (TS-013)
         let llm_config = config_manager.llm_config();
         llm_manager.set_provider(&llm_config.defaults.provider);
@@ -266,8 +286,13 @@ impl App {
         agent_llm_manager.set_model(&llm_config.defaults.model);
         
         // Configure AgentEngine with tool definitions so continuation requests include tools
+        let tool_defs = tool_executor.tool_definitions_for_llm();
+        tracing::info!("App: Creating AgentConfig with {} tools", tool_defs.len());
+        for tool in &tool_defs {
+            tracing::debug!("  Tool defined: {}", tool.name);
+        }
         let agent_config = crate::agent::AgentConfig {
-            tools: tool_executor.tool_definitions_for_llm(),
+            tools: tool_defs,
             ..Default::default()
         };
         
@@ -290,6 +315,15 @@ impl App {
                 tracing::warn!("Failed to initialize session manager: {}", e);
                 None
             }
+        };
+
+        // T2.2: Initialize SubagentManager
+        let subagent_manager = {
+            let subagent_config = config_manager.subagent_config().clone();
+            let mut manager = SubagentManager::new(subagent_config);
+            // Set available tools
+            manager.set_tools(tool_executor.tool_definitions_for_llm());
+            Some(manager)
         };
 
         Ok(Self {
@@ -355,6 +389,10 @@ impl App {
             // TP2-002-FIX-01: Wire AgentEngine's internal LLM event receiver
             agent_llm_event_rx,
             current_thread_id: None,
+            // T2.2: SubagentManager for spawning sub-agents
+            subagent_manager,
+            // T2.3: MandrelClient for cross-session memory
+            mandrel_client,
         })
     }
 
@@ -919,7 +957,24 @@ impl App {
             }
         }
     }
-    
+
+    /// Refresh subagent model commands in command palette (T2.1b)
+    fn refresh_subagent_commands(&mut self) {
+        // Build map of provider -> available models
+        let mut available_models = std::collections::HashMap::new();
+        for provider in self.model_catalog.providers() {
+            let models: Vec<String> = self.model_catalog
+                .models_for_provider(provider)
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+            available_models.insert(provider.to_string(), models);
+        }
+
+        let subagent_config = self.config_manager.subagent_config().clone();
+        self.command_palette.set_subagent_models(&subagent_config, &available_models);
+    }
+
     fn handle_tool_use_request(&mut self, tool_use: ToolUse) {
         // Register tool use in conversation viewer for UI tracking (TRC-016)
         self.conversation_viewer.register_tool_use(tool_use.clone());
@@ -2003,11 +2058,14 @@ impl App {
                 let providers = self.model_catalog.providers();
                 let current_provider = self.llm_manager.current_provider();
                 self.command_palette.set_providers(&providers, current_provider);
-                
+
                 let models = self.model_catalog.models_for_provider(current_provider);
                 let current_model = self.llm_manager.current_model();
                 self.command_palette.set_models(&models, current_model);
-                
+
+                // Populate subagent model commands (T2.1b)
+                self.refresh_subagent_commands();
+
                 self.command_palette.show();
                 self.input_mode = InputMode::CommandPalette;
             }
@@ -2264,6 +2322,23 @@ impl App {
                 self.llm_manager.clear_conversation();
                 // Also clear tool calls in conversation viewer (TRC-016)
                 self.conversation_viewer.clear_tool_calls();
+            }
+            // Subagent configuration actions (T2.1b)
+            Action::SubagentSelectModel { agent_type, model } => {
+                self.config_manager.subagent_config_mut().get_mut(&agent_type).model = model;
+                if let Err(e) = self.config_manager.save_subagent_config() {
+                    tracing::warn!("Failed to save subagent config: {}", e);
+                }
+                // Refresh command palette to show updated checkmarks
+                self.refresh_subagent_commands();
+            }
+            Action::SubagentSelectProvider { agent_type, provider } => {
+                self.config_manager.subagent_config_mut().get_mut(&agent_type).provider = provider;
+                if let Err(e) = self.config_manager.save_subagent_config() {
+                    tracing::warn!("Failed to save subagent config: {}", e);
+                }
+                // Refresh command palette to show models for new provider
+                self.refresh_subagent_commands();
             }
             Action::LlmStreamChunk(_) | Action::LlmStreamComplete | Action::LlmStreamError(_) => {
                 // These are handled by handle_llm_event, not dispatched directly

@@ -5,6 +5,7 @@ mod keybindings;
 mod keystore;
 mod llm;
 mod session;
+mod subagent;
 mod theme;
 mod watcher;
 
@@ -12,8 +13,12 @@ pub use keybindings::KeybindingsConfig;
 pub use keystore::{KeyId, KeyStore, SecretString};
 pub use llm::LLMConfig;
 pub use session::{SessionData, SessionManager};
+pub use subagent::{SubagentConfig, SubagentsConfig};
 pub use theme::Theme;
 pub use watcher::{ConfigWatcherMode, ConfigEvent};
+
+// Re-export MandrelConfig from agent module
+pub use crate::agent::mandrel::MandrelConfig;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -26,6 +31,8 @@ const MAIN_CONFIG_FILE: &str = "config.toml";
 const KEYBINDINGS_FILE: &str = "keybindings.toml";
 const THEME_FILE: &str = "theme.toml";
 const LLM_CONFIG_FILE: &str = "llm.toml";
+const SUBAGENT_CONFIG_FILE: &str = "subagents.toml";
+const MANDREL_CONFIG_FILE: &str = "mandrel.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[derive(Default)]
@@ -106,23 +113,29 @@ pub struct ConfigManager {
     keybindings: KeybindingsConfig,
     theme: Theme,
     llm_config: LLMConfig,
+    subagent_config: SubagentsConfig,
+    mandrel_config: MandrelConfig,
 }
 
 impl ConfigManager {
     pub fn new() -> Result<Self> {
         let config_dir = Self::get_config_dir()?;
-        
+
         let app_config = Self::load_app_config(&config_dir);
         let keybindings = Self::load_keybindings(&config_dir);
         let theme = Self::load_theme(&config_dir);
         let llm_config = Self::load_llm_config(&config_dir);
-        
+        let subagent_config = Self::load_subagent_config(&config_dir);
+        let mandrel_config = Self::load_mandrel_config(&config_dir);
+
         Ok(Self {
             config_dir,
             app_config,
             keybindings,
             theme,
             llm_config,
+            subagent_config,
+            mandrel_config,
         })
     }
     
@@ -149,23 +162,61 @@ impl ConfigManager {
     pub fn llm_config_mut(&mut self) -> &mut LLMConfig {
         &mut self.llm_config
     }
-    
+
     pub fn save_llm_config(&self) -> Result<()> {
         self.ensure_config_dir()?;
         let path = self.config_dir.join(LLM_CONFIG_FILE);
         self.llm_config.save(&path)
     }
-    
+
+    pub fn subagent_config(&self) -> &SubagentsConfig {
+        &self.subagent_config
+    }
+
+    pub fn subagent_config_mut(&mut self) -> &mut SubagentsConfig {
+        &mut self.subagent_config
+    }
+
+    pub fn save_subagent_config(&self) -> Result<()> {
+        self.ensure_config_dir()?;
+        let path = self.config_dir.join(SUBAGENT_CONFIG_FILE);
+        let content = toml::to_string_pretty(&self.subagent_config)
+            .map_err(|e| RidgeError::Config(format!("Failed to serialize subagent config: {}", e)))?;
+        std::fs::write(&path, content)
+            .map_err(|e| RidgeError::Config(format!("Failed to write subagents.toml: {}", e)))?;
+        Ok(())
+    }
+
+    pub fn mandrel_config(&self) -> &MandrelConfig {
+        &self.mandrel_config
+    }
+
+    pub fn mandrel_config_mut(&mut self) -> &mut MandrelConfig {
+        &mut self.mandrel_config
+    }
+
+    pub fn save_mandrel_config(&self) -> Result<()> {
+        self.ensure_config_dir()?;
+        let path = self.config_dir.join(MANDREL_CONFIG_FILE);
+        let content = toml::to_string_pretty(&self.mandrel_config)
+            .map_err(|e| RidgeError::Config(format!("Failed to serialize mandrel config: {}", e)))?;
+        std::fs::write(&path, content)
+            .map_err(|e| RidgeError::Config(format!("Failed to write mandrel.toml: {}", e)))?;
+        Ok(())
+    }
+
     pub fn reload_all(&mut self) {
         self.app_config = Self::load_app_config(&self.config_dir);
         self.keybindings = Self::load_keybindings(&self.config_dir);
         self.theme = Self::load_theme(&self.config_dir);
         self.llm_config = Self::load_llm_config(&self.config_dir);
+        self.subagent_config = Self::load_subagent_config(&self.config_dir);
+        self.mandrel_config = Self::load_mandrel_config(&self.config_dir);
     }
     
     pub fn reload_file(&mut self, path: &Path) {
         let file_name = path.file_name().and_then(|n| n.to_str());
-        
+
         match file_name {
             Some(MAIN_CONFIG_FILE) => {
                 self.app_config = Self::load_app_config(&self.config_dir);
@@ -178,6 +229,12 @@ impl ConfigManager {
             }
             Some(LLM_CONFIG_FILE) => {
                 self.llm_config = Self::load_llm_config(&self.config_dir);
+            }
+            Some(SUBAGENT_CONFIG_FILE) => {
+                self.subagent_config = Self::load_subagent_config(&self.config_dir);
+            }
+            Some(MANDREL_CONFIG_FILE) => {
+                self.mandrel_config = Self::load_mandrel_config(&self.config_dir);
             }
             _ => {
                 self.reload_all();
@@ -210,7 +267,17 @@ impl ConfigManager {
         let path = config_dir.join(LLM_CONFIG_FILE);
         Self::load_toml_file(&path).unwrap_or_default()
     }
-    
+
+    fn load_subagent_config(config_dir: &Path) -> SubagentsConfig {
+        let path = config_dir.join(SUBAGENT_CONFIG_FILE);
+        Self::load_toml_file(&path).unwrap_or_default()
+    }
+
+    fn load_mandrel_config(config_dir: &Path) -> MandrelConfig {
+        let path = config_dir.join(MANDREL_CONFIG_FILE);
+        Self::load_toml_file(&path).unwrap_or_default()
+    }
+
     fn load_toml_file<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Option<T> {
         if !path.exists() {
             return None;

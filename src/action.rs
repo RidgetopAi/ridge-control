@@ -101,7 +101,13 @@ pub enum Action {
     LlmSelectModel(String),
     LlmSelectProvider(String),
     LlmClearConversation,
-    
+
+    // Subagent configuration actions (T2.1b)
+    /// Select model for a specific subagent type (explore, plan, review)
+    SubagentSelectModel { agent_type: String, model: String },
+    /// Select provider for a specific subagent type
+    SubagentSelectProvider { agent_type: String, provider: String },
+
     // Tool execution actions
     /// LLM requested a tool use, needs confirmation
     ToolUseReceived(PendingToolUse),
