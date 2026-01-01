@@ -412,6 +412,10 @@ impl App {
             if app.dangerous_mode {
                 app.tool_executor.set_dangerous_mode(true);
             }
+            // Preserve Mandrel client when recreating tool_executor
+            if app.config_manager.mandrel_config().enabled {
+                app.tool_executor.set_mandrel_client(app.mandrel_client.clone());
+            }
         }
         
         // Register API keys from CLI (override keystore/config)
@@ -1044,18 +1048,24 @@ impl App {
         
         // We need to create a new executor for the async task
         let dangerous_mode = self.tool_executor.registry().is_dangerous_mode();
-        
+        let mandrel_client = self.mandrel_client.clone();
+        let mandrel_enabled = self.config_manager.mandrel_config().enabled;
+
         // Spawn the tool execution with its own result channel
         let (result_tx, result_rx) = mpsc::unbounded_channel();
         self.tool_result_rxs.insert(tool_id.clone(), result_rx);
-        
+
         tracing::info!("⚡ EXECUTE_TOOL: id={} name={}, active_receivers={}",
             tool_id, pending.tool.name, self.tool_result_rxs.len());
-        
+
         tokio::spawn(async move {
             let mut executor = ToolExecutor::new(working_dir);
             executor.set_dangerous_mode(dangerous_mode);
-            
+            // Set Mandrel client for cross-session memory tools
+            if mandrel_enabled {
+                executor.set_mandrel_client(mandrel_client);
+            }
+
             let result = executor.execute(&tool).await;
             let _ = result_tx.send(result);
         });
