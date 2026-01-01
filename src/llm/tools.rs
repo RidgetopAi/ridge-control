@@ -179,6 +179,26 @@ impl ToolRegistry {
             max_output_bytes: 524_288, // 512KB for search results
             allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
         });
+
+        // ast_search - structural code search via ast-grep, safe, read-only
+        self.policies.insert("ast_search".to_string(), ToolPolicy {
+            name: "ast_search".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 524_288, // 512KB for search results
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // edit - surgical string replacement, requires confirmation (modifies files)
+        self.policies.insert("edit".to_string(), ToolPolicy {
+            name: "edit".to_string(),
+            require_confirmation: true,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
     }
     
     pub fn set_dangerous_mode(&mut self, enabled: bool) {
@@ -338,6 +358,20 @@ impl ToolRegistry {
                         "max_results": {
                             "type": "integer",
                             "description": "Maximum matches to return (default: 50)"
+                        },
+                        "output_mode": {
+                            "type": "string",
+                            "enum": ["content", "files_with_matches", "count"],
+                            "default": "files_with_matches",
+                            "description": "Output format: 'content' for full lines with context, 'files_with_matches' for paths only (default), 'count' for match counts per file"
+                        },
+                        "head_limit": {
+                            "type": "integer",
+                            "description": "Limit results to first N entries (default: no limit, use max_results for content mode)"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": "Skip first N entries for pagination (default: 0)"
                         }
                     },
                     "required": ["pattern"]
@@ -419,6 +453,60 @@ impl ToolRegistry {
                         }
                     },
                     "required": ["name"]
+                }),
+            },
+            ToolDefinition {
+                name: "ast_search".to_string(),
+                description: "Search code using structural AST patterns (tree-sitter based). More accurate than text search for finding function definitions, method calls, and code patterns. Examples: '$FUNC($ARGS)' matches function calls, 'fn $NAME($$$)' matches Rust function definitions, '$EXPR.unwrap()' matches unwrap calls.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "pattern": {
+                            "type": "string",
+                            "description": "AST pattern to search for. Use $NAME for single nodes, $$$ for multiple nodes. Examples: 'fn $NAME($$$) { $$$ }' for function defs, '$EXPR.unwrap()' for unwrap calls, 'struct $NAME { $$$ }' for struct definitions"
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": "Directory or file to search in (default: current directory)"
+                        },
+                        "lang": {
+                            "type": "string",
+                            "enum": ["rust", "typescript", "javascript", "python", "go", "c", "cpp", "java", "tsx", "jsx"],
+                            "description": "Language to parse as (auto-detected from file extension if not specified)"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": "Maximum matches to return (default: 30)"
+                        }
+                    },
+                    "required": ["pattern"]
+                }),
+            },
+            ToolDefinition {
+                name: "edit".to_string(),
+                description: "Replace exact string in a file. More efficient than rewriting entire file. The old_string must match exactly (including whitespace and indentation). Use replace_all to change all occurrences, otherwise old_string must be unique in the file.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Path to the file to edit"
+                        },
+                        "old_string": {
+                            "type": "string",
+                            "description": "Exact string to find and replace (must be unique unless replace_all=true)"
+                        },
+                        "new_string": {
+                            "type": "string",
+                            "description": "Replacement string"
+                        },
+                        "replace_all": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Replace all occurrences instead of requiring unique match (default: false)"
+                        }
+                    },
+                    "required": ["file_path", "old_string", "new_string"]
                 }),
             },
         ]
@@ -540,6 +628,8 @@ impl ToolExecutor {
             "glob" => self.execute_glob(tool, policy).await,
             "tree" => self.execute_tree(tool, policy).await,
             "find_symbol" => self.execute_find_symbol(tool, policy).await,
+            "ast_search" => self.execute_ast_search(tool, policy).await,
+            "edit" => self.execute_edit(tool, policy).await,
             _ => Err(ToolError::NotFound(tool.name.clone())),
         };
         
@@ -801,11 +891,43 @@ impl ToolExecutor {
             .and_then(|v| v.as_i64())
             .unwrap_or(50) as usize;
 
-        // Build ripgrep command
+        // Parse output_mode - default to files_with_matches for efficiency
+        let output_mode = tool.input.get("output_mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("files_with_matches");
+
+        // Parse pagination parameters
+        let head_limit = tool.input.get("head_limit")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as usize);
+        let offset = tool.input.get("offset")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0) as usize;
+
+        // Build ripgrep command based on output mode
         let mut cmd = Command::new("rg");
-        cmd.arg("--json")
-            .arg("--max-count").arg(max_results.to_string())
-            .arg("-C").arg(context_lines.to_string());
+
+        match output_mode {
+            "content" => {
+                // Full content mode: JSON output with context lines
+                cmd.arg("--json")
+                    .arg("--max-count").arg(max_results.to_string())
+                    .arg("-C").arg(context_lines.to_string());
+            }
+            "files_with_matches" => {
+                // Files only mode: just list matching file paths
+                cmd.arg("--files-with-matches");
+            }
+            "count" => {
+                // Count mode: show match count per file
+                cmd.arg("--count");
+            }
+            _ => {
+                return Err(ToolError::ParseError(
+                    format!("Invalid output_mode: '{}'. Use 'content', 'files_with_matches', or 'count'", output_mode)
+                ));
+            }
+        }
 
         if literal {
             cmd.arg("--fixed-strings");
@@ -848,38 +970,113 @@ impl ToolExecutor {
             .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
 
-        // Parse ripgrep JSON output and format nicely
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut matches: Vec<serde_json::Value> = Vec::new();
-        let mut match_count = 0;
 
-        for line in stdout.lines() {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                if json.get("type").and_then(|t| t.as_str()) == Some("match") {
-                    if let Some(data) = json.get("data") {
-                        let path = data.get("path").and_then(|p| p.get("text")).and_then(|t| t.as_str()).unwrap_or("");
-                        let line_num = data.get("line_number").and_then(|n| n.as_i64()).unwrap_or(0);
-                        let text = data.get("lines").and_then(|l| l.get("text")).and_then(|t| t.as_str()).unwrap_or("");
+        // Format output based on mode
+        let result_str = match output_mode {
+            "content" => {
+                // Parse ripgrep JSON output and format nicely
+                let mut matches: Vec<serde_json::Value> = Vec::new();
 
-                        matches.push(serde_json::json!({
-                            "path": path,
-                            "line": line_num,
-                            "text": text.trim_end()
-                        }));
-                        match_count += 1;
+                for line in stdout.lines() {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                        if json.get("type").and_then(|t| t.as_str()) == Some("match") {
+                            if let Some(data) = json.get("data") {
+                                let path = data.get("path").and_then(|p| p.get("text")).and_then(|t| t.as_str()).unwrap_or("");
+                                let line_num = data.get("line_number").and_then(|n| n.as_i64()).unwrap_or(0);
+                                let text = data.get("lines").and_then(|l| l.get("text")).and_then(|t| t.as_str()).unwrap_or("");
+
+                                matches.push(serde_json::json!({
+                                    "path": path,
+                                    "line": line_num,
+                                    "text": text.trim_end()
+                                }));
+                            }
+                        }
                     }
                 }
+
+                let total_matches = matches.len();
+
+                // Apply pagination
+                let paginated: Vec<serde_json::Value> = matches
+                    .into_iter()
+                    .skip(offset)
+                    .take(head_limit.unwrap_or(usize::MAX))
+                    .collect();
+
+                let result = serde_json::json!({
+                    "matches": paginated,
+                    "total_matches": total_matches,
+                    "offset": offset,
+                    "returned": paginated.len(),
+                    "truncated": total_matches >= max_results
+                });
+
+                serde_json::to_string_pretty(&result)
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
             }
-        }
+            "files_with_matches" => {
+                // Simple list of file paths
+                let files: Vec<&str> = stdout.lines().collect();
+                let total_files = files.len();
 
-        let result = serde_json::json!({
-            "matches": matches,
-            "total_matches": match_count,
-            "truncated": match_count >= max_results
-        });
+                // Apply pagination
+                let paginated: Vec<&str> = files
+                    .into_iter()
+                    .skip(offset)
+                    .take(head_limit.unwrap_or(usize::MAX))
+                    .collect();
 
-        let result_str = serde_json::to_string_pretty(&result)
-            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+                let result = serde_json::json!({
+                    "files": paginated,
+                    "total_files": total_files,
+                    "offset": offset,
+                    "returned": paginated.len()
+                });
+
+                serde_json::to_string_pretty(&result)
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+            }
+            "count" => {
+                // Parse "path:count" format from ripgrep --count
+                let mut counts: Vec<serde_json::Value> = Vec::new();
+                let mut total_matches = 0usize;
+
+                for line in stdout.lines() {
+                    if let Some((path, count_str)) = line.rsplit_once(':') {
+                        if let Ok(count) = count_str.parse::<usize>() {
+                            counts.push(serde_json::json!({
+                                "file": path,
+                                "count": count
+                            }));
+                            total_matches += count;
+                        }
+                    }
+                }
+
+                let total_files = counts.len();
+
+                // Apply pagination
+                let paginated: Vec<serde_json::Value> = counts
+                    .into_iter()
+                    .skip(offset)
+                    .take(head_limit.unwrap_or(usize::MAX))
+                    .collect();
+
+                let result = serde_json::json!({
+                    "counts": paginated,
+                    "total_files": total_files,
+                    "total_matches": total_matches,
+                    "offset": offset,
+                    "returned": paginated.len()
+                });
+
+                serde_json::to_string_pretty(&result)
+                    .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
+            }
+            _ => unreachable!() // Already validated above
+        };
 
         if result_str.len() > policy.max_output_bytes {
             Ok(format!(
@@ -1202,7 +1399,226 @@ impl ToolExecutor {
             Ok(result_str)
         }
     }
-    
+
+    async fn execute_ast_search(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<String, ToolError> {
+        let pattern = tool.input.get("pattern")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'pattern' parameter".to_string()))?;
+
+        let search_path = tool.input.get("path")
+            .and_then(|p| p.as_str())
+            .unwrap_or(".");
+        let resolved = self.resolve_path(search_path);
+
+        if !self.is_path_allowed("ast_search", &resolved) {
+            return Err(ToolError::PathNotAllowed(search_path.to_string()));
+        }
+
+        let max_results = tool.input.get("max_results")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(30) as usize;
+
+        // Build ast-grep command
+        // Use 'sg' binary (ast-grep CLI) with --json output
+        let mut cmd = Command::new("sg");
+        cmd.arg("--pattern").arg(pattern)
+            .arg("--json")
+            .arg(&resolved)
+            .current_dir(&self.working_dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        // Add language filter if specified
+        if let Some(lang) = tool.input.get("lang").and_then(|l| l.as_str()) {
+            cmd.arg("--lang").arg(lang);
+        }
+
+        let exec_future = async {
+            let child = cmd.spawn()?;
+            child.wait_with_output().await
+        };
+
+        let output = timeout(Duration::from_secs(policy.timeout_secs), exec_future)
+            .await
+            .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
+            .map_err(|e| {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    ToolError::ExecutionFailed(
+                        "ast-grep (sg) not found. Install with: cargo install ast-grep --locked".to_string()
+                    )
+                } else {
+                    ToolError::ExecutionFailed(e.to_string())
+                }
+            })?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Handle non-zero exit (may just mean no matches)
+        if !output.status.success() && stdout.is_empty() {
+            // Check stderr for actual errors vs just "no matches"
+            if !stderr.is_empty() && !stderr.contains("No files") {
+                return Err(ToolError::ExecutionFailed(format!(
+                    "ast-grep error: {}", stderr.trim()
+                )));
+            }
+            // No matches found - return empty result
+            let result = serde_json::json!({
+                "matches": [],
+                "total_matches": 0,
+                "truncated": false
+            });
+            return serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()));
+        }
+
+        // Parse ast-grep JSON output
+        // ast-grep outputs newline-delimited JSON objects
+        let mut matches: Vec<serde_json::Value> = Vec::new();
+
+        for line in stdout.lines() {
+            if matches.len() >= max_results {
+                break;
+            }
+
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
+                // ast-grep JSON format includes: file, range, text, etc.
+                let file = json.get("file").and_then(|f| f.as_str()).unwrap_or("");
+                let text = json.get("text").and_then(|t| t.as_str()).unwrap_or("");
+
+                // Extract range info
+                let range = json.get("range");
+                let start_line = range
+                    .and_then(|r| r.get("start"))
+                    .and_then(|s| s.get("line"))
+                    .and_then(|l| l.as_i64())
+                    .map(|l| l + 1) // ast-grep uses 0-based lines
+                    .unwrap_or(0);
+                let end_line = range
+                    .and_then(|r| r.get("end"))
+                    .and_then(|s| s.get("line"))
+                    .and_then(|l| l.as_i64())
+                    .map(|l| l + 1)
+                    .unwrap_or(0);
+
+                matches.push(serde_json::json!({
+                    "file": file,
+                    "line": start_line,
+                    "end_line": end_line,
+                    "text": text.trim()
+                }));
+            }
+        }
+
+        let total_matches = matches.len();
+        let truncated = total_matches >= max_results;
+
+        let result = serde_json::json!({
+            "matches": matches,
+            "total_matches": total_matches,
+            "truncated": truncated
+        });
+
+        let result_str = serde_json::to_string_pretty(&result)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+        if result_str.len() > policy.max_output_bytes {
+            Ok(format!(
+                "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
+                &result_str[..policy.max_output_bytes],
+                policy.max_output_bytes
+            ))
+        } else {
+            Ok(result_str)
+        }
+    }
+
+    async fn execute_edit(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<String, ToolError> {
+        let file_path = tool.input.get("file_path")
+            .and_then(|p| p.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let old_string = tool.input.get("old_string")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'old_string' parameter".to_string()))?;
+
+        let new_string = tool.input.get("new_string")
+            .and_then(|s| s.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'new_string' parameter".to_string()))?;
+
+        let replace_all = tool.input.get("replace_all")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        let resolved = self.resolve_path(file_path);
+
+        if !self.is_path_allowed("edit", &resolved) {
+            return Err(ToolError::PathNotAllowed(file_path.to_string()));
+        }
+
+        // Read the file
+        let read_future = tokio::fs::read_to_string(&resolved);
+        let content = timeout(Duration::from_secs(policy.timeout_secs), read_future)
+            .await
+            .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
+            .map_err(|e| ToolError::IoError(format!("Failed to read file: {}", e)))?;
+
+        // Count occurrences
+        let count = content.matches(old_string).count();
+
+        if count == 0 {
+            return Err(ToolError::ExecutionFailed(format!(
+                "String not found in file. The old_string must match exactly (including whitespace):\n{:?}",
+                if old_string.len() > 100 {
+                    format!("{}...", &old_string[..100])
+                } else {
+                    old_string.to_string()
+                }
+            )));
+        }
+
+        if count > 1 && !replace_all {
+            return Err(ToolError::ExecutionFailed(format!(
+                "String occurs {} times in file. Either:\n1. Use replace_all=true to replace all occurrences, or\n2. Provide more context in old_string to make it unique",
+                count
+            )));
+        }
+
+        // Perform replacement
+        let new_content = if replace_all {
+            content.replace(old_string, new_string)
+        } else {
+            content.replacen(old_string, new_string, 1)
+        };
+
+        // Write the file
+        let write_future = tokio::fs::write(&resolved, &new_content);
+        timeout(Duration::from_secs(policy.timeout_secs), write_future)
+            .await
+            .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
+            .map_err(|e| ToolError::IoError(format!("Failed to write file: {}", e)))?;
+
+        let replacements = if replace_all { count } else { 1 };
+        Ok(format!(
+            "Replaced {} occurrence{} in {}\n\nOld ({} chars):\n{}\n\nNew ({} chars):\n{}",
+            replacements,
+            if replacements == 1 { "" } else { "s" },
+            file_path,
+            old_string.len(),
+            if old_string.len() > 200 {
+                format!("{}...", &old_string[..200])
+            } else {
+                old_string.to_string()
+            },
+            new_string.len(),
+            if new_string.len() > 200 {
+                format!("{}...", &new_string[..200])
+            } else {
+                new_string.to_string()
+            }
+        ))
+    }
+
     fn resolve_path(&self, path: &str) -> PathBuf {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"));
         
@@ -1279,6 +1695,29 @@ impl PendingToolUse {
                     .and_then(|p| p.as_str())
                     .unwrap_or(".");
                 format!("'{}' in {}", name, path)
+            }
+            "ast_search" => {
+                let pattern = self.tool.input.get("pattern")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("<pattern>");
+                let path = self.tool.input.get("path")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or(".");
+                format!("'{}' in {}", pattern, path)
+            }
+            "edit" => {
+                let file_path = self.tool.input.get("file_path")
+                    .and_then(|p| p.as_str())
+                    .unwrap_or("<file>");
+                let old_str = self.tool.input.get("old_string")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("");
+                let preview = if old_str.len() > 40 {
+                    format!("{}...", &old_str[..40])
+                } else {
+                    old_str.to_string()
+                };
+                format!("{}: {:?}", file_path, preview)
             }
             _ => serde_json::to_string(&self.tool.input)
                 .unwrap_or_else(|_| "<error>".to_string())
@@ -1424,16 +1863,137 @@ mod tests {
     fn test_tool_definitions_include_find_symbol() {
         let registry = ToolRegistry::new();
         let definitions = registry.get_tool_definitions();
-        
+
         let tool_names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
-        
+
         assert!(tool_names.contains(&"find_symbol"));
-        
+
         // Verify find_symbol definition has required properties
         let find_symbol_def = definitions.iter().find(|d| d.name == "find_symbol").unwrap();
         let schema = &find_symbol_def.input_schema;
         assert!(schema.get("properties").unwrap().get("name").is_some());
         assert!(schema.get("properties").unwrap().get("path").is_some());
         assert!(schema.get("properties").unwrap().get("kind").is_some());
+    }
+
+    #[test]
+    fn test_ast_search_registered() {
+        let registry = ToolRegistry::new();
+
+        // Verify ast_search is registered
+        assert!(registry.get_policy("ast_search").is_some());
+
+        // Verify it doesn't require confirmation (read-only tool)
+        assert_eq!(registry.can_execute("ast_search", false), ToolExecutionCheck::Allowed);
+    }
+
+    #[test]
+    fn test_tool_definitions_include_ast_search() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        let tool_names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"ast_search"));
+
+        // Verify ast_search definition has required properties
+        let ast_search_def = definitions.iter().find(|d| d.name == "ast_search").unwrap();
+        let schema = &ast_search_def.input_schema;
+        assert!(schema.get("properties").unwrap().get("pattern").is_some());
+        assert!(schema.get("properties").unwrap().get("path").is_some());
+        assert!(schema.get("properties").unwrap().get("lang").is_some());
+        assert!(schema.get("properties").unwrap().get("max_results").is_some());
+
+        // Verify pattern is required
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.iter().any(|r| r.as_str() == Some("pattern")));
+    }
+
+    #[test]
+    fn test_ast_search_pending_tool_use_summary() {
+        // Test ast_search summary
+        let ast_tool = ToolUse {
+            id: "test-5".to_string(),
+            name: "ast_search".to_string(),
+            input: serde_json::json!({"pattern": "fn $NAME($$$)", "path": "src/"}),
+        };
+        let pending = PendingToolUse::new(ast_tool, ToolExecutionCheck::Allowed);
+        assert_eq!(pending.input_summary(), "'fn $NAME($$$)' in src/");
+
+        // Test with default path
+        let ast_tool_default = ToolUse {
+            id: "test-6".to_string(),
+            name: "ast_search".to_string(),
+            input: serde_json::json!({"pattern": "$EXPR.unwrap()"}),
+        };
+        let pending_default = PendingToolUse::new(ast_tool_default, ToolExecutionCheck::Allowed);
+        assert_eq!(pending_default.input_summary(), "'$EXPR.unwrap()' in .");
+    }
+
+    #[test]
+    fn test_edit_registered() {
+        let registry = ToolRegistry::new();
+
+        // Verify edit is registered
+        assert!(registry.get_policy("edit").is_some());
+
+        // Verify it requires confirmation (file modification)
+        assert_eq!(registry.can_execute("edit", false), ToolExecutionCheck::RequiresConfirmation);
+        assert_eq!(registry.can_execute("edit", true), ToolExecutionCheck::Allowed);
+    }
+
+    #[test]
+    fn test_tool_definitions_include_edit() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        let tool_names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"edit"));
+
+        // Verify edit definition has required properties
+        let edit_def = definitions.iter().find(|d| d.name == "edit").unwrap();
+        let schema = &edit_def.input_schema;
+        assert!(schema.get("properties").unwrap().get("file_path").is_some());
+        assert!(schema.get("properties").unwrap().get("old_string").is_some());
+        assert!(schema.get("properties").unwrap().get("new_string").is_some());
+        assert!(schema.get("properties").unwrap().get("replace_all").is_some());
+
+        // Verify required fields
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.iter().any(|r| r.as_str() == Some("file_path")));
+        assert!(required.iter().any(|r| r.as_str() == Some("old_string")));
+        assert!(required.iter().any(|r| r.as_str() == Some("new_string")));
+    }
+
+    #[test]
+    fn test_edit_pending_tool_use_summary() {
+        // Test edit summary
+        let edit_tool = ToolUse {
+            id: "test-7".to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({
+                "file_path": "src/main.rs",
+                "old_string": "fn main() {",
+                "new_string": "fn main() -> Result<()> {"
+            }),
+        };
+        let pending = PendingToolUse::new(edit_tool, ToolExecutionCheck::RequiresConfirmation);
+        assert_eq!(pending.input_summary(), "src/main.rs: \"fn main() {\"");
+
+        // Test with long old_string (should truncate)
+        let edit_tool_long = ToolUse {
+            id: "test-8".to_string(),
+            name: "edit".to_string(),
+            input: serde_json::json!({
+                "file_path": "src/lib.rs",
+                "old_string": "This is a very long string that should be truncated in the summary because it exceeds forty characters",
+                "new_string": "shorter"
+            }),
+        };
+        let pending_long = PendingToolUse::new(edit_tool_long, ToolExecutionCheck::RequiresConfirmation);
+        let summary = pending_long.input_summary();
+        assert!(summary.starts_with("src/lib.rs:"));
+        assert!(summary.contains("..."));
     }
 }
