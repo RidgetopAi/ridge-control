@@ -75,6 +75,8 @@ pub struct ProcessMonitor {
     page_size: u64,
     inner_area: Rect,
     gpu_monitor: GpuMonitor,
+    /// Manually tracked scroll offset (ratatui's TableState.offset() is unreliable between renders)
+    scroll_offset: usize,
 }
 
 impl ProcessMonitor {
@@ -95,6 +97,7 @@ impl ProcessMonitor {
             page_size: page,
             inner_area: Rect::default(),
             gpu_monitor: GpuMonitor::new(),
+            scroll_offset: 0,
         };
         
         monitor.refresh_processes();
@@ -109,6 +112,7 @@ impl ProcessMonitor {
     pub fn ensure_selection(&mut self) {
         if self.table_state.borrow().selected().is_none() && !self.filtered_processes().is_empty() {
             self.table_state.borrow_mut().select(Some(0));
+            self.scroll_offset = 0;
         }
     }
 
@@ -202,6 +206,7 @@ impl ProcessMonitor {
         let count = self.filtered_processes().len();
         if count == 0 {
             self.table_state.borrow_mut().select(None);
+            self.scroll_offset = 0;
             return;
         }
 
@@ -210,12 +215,19 @@ impl ProcessMonitor {
             None => 0,
         };
         self.table_state.borrow_mut().select(Some(new_idx));
+
+        // Update scroll_offset to keep selected row visible
+        let visible = self.visible_rows().max(1);
+        if new_idx >= self.scroll_offset + visible {
+            self.scroll_offset = new_idx.saturating_sub(visible - 1);
+        }
     }
 
     fn select_prev(&mut self) {
         let count = self.filtered_processes().len();
         if count == 0 {
             self.table_state.borrow_mut().select(None);
+            self.scroll_offset = 0;
             return;
         }
 
@@ -224,6 +236,11 @@ impl ProcessMonitor {
             None => 0,
         };
         self.table_state.borrow_mut().select(Some(new_idx));
+
+        // Update scroll_offset to keep selected row visible
+        if new_idx < self.scroll_offset {
+            self.scroll_offset = new_idx;
+        }
     }
 
     fn kill_process(&self, pid: i32) -> bool {
@@ -279,17 +296,23 @@ impl ProcessMonitor {
     pub fn set_inner_area(&mut self, area: Rect) {
         self.inner_area = area;
     }
+
+    /// Calculate number of visible table rows based on inner_area height
+    /// Layout: GPU area (3) + table border (1) + header (1) + data rows + table border (1)
+    fn visible_rows(&self) -> usize {
+        // inner_area.height is the height after process monitor borders are removed
+        // Subtract: GPU area (3) + table borders (2) + header (1) = 6
+        self.inner_area.height.saturating_sub(6) as usize
+    }
     
     /// TRC-020: Get PID at screen Y coordinate (for context menu targeting)
     /// Uses same calculation as left-click handler for consistency
     pub fn get_pid_at_screen_y(&self, screen_y: u16) -> Option<i32> {
-        // Use same offset as left-click: inner_area.y + 4 (GPU area 3 + table border 1)
-        // This matches the left-click handler calculation exactly
+        // Offset: 4
         let row_in_table = screen_y.saturating_sub(self.inner_area.y + 4);
 
-        // Add scroll offset to convert visual row to actual list index
-        let scroll_offset = self.table_state.borrow().offset();
-        let actual_row_index = (row_in_table as usize) + scroll_offset;
+        // Use manually tracked scroll_offset (not table_state.offset() which is unreliable)
+        let actual_row_index = (row_in_table as usize) + self.scroll_offset;
 
         self.filtered_processes()
             .get(actual_row_index)
@@ -349,12 +372,11 @@ impl Component for ProcessMonitor {
 
                 match mouse.kind {
                     MouseEventKind::Down(MouseButton::Left) => {
-                        // Offset: GPU area (3) + table header (1) = 4
+                        // Offset: 4
                         let row_in_table = y.saturating_sub(self.inner_area.y + 4);
 
-                        // Add scroll offset to convert visual row to actual list index
-                        let scroll_offset = self.table_state.borrow().offset();
-                        let actual_row_index = (row_in_table as usize) + scroll_offset;
+                        // Use manually tracked scroll_offset (not table_state.offset() which is unreliable)
+                        let actual_row_index = (row_in_table as usize) + self.scroll_offset;
                         let filtered_count = self.filtered_processes().len();
 
                         if actual_row_index < filtered_count {
@@ -395,6 +417,7 @@ impl Component for ProcessMonitor {
             }
             Action::ProcessSetFilter(f) => {
                 self.filter = f.clone();
+                self.scroll_offset = 0;
                 self.table_state.borrow_mut().select(if self.filtered_processes().is_empty() {
                     None
                 } else {
@@ -403,6 +426,7 @@ impl Component for ProcessMonitor {
             }
             Action::ProcessClearFilter => {
                 self.filter.clear();
+                self.scroll_offset = 0;
                 self.table_state.borrow_mut().select(if self.processes.is_empty() {
                     None
                 } else {
