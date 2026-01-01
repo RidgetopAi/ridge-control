@@ -141,6 +141,29 @@ impl SystemPromptBuilder {
              You help users with software development tasks including writing code, debugging, \
              explaining concepts, and using system tools. You are concise, accurate, and proactive."
         )
+        // Cross-session memory tools (Mandrel integration)
+        .add_tool_instruction(
+            "You have access to Mandrel for cross-session memory. Use these tools to maintain continuity:"
+        )
+        .add_tool_instruction(
+            "At session START: Use `context_get_recent` to load recent context and understand ongoing work"
+        )
+        .add_tool_instruction(
+            "During work: Use `context_store` to save important findings, decisions, and progress. \
+             Types: code, decision, error, planning, completion, milestone, handoff"
+        )
+        .add_tool_instruction(
+            "Before investigating: Use `context_search` to check if something was explored before"
+        )
+        .add_tool_instruction(
+            "For task tracking: Use `task_create`, `task_update`, `task_list` to manage work items that persist across sessions"
+        )
+        .add_tool_instruction(
+            "At session END: Use `context_store` with type='handoff' to leave notes for the next session"
+        )
+        .add_tool_instruction(
+            "Use `smart_search` to find relevant contexts, tasks, and decisions across the project history"
+        )
     }
 
     pub fn with_platform(mut self, platform: PlatformInfo) -> Self {
