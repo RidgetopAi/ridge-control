@@ -4,6 +4,7 @@
 mod keybindings;
 mod keystore;
 mod llm;
+pub mod lsp;
 mod session;
 mod subagent;
 mod theme;
@@ -12,6 +13,7 @@ mod watcher;
 pub use keybindings::KeybindingsConfig;
 pub use keystore::{KeyId, KeyStore, SecretString};
 pub use llm::LLMConfig;
+pub use lsp::LspConfig;
 pub use session::{SessionData, SessionManager};
 pub use subagent::{SubagentConfig, SubagentsConfig};
 pub use theme::Theme;
@@ -33,6 +35,7 @@ const THEME_FILE: &str = "theme.toml";
 const LLM_CONFIG_FILE: &str = "llm.toml";
 const SUBAGENT_CONFIG_FILE: &str = "subagents.toml";
 const MANDREL_CONFIG_FILE: &str = "mandrel.toml";
+const LSP_CONFIG_FILE: &str = "lsp.toml";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[derive(Default)]
@@ -115,6 +118,7 @@ pub struct ConfigManager {
     llm_config: LLMConfig,
     subagent_config: SubagentsConfig,
     mandrel_config: MandrelConfig,
+    lsp_config: LspConfig,
 }
 
 impl ConfigManager {
@@ -127,6 +131,7 @@ impl ConfigManager {
         let llm_config = Self::load_llm_config(&config_dir);
         let subagent_config = Self::load_subagent_config(&config_dir);
         let mandrel_config = Self::load_mandrel_config(&config_dir);
+        let lsp_config = Self::load_lsp_config(&config_dir);
 
         Ok(Self {
             config_dir,
@@ -136,6 +141,7 @@ impl ConfigManager {
             llm_config,
             subagent_config,
             mandrel_config,
+            lsp_config,
         })
     }
     
@@ -205,6 +211,14 @@ impl ConfigManager {
         Ok(())
     }
 
+    pub fn lsp_config(&self) -> &LspConfig {
+        &self.lsp_config
+    }
+
+    pub fn lsp_config_mut(&mut self) -> &mut LspConfig {
+        &mut self.lsp_config
+    }
+
     pub fn reload_all(&mut self) {
         self.app_config = Self::load_app_config(&self.config_dir);
         self.keybindings = Self::load_keybindings(&self.config_dir);
@@ -212,6 +226,7 @@ impl ConfigManager {
         self.llm_config = Self::load_llm_config(&self.config_dir);
         self.subagent_config = Self::load_subagent_config(&self.config_dir);
         self.mandrel_config = Self::load_mandrel_config(&self.config_dir);
+        self.lsp_config = Self::load_lsp_config(&self.config_dir);
     }
     
     pub fn reload_file(&mut self, path: &Path) {
@@ -235,6 +250,9 @@ impl ConfigManager {
             }
             Some(MANDREL_CONFIG_FILE) => {
                 self.mandrel_config = Self::load_mandrel_config(&self.config_dir);
+            }
+            Some(LSP_CONFIG_FILE) => {
+                self.lsp_config = Self::load_lsp_config(&self.config_dir);
             }
             _ => {
                 self.reload_all();
@@ -275,6 +293,11 @@ impl ConfigManager {
 
     fn load_mandrel_config(config_dir: &Path) -> MandrelConfig {
         let path = config_dir.join(MANDREL_CONFIG_FILE);
+        Self::load_toml_file(&path).unwrap_or_default()
+    }
+
+    fn load_lsp_config(config_dir: &Path) -> LspConfig {
+        let path = config_dir.join(LSP_CONFIG_FILE);
         Self::load_toml_file(&path).unwrap_or_default()
     }
 

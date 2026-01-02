@@ -54,6 +54,7 @@ use crate::agent::{
     SubagentManager, ToolExecutor as AgentToolExecutor, ThreadStore,
     MandrelClient,
 };
+use crate::lsp::LspManager;
 
 const TICK_INTERVAL_MS: u64 = 500;
 
@@ -156,6 +157,8 @@ pub struct App {
     subagent_manager: Option<SubagentManager>,
     // T2.3: MandrelClient for cross-session memory
     mandrel_client: Arc<RwLock<MandrelClient>>,
+    // P3-T3.1: LspManager for semantic code navigation
+    lsp_manager: Arc<RwLock<LspManager>>,
     // T2.4: Ask user dialog for structured questions
     ask_user_dialog: crate::components::ask_user_dialog::AskUserDialog,
 }
@@ -226,6 +229,19 @@ impl App {
             tool_executor.set_mandrel_client(mandrel_client.clone());
         } else {
             tracing::info!("Mandrel integration disabled");
+        }
+
+        // P3-T3.1: Initialize LspManager for semantic code navigation
+        let lsp_config = config_manager.lsp_config().clone();
+        let working_dir_for_lsp = std::env::current_dir().unwrap_or_else(|_| {
+            dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
+        });
+        let lsp_manager = Arc::new(RwLock::new(LspManager::new(lsp_config, working_dir_for_lsp)));
+        if config_manager.lsp_config().enabled {
+            tracing::info!("LSP integration enabled");
+            tool_executor.set_lsp_manager(lsp_manager.clone());
+        } else {
+            tracing::info!("LSP integration disabled");
         }
 
         // Apply persisted LLM settings from llm.toml (TS-013)
@@ -395,6 +411,8 @@ impl App {
             subagent_manager,
             // T2.3: MandrelClient for cross-session memory
             mandrel_client,
+            // P3-T3.1: LspManager for semantic code navigation
+            lsp_manager,
             // T2.4: Ask user dialog for structured questions
             ask_user_dialog: crate::components::ask_user_dialog::AskUserDialog::new(),
         })
@@ -419,6 +437,10 @@ impl App {
             // Preserve Mandrel client when recreating tool_executor
             if app.config_manager.mandrel_config().enabled {
                 app.tool_executor.set_mandrel_client(app.mandrel_client.clone());
+            }
+            // Preserve LspManager when recreating tool_executor
+            if app.config_manager.lsp_config().enabled {
+                app.tool_executor.set_lsp_manager(app.lsp_manager.clone());
             }
         }
         
@@ -1058,6 +1080,8 @@ impl App {
         let dangerous_mode = self.tool_executor.registry().is_dangerous_mode();
         let mandrel_client = self.mandrel_client.clone();
         let mandrel_enabled = self.config_manager.mandrel_config().enabled;
+        let lsp_manager = self.lsp_manager.clone();
+        let lsp_enabled = self.config_manager.lsp_config().enabled;
 
         // Spawn the tool execution with its own result channel
         let (result_tx, result_rx) = mpsc::unbounded_channel();
@@ -1072,6 +1096,10 @@ impl App {
             // Set Mandrel client for cross-session memory tools
             if mandrel_enabled {
                 executor.set_mandrel_client(mandrel_client);
+            }
+            // Set LspManager for semantic code navigation tools
+            if lsp_enabled {
+                executor.set_lsp_manager(lsp_manager);
             }
 
             let result = executor.execute(&tool).await;

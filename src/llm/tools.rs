@@ -15,6 +15,20 @@ use tokio::time::timeout;
 use super::types::{ToolDefinition, ToolResult, ToolResultContent, ToolUse};
 use crate::agent::mandrel::MandrelClient;
 
+/// Truncate a string at a safe UTF-8 character boundary.
+/// Returns a slice that is at most `max_bytes` long without splitting multi-byte characters.
+fn truncate_utf8_safe(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the last character boundary at or before max_bytes
+    let mut boundary = max_bytes;
+    while boundary > 0 && !s.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    &s[..boundary]
+}
+
 /// Tool execution policy
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolPolicy {
@@ -369,6 +383,80 @@ impl ToolRegistry {
             timeout_secs: 300, // 5 minutes to wait for user response
             max_output_bytes: 16384,
             allowed_paths: vec![],
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // LSP (Language Server Protocol) Tools - semantic code navigation
+        // ─────────────────────────────────────────────────────────────────────
+
+        // lsp_goto_definition - jump to symbol definition
+        self.policies.insert("lsp_goto_definition".to_string(), ToolPolicy {
+            name: "lsp_goto_definition".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // lsp_find_references - find all usages of a symbol
+        self.policies.insert("lsp_find_references".to_string(), ToolPolicy {
+            name: "lsp_find_references".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 60,
+            max_output_bytes: 524_288, // 512KB for large reference lists
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // lsp_hover - get type info / documentation
+        self.policies.insert("lsp_hover".to_string(), ToolPolicy {
+            name: "lsp_hover".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // lsp_document_symbols - list all symbols in a file
+        self.policies.insert("lsp_document_symbols".to_string(), ToolPolicy {
+            name: "lsp_document_symbols".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 524_288,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // lsp_workspace_symbols - search symbols across project
+        self.policies.insert("lsp_workspace_symbols".to_string(), ToolPolicy {
+            name: "lsp_workspace_symbols".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 60,
+            max_output_bytes: 524_288,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // lsp_implementations - find trait/interface implementations
+        self.policies.insert("lsp_implementations".to_string(), ToolPolicy {
+            name: "lsp_implementations".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 524_288,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // lsp_call_hierarchy - incoming/outgoing call analysis
+        self.policies.insert("lsp_call_hierarchy".to_string(), ToolPolicy {
+            name: "lsp_call_hierarchy".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 60,
+            max_output_bytes: 524_288,
+            allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
         });
     }
     
@@ -947,6 +1035,169 @@ impl ToolRegistry {
                     "required": ["questions"]
                 }),
             },
+            // ─────────────────────────────────────────────────────────────────────
+            // LSP (Language Server Protocol) Tools - semantic code navigation
+            // ─────────────────────────────────────────────────────────────────────
+            ToolDefinition {
+                name: "lsp_goto_definition".to_string(),
+                description: "Jump to the definition of a symbol at a given position. Uses Language Server Protocol \
+                    for accurate, language-aware navigation. Works with Rust, TypeScript/JavaScript, and Python.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "Line number (1-indexed)"
+                        },
+                        "character": {
+                            "type": "integer",
+                            "description": "Character offset in line (1-indexed)"
+                        }
+                    },
+                    "required": ["file_path", "line", "character"]
+                }),
+            },
+            ToolDefinition {
+                name: "lsp_find_references".to_string(),
+                description: "Find all references to a symbol at a given position. Returns file paths and line \
+                    numbers where the symbol is used throughout the codebase.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "Line number (1-indexed)"
+                        },
+                        "character": {
+                            "type": "integer",
+                            "description": "Character offset in line (1-indexed)"
+                        },
+                        "include_declaration": {
+                            "type": "boolean",
+                            "description": "Include the declaration in results (default: true)",
+                            "default": true
+                        }
+                    },
+                    "required": ["file_path", "line", "character"]
+                }),
+            },
+            ToolDefinition {
+                name: "lsp_hover".to_string(),
+                description: "Get hover information (type signature, documentation) for a symbol at a position. \
+                    Useful for understanding what a function/variable does without reading the source.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "Line number (1-indexed)"
+                        },
+                        "character": {
+                            "type": "integer",
+                            "description": "Character offset in line (1-indexed)"
+                        }
+                    },
+                    "required": ["file_path", "line", "character"]
+                }),
+            },
+            ToolDefinition {
+                name: "lsp_document_symbols".to_string(),
+                description: "Get all symbols (functions, classes, variables, etc.) defined in a document. \
+                    Provides an overview of the file's structure.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        }
+                    },
+                    "required": ["file_path"]
+                }),
+            },
+            ToolDefinition {
+                name: "lsp_workspace_symbols".to_string(),
+                description: "Search for symbols across the entire workspace by name. Use for finding \
+                    functions, classes, or types when you don't know which file they're in.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Symbol name or pattern to search for"
+                        },
+                        "file_path": {
+                            "type": "string",
+                            "description": "A file in the project (used to identify which language server to query)"
+                        }
+                    },
+                    "required": ["query", "file_path"]
+                }),
+            },
+            ToolDefinition {
+                name: "lsp_implementations".to_string(),
+                description: "Find implementations of an interface, trait, or abstract method. \
+                    For example, find all types that implement a trait in Rust.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "Line number (1-indexed)"
+                        },
+                        "character": {
+                            "type": "integer",
+                            "description": "Character offset in line (1-indexed)"
+                        }
+                    },
+                    "required": ["file_path", "line", "character"]
+                }),
+            },
+            ToolDefinition {
+                name: "lsp_call_hierarchy".to_string(),
+                description: "Get call hierarchy for a function/method. 'incoming' shows what calls this function, \
+                    'outgoing' shows what this function calls. Useful for understanding code flow.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "file_path": {
+                            "type": "string",
+                            "description": "Absolute path to the file"
+                        },
+                        "line": {
+                            "type": "integer",
+                            "description": "Line number (1-indexed)"
+                        },
+                        "character": {
+                            "type": "integer",
+                            "description": "Character offset in line (1-indexed)"
+                        },
+                        "direction": {
+                            "type": "string",
+                            "enum": ["incoming", "outgoing"],
+                            "description": "Direction: 'incoming' for callers, 'outgoing' for callees",
+                            "default": "incoming"
+                        }
+                    },
+                    "required": ["file_path", "line", "character"]
+                }),
+            },
         ]
     }
 }
@@ -963,6 +1214,8 @@ pub struct ToolExecutor {
     working_dir: PathBuf,
     /// Optional Mandrel client for cross-session memory
     mandrel_client: Option<Arc<RwLock<MandrelClient>>>,
+    /// Optional LSP manager for semantic code navigation
+    lsp_manager: Option<Arc<RwLock<crate::lsp::LspManager>>>,
 }
 
 impl ToolExecutor {
@@ -971,6 +1224,7 @@ impl ToolExecutor {
             registry: ToolRegistry::new(),
             working_dir,
             mandrel_client: None,
+            lsp_manager: None,
         }
     }
 
@@ -982,6 +1236,16 @@ impl ToolExecutor {
     /// Check if Mandrel is available
     pub fn has_mandrel(&self) -> bool {
         self.mandrel_client.is_some()
+    }
+
+    /// Set the LSP manager for semantic code navigation tools
+    pub fn set_lsp_manager(&mut self, manager: Arc<RwLock<crate::lsp::LspManager>>) {
+        self.lsp_manager = Some(manager);
+    }
+
+    /// Check if LSP is available
+    pub fn has_lsp(&self) -> bool {
+        self.lsp_manager.is_some()
     }
 
     pub fn registry(&self) -> &ToolRegistry {
@@ -1097,6 +1361,14 @@ impl ToolExecutor {
             "smart_search" => self.execute_mandrel_smart_search(tool).await,
             // User interaction tools
             "ask_user" => self.execute_ask_user(tool).await,
+            // LSP semantic code navigation tools
+            "lsp_goto_definition" => self.execute_lsp_goto_definition(tool).await,
+            "lsp_find_references" => self.execute_lsp_find_references(tool).await,
+            "lsp_hover" => self.execute_lsp_hover(tool).await,
+            "lsp_document_symbols" => self.execute_lsp_document_symbols(tool).await,
+            "lsp_workspace_symbols" => self.execute_lsp_workspace_symbols(tool).await,
+            "lsp_implementations" => self.execute_lsp_implementations(tool).await,
+            "lsp_call_hierarchy" => self.execute_lsp_call_hierarchy(tool).await,
             _ => Err(ToolError::NotFound(tool.name.clone())),
         };
         
@@ -1178,7 +1450,7 @@ impl ToolExecutor {
         if output.len() > policy.max_output_bytes {
             Ok(format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                &output[..policy.max_output_bytes],
+                truncate_utf8_safe(&output, policy.max_output_bytes),
                 policy.max_output_bytes
             ))
         } else {
@@ -1323,7 +1595,7 @@ impl ToolExecutor {
         if result.len() > policy.max_output_bytes {
             result = format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                &result[..policy.max_output_bytes],
+                truncate_utf8_safe(&result, policy.max_output_bytes),
                 policy.max_output_bytes
             );
         }
@@ -1548,7 +1820,7 @@ impl ToolExecutor {
         if result_str.len() > policy.max_output_bytes {
             Ok(format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                &result_str[..policy.max_output_bytes],
+                truncate_utf8_safe(&result_str, policy.max_output_bytes),
                 policy.max_output_bytes
             ))
         } else {
@@ -1653,7 +1925,7 @@ impl ToolExecutor {
         if tree_output.len() > policy.max_output_bytes {
             Ok(format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                &tree_output[..policy.max_output_bytes],
+                truncate_utf8_safe(&tree_output, policy.max_output_bytes),
                 policy.max_output_bytes
             ))
         } else {
@@ -1710,6 +1982,13 @@ impl ToolExecutor {
             output.push_str(&format!("{}{}{}{}\n", prefix, connector, name, suffix));
 
             if is_dir && depth < max_depth {
+                // Skip directories that contain many files but aren't useful to explore
+                let skip_dirs = [".git", "target", "node_modules", "vendor", ".venv", "venv",
+                                 "__pycache__", "build", "dist", ".cache", ".cargo"];
+                if skip_dirs.contains(&name.as_str()) {
+                    continue;
+                }
+
                 let new_prefix = if is_last {
                     format!("{}    ", prefix)
                 } else {
@@ -1762,6 +2041,18 @@ impl ToolExecutor {
             .arg("--extras=+q")    // qualified names
             .arg("-R")             // recursive
             .arg("-f").arg("-")    // output to stdout
+            // Exclude build artifacts and dependency directories
+            .arg("--exclude=target")
+            .arg("--exclude=node_modules")
+            .arg("--exclude=.git")
+            .arg("--exclude=vendor")
+            .arg("--exclude=build")
+            .arg("--exclude=dist")
+            .arg("--exclude=__pycache__")
+            .arg("--exclude=.venv")
+            .arg("--exclude=venv")
+            .arg("--exclude=*.min.js")
+            .arg("--exclude=*.min.css")
             .arg(&resolved)
             .current_dir(&self.working_dir)
             .stdout(Stdio::piped())
@@ -1859,7 +2150,7 @@ impl ToolExecutor {
         if result_str.len() > policy.max_output_bytes {
             Ok(format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                &result_str[..policy.max_output_bytes],
+                truncate_utf8_safe(&result_str, policy.max_output_bytes),
                 policy.max_output_bytes
             ))
         } else {
@@ -1992,7 +2283,7 @@ impl ToolExecutor {
         if result_str.len() > policy.max_output_bytes {
             Ok(format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                &result_str[..policy.max_output_bytes],
+                truncate_utf8_safe(&result_str, policy.max_output_bytes),
                 policy.max_output_bytes
             ))
         } else {
@@ -2308,6 +2599,301 @@ impl ToolExecutor {
             tool_use_id: tool.id.clone(),
             questions: parsed_questions,
         })
+    }
+
+    // ========== LSP Tool Execute Methods ==========
+
+    /// Check if LSP server is indexing and return an informative message if so.
+    /// Returns Some(message) if indexing with actionable info, None if ready.
+    async fn check_lsp_indexing_status(
+        &self,
+        lsp_manager: &tokio::sync::RwLock<crate::lsp::LspManager>,
+        file_path: &str,
+    ) -> Option<String> {
+        let mut manager = lsp_manager.write().await;
+        if let Some(state) = manager.get_indexing_status(file_path).await {
+            if state.is_indexing {
+                let status = state.to_status_string();
+                let msg = format!(
+                    "⏳ LSP server is still indexing: {}\n\n\
+                    The language server needs time to analyze the codebase before \
+                    semantic queries (like finding definitions, references, or symbols) \
+                    can return results.\n\n\
+                    **Suggested alternatives while indexing:**\n\
+                    - Use `grep` to search for text patterns\n\
+                    - Use `tree` to explore file structure\n\
+                    - Use `read` to examine specific files\n\n\
+                    Try this LSP tool again in ~30-60 seconds.",
+                    status
+                );
+                return Some(msg);
+            }
+        }
+        None
+    }
+
+    /// Format empty LSP result with indexing context
+    async fn format_empty_lsp_result(
+        &self,
+        lsp_manager: &tokio::sync::RwLock<crate::lsp::LspManager>,
+        file_path: &str,
+        what_was_searched: &str,
+    ) -> String {
+        // Check if server is still indexing - that would explain empty results
+        if let Some(indexing_msg) = self.check_lsp_indexing_status(lsp_manager, file_path).await {
+            return indexing_msg;
+        }
+
+        // Server is ready but genuinely found nothing
+        format!("No {} found. The LSP server has finished indexing and this is a genuine empty result.", what_was_searched)
+    }
+
+    async fn execute_lsp_goto_definition(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let line = tool.input.get("line")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'line' parameter".to_string()))? as u32;
+
+        let character = tool.input.get("character")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'character' parameter".to_string()))? as u32;
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let locations = manager.goto_definition(&path_str, line, character)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager); // Release lock before checking indexing status
+
+        if locations.is_empty() {
+            Ok(self.format_empty_lsp_result(lsp_manager, &path_str, "definition").await)
+        } else {
+            let output: Vec<String> = locations.iter()
+                .map(|loc| format!("{}:{}:{}", loc.file, loc.line, loc.character))
+                .collect();
+            Ok(format!("Definition locations:\n{}", output.join("\n")))
+        }
+    }
+
+    async fn execute_lsp_find_references(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let line = tool.input.get("line")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'line' parameter".to_string()))? as u32;
+
+        let character = tool.input.get("character")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'character' parameter".to_string()))? as u32;
+
+        let include_declaration = tool.input.get("include_declaration")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let locations = manager.find_references(&path_str, line, character, include_declaration)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager);
+
+        if locations.is_empty() {
+            Ok(self.format_empty_lsp_result(lsp_manager, &path_str, "references").await)
+        } else {
+            let output: Vec<String> = locations.iter()
+                .map(|loc| format!("{}:{}:{}", loc.file, loc.line, loc.character))
+                .collect();
+            Ok(format!("Found {} references:\n{}", locations.len(), output.join("\n")))
+        }
+    }
+
+    async fn execute_lsp_hover(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let line = tool.input.get("line")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'line' parameter".to_string()))? as u32;
+
+        let character = tool.input.get("character")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'character' parameter".to_string()))? as u32;
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let hover_info = manager.hover(&path_str, line, character)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager);
+
+        match hover_info {
+            Some(info) => Ok(info),
+            None => Ok(self.format_empty_lsp_result(lsp_manager, &path_str, "hover information").await),
+        }
+    }
+
+    async fn execute_lsp_document_symbols(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let symbols = manager.document_symbols(&path_str)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager);
+
+        if symbols.is_empty() {
+            Ok(self.format_empty_lsp_result(lsp_manager, &path_str, "symbols in document").await)
+        } else {
+            let output: Vec<String> = symbols.iter()
+                .map(|s| {
+                    let container = s.container.as_ref()
+                        .map(|c| format!(" (in {})", c))
+                        .unwrap_or_default();
+                    format!("{} [{}] at line {}{}", s.name, s.kind, s.line, container)
+                })
+                .collect();
+            Ok(format!("Document symbols:\n{}", output.join("\n")))
+        }
+    }
+
+    async fn execute_lsp_workspace_symbols(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let query = tool.input.get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'query' parameter".to_string()))?;
+
+        // We need a file path to determine which server to query
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter (needed to select language server)".to_string()))?;
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let symbols = manager.workspace_symbols(query, &path_str)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager);
+
+        if symbols.is_empty() {
+            Ok(self.format_empty_lsp_result(lsp_manager, &path_str, &format!("symbols matching '{}'", query)).await)
+        } else {
+            let output: Vec<String> = symbols.iter()
+                .map(|s| format!("{} [{}] in {}:{}", s.name, s.kind, s.file, s.line))
+                .collect();
+            Ok(format!("Workspace symbols matching '{}':\n{}", query, output.join("\n")))
+        }
+    }
+
+    async fn execute_lsp_implementations(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let line = tool.input.get("line")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'line' parameter".to_string()))? as u32;
+
+        let character = tool.input.get("character")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'character' parameter".to_string()))? as u32;
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let locations = manager.goto_implementation(&path_str, line, character)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager);
+
+        if locations.is_empty() {
+            Ok(self.format_empty_lsp_result(lsp_manager, &path_str, "implementations").await)
+        } else {
+            let output: Vec<String> = locations.iter()
+                .map(|loc| format!("{}:{}:{}", loc.file, loc.line, loc.character))
+                .collect();
+            Ok(format!("Found {} implementations:\n{}", locations.len(), output.join("\n")))
+        }
+    }
+
+    async fn execute_lsp_call_hierarchy(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        let lsp_manager = self.lsp_manager.as_ref()
+            .ok_or_else(|| ToolError::ExecutionFailed("LSP not available".to_string()))?;
+
+        let file_path = tool.input.get("file_path")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'file_path' parameter".to_string()))?;
+
+        let line = tool.input.get("line")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'line' parameter".to_string()))? as u32;
+
+        let character = tool.input.get("character")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ToolError::ParseError("Missing 'character' parameter".to_string()))? as u32;
+
+        let direction = tool.input.get("direction")
+            .and_then(|v| v.as_str())
+            .unwrap_or("incoming");
+
+        let incoming = direction == "incoming";
+
+        let resolved_path = self.resolve_path(file_path);
+        let path_str = resolved_path.to_string_lossy().to_string();
+
+        let mut manager = lsp_manager.write().await;
+        let calls = manager.call_hierarchy(&path_str, line, character, incoming)
+            .await
+            .map_err(|e| ToolError::ExecutionFailed(format!("LSP error: {}", e)))?;
+        drop(manager);
+
+        if calls.is_empty() {
+            let what = format!("{} calls", if incoming { "incoming" } else { "outgoing" });
+            Ok(self.format_empty_lsp_result(lsp_manager, &path_str, &what).await)
+        } else {
+            let output: Vec<String> = calls.iter()
+                .map(|c| format!("{} [{}] in {}:{}", c.name, c.kind, c.file, c.line))
+                .collect();
+            Ok(format!("{} calls:\n{}",
+                if incoming { "Incoming" } else { "Outgoing" },
+                output.join("\n")))
+        }
     }
 }
 

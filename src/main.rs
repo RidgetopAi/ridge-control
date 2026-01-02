@@ -8,14 +8,22 @@ mod error;
 mod event;
 mod input;
 mod llm;
+mod lsp;
 mod pty;
 mod streams;
 mod tabs;
 mod util;
 
+use std::io::Write;
+use std::panic;
 use std::path::PathBuf;
 
 use color_eyre::eyre::Result;
+use crossterm::{
+    event::DisableMouseCapture,
+    execute,
+    terminal::{disable_raw_mode, LeaveAlternateScreen},
+};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 use tracing_subscriber::{
     fmt,
@@ -79,6 +87,18 @@ fn init_logging(log_level: &str) -> Result<tracing_appender::non_blocking::Worke
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Install panic hook FIRST to restore terminal state on panic.
+    // This is critical because `panic = "abort"` in release mode means Drop won't run.
+    let original_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        // Restore terminal state before panic output
+        let _ = disable_raw_mode();
+        let _ = execute!(std::io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = std::io::stdout().flush();
+        // Call the original hook for proper panic reporting
+        original_hook(panic_info);
+    }));
+
     color_eyre::install()?;
 
     // Parse CLI arguments

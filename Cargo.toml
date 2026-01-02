@@ -44,6 +44,7 @@ eventsource-stream = "0.2"  # SSE parsing
 # ─────────────────────────────────────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+serde_repr = "0.1"  # For integer enum serialization (LSP SymbolKind, etc.)
 toml = "0.8"
 directories = "6"
 
