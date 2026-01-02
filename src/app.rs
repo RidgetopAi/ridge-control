@@ -156,6 +156,8 @@ pub struct App {
     subagent_manager: Option<SubagentManager>,
     // T2.3: MandrelClient for cross-session memory
     mandrel_client: Arc<RwLock<MandrelClient>>,
+    // T2.4: Ask user dialog for structured questions
+    ask_user_dialog: crate::components::ask_user_dialog::AskUserDialog,
 }
 
 impl App {
@@ -393,6 +395,8 @@ impl App {
             subagent_manager,
             // T2.3: MandrelClient for cross-session memory
             mandrel_client,
+            // T2.4: Ask user dialog for structured questions
+            ask_user_dialog: crate::components::ask_user_dialog::AskUserDialog::new(),
         })
     }
 
@@ -643,6 +647,10 @@ impl App {
                 match result {
                     Ok(tool_result) => {
                         self.dispatch(Action::ToolResult(tool_result))?;
+                    }
+                    Err(crate::llm::ToolError::WaitingForUserInput { tool_use_id, questions }) => {
+                        // T2.4: Show ask_user dialog instead of sending error
+                        self.ask_user_dialog.show(tool_use_id, questions);
                     }
                     Err(e) => {
                         // Create an error result using the tool_id we tracked
@@ -1172,6 +1180,7 @@ impl App {
         let show_thread_picker = self.thread_picker.is_visible();
         let show_thread_rename = self.thread_rename_buffer.is_some();
         let thread_rename_text = self.thread_rename_buffer.clone().unwrap_or_default();
+        let show_ask_user = self.ask_user_dialog.is_visible();
         let show_context_menu = self.context_menu.is_visible();
         let has_notifications = self.notification_manager.has_notifications();
         let _show_tabs = self.tab_manager.count() > 1; // Kept for potential future use
@@ -1557,6 +1566,11 @@ impl App {
                     frame.render_widget(help_text, help_area);
                 }
 
+                // T2.4: Ask user dialog overlay
+                if show_ask_user {
+                    self.ask_user_dialog.render(frame, size, &theme);
+                }
+
                 // TRC-020: Context menu overlay (highest z-index)
                 if show_context_menu {
                     self.context_menu.render(frame, size, &theme);
@@ -1591,7 +1605,12 @@ impl App {
         // Debug: Log key events to help diagnose input issues
         #[cfg(debug_assertions)]
         tracing::debug!("Key event: {:?}, mode: {:?}, focus: {:?}", key, self.input_mode, self.focus.current());
-        
+
+        // T2.4: Ask user dialog takes priority when visible
+        if self.ask_user_dialog.is_visible() {
+            return self.ask_user_dialog.handle_event(&CrosstermEvent::Key(key));
+        }
+
         match &self.input_mode {
             InputMode::Confirm { .. } => {
                 self.confirm_dialog.handle_event(&CrosstermEvent::Key(key))
@@ -3179,7 +3198,69 @@ impl App {
             Action::SettingsSave => {
                 self.handle_settings_save();
             }
-            
+
+            // T2.4: Ask user dialog actions
+            Action::AskUserShow(ref request) => {
+                // Convert AskUserRequest to ParsedQuestions
+                let questions: Vec<crate::llm::ParsedQuestion> = request.questions.iter().map(|q| {
+                    crate::llm::ParsedQuestion {
+                        header: q.header.clone(),
+                        question: q.question.clone(),
+                        options: q.options.iter().map(|o| crate::llm::ParsedOption {
+                            label: o.label.clone(),
+                            description: o.description.clone(),
+                        }).collect(),
+                        multi_select: q.multi_select,
+                    }
+                }).collect();
+                self.ask_user_dialog.show(request.tool_use_id.clone(), questions);
+            }
+            Action::AskUserCancel => {
+                // User cancelled - create error result
+                if self.ask_user_dialog.is_visible() {
+                    // Note: We don't have the tool_use_id here, so the dialog handles sending cancel
+                    self.ask_user_dialog.hide();
+                }
+            }
+            Action::AskUserRespond(ref response) => {
+                // User responded - create tool result with answers
+                self.ask_user_dialog.hide();
+                let answers_json = serde_json::json!({
+                    "answers": response.answers
+                });
+                let tool_result = crate::llm::ToolResult {
+                    tool_use_id: response.tool_use_id.clone(),
+                    content: crate::llm::ToolResultContent::Text(answers_json.to_string()),
+                    is_error: false,
+                };
+                // Remove from pending and add to collected
+                self.pending_tools.remove(&response.tool_use_id);
+                self.collected_results.insert(response.tool_use_id.clone(), tool_result.clone());
+                // Check if we have all results
+                if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
+                    let results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
+                    if let Some(ref mut engine) = self.agent_engine {
+                        engine.continue_after_tools(results);
+                    }
+                    self.expected_tool_count = 0;
+                }
+            }
+            // Other ask_user actions are handled by the dialog's handle_event
+            Action::AskUserNextOption
+            | Action::AskUserPrevOption
+            | Action::AskUserNextQuestion
+            | Action::AskUserPrevQuestion
+            | Action::AskUserToggleOption
+            | Action::AskUserSelectOption
+            | Action::AskUserStartCustom
+            | Action::AskUserCancelCustom
+            | Action::AskUserCustomInput(_)
+            | Action::AskUserCustomBackspace
+            | Action::AskUserSubmitCustom
+            | Action::AskUserSubmit => {
+                // These are handled by the dialog's handle_event
+            }
+
             _ => {}
         }
         Ok(())

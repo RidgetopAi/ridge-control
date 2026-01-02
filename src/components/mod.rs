@@ -1,3 +1,4 @@
+pub mod ask_user_dialog;
 pub mod chat_input;
 pub mod command_palette;
 pub mod config_panel;

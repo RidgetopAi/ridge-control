@@ -78,6 +78,30 @@ pub enum ToolError {
 
     #[error("Mandrel error: {0}")]
     MandrelError(String),
+
+    #[error("Waiting for user input")]
+    WaitingForUserInput {
+        /// Tool use ID for matching response
+        tool_use_id: String,
+        /// Parsed questions for the dialog
+        questions: Vec<ParsedQuestion>,
+    },
+}
+
+/// Parsed question for ask_user tool
+#[derive(Debug, Clone)]
+pub struct ParsedQuestion {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<ParsedOption>,
+    pub multi_select: bool,
+}
+
+/// Parsed option for ask_user tool
+#[derive(Debug, Clone)]
+pub struct ParsedOption {
+    pub label: String,
+    pub description: String,
 }
 
 /// Tool registry with policies
@@ -330,6 +354,20 @@ impl ToolRegistry {
             dangerous_mode_only: false,
             timeout_secs: 60, // Can be slower for semantic search
             max_output_bytes: 102_400, // 100KB for search results
+            allowed_paths: vec![],
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // User Interaction Tools
+        // ─────────────────────────────────────────────────────────────────────
+
+        // ask_user - present questions to the user and get responses
+        self.policies.insert("ask_user".to_string(), ToolPolicy {
+            name: "ask_user".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 300, // 5 minutes to wait for user response
+            max_output_bytes: 16384,
             allowed_paths: vec![],
         });
     }
@@ -848,6 +886,67 @@ impl ToolRegistry {
                     "required": ["query"]
                 }),
             },
+            // ─────────────────────────────────────────────────────────────────────
+            // User Interaction Tools
+            // ─────────────────────────────────────────────────────────────────────
+            ToolDefinition {
+                name: "ask_user".to_string(),
+                description: "Ask the user questions to gather preferences, clarify requirements, or get decisions. \
+                    Use when you need input before proceeding. Each question can have 2-4 predefined options plus \
+                    an 'Other' option for custom text input. Use multiSelect: true when choices aren't mutually exclusive.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "questions": {
+                            "type": "array",
+                            "description": "Questions to ask (1-4 questions)",
+                            "minItems": 1,
+                            "maxItems": 4,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "header": {
+                                        "type": "string",
+                                        "description": "Short label displayed as chip/tag (max 12 chars). Examples: 'Auth method', 'Library', 'Approach'",
+                                        "maxLength": 12
+                                    },
+                                    "question": {
+                                        "type": "string",
+                                        "description": "The complete question to ask. Should be clear and end with '?'"
+                                    },
+                                    "options": {
+                                        "type": "array",
+                                        "description": "Available choices (2-4 options). Each should be distinct.",
+                                        "minItems": 2,
+                                        "maxItems": 4,
+                                        "items": {
+                                            "type": "object",
+                                            "properties": {
+                                                "label": {
+                                                    "type": "string",
+                                                    "description": "Display text for this option (1-5 words)"
+                                                },
+                                                "description": {
+                                                    "type": "string",
+                                                    "description": "Explanation of what this option means"
+                                                }
+                                            },
+                                            "required": ["label", "description"]
+                                        }
+                                    },
+                                    "multiSelect": {
+                                        "type": "boolean",
+                                        "description": "Allow multiple selections (default: false)",
+                                        "default": false
+                                    }
+                                },
+                                "required": ["header", "question", "options"]
+                            }
+                        }
+                    },
+                    "required": ["questions"]
+                }),
+            },
         ]
     }
 }
@@ -996,6 +1095,8 @@ impl ToolExecutor {
             "task_details" => self.execute_mandrel_task_details(tool).await,
             "task_progress_summary" => self.execute_mandrel_task_progress_summary(tool).await,
             "smart_search" => self.execute_mandrel_smart_search(tool).await,
+            // User interaction tools
+            "ask_user" => self.execute_ask_user(tool).await,
             _ => Err(ToolError::NotFound(tool.name.clone())),
         };
         
@@ -2141,6 +2242,72 @@ impl ToolExecutor {
         let client_guard = client.read().await;
         client_guard.smart_search(query).await
             .map_err(|e| ToolError::MandrelError(e.to_string()))
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // User Interaction Tools
+    // ─────────────────────────────────────────────────────────────────────────
+
+    async fn execute_ask_user(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        // Parse the questions from the input
+        let questions_value = tool.input.get("questions")
+            .ok_or_else(|| ToolError::ParseError("Missing 'questions' parameter".to_string()))?;
+
+        let questions_array = questions_value.as_array()
+            .ok_or_else(|| ToolError::ParseError("'questions' must be an array".to_string()))?;
+
+        let mut parsed_questions = Vec::new();
+
+        for q in questions_array {
+            let header = q.get("header")
+                .and_then(|h| h.as_str())
+                .ok_or_else(|| ToolError::ParseError("Question missing 'header'".to_string()))?
+                .to_string();
+
+            let question = q.get("question")
+                .and_then(|q| q.as_str())
+                .ok_or_else(|| ToolError::ParseError("Question missing 'question'".to_string()))?
+                .to_string();
+
+            let options_value = q.get("options")
+                .ok_or_else(|| ToolError::ParseError("Question missing 'options'".to_string()))?;
+
+            let options_array = options_value.as_array()
+                .ok_or_else(|| ToolError::ParseError("'options' must be an array".to_string()))?;
+
+            let mut options = Vec::new();
+            for opt in options_array {
+                let label = opt.get("label")
+                    .and_then(|l| l.as_str())
+                    .ok_or_else(|| ToolError::ParseError("Option missing 'label'".to_string()))?
+                    .to_string();
+
+                let description = opt.get("description")
+                    .and_then(|d| d.as_str())
+                    .ok_or_else(|| ToolError::ParseError("Option missing 'description'".to_string()))?
+                    .to_string();
+
+                options.push(ParsedOption { label, description });
+            }
+
+            let multi_select = q.get("multiSelect")
+                .and_then(|m| m.as_bool())
+                .unwrap_or(false);
+
+            parsed_questions.push(ParsedQuestion {
+                header,
+                question,
+                options,
+                multi_select,
+            });
+        }
+
+        // Return a special error that carries the parsed questions
+        // The App will catch this and show the dialog
+        Err(ToolError::WaitingForUserInput {
+            tool_use_id: tool.id.clone(),
+            questions: parsed_questions,
+        })
     }
 }
 

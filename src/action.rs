@@ -4,6 +4,46 @@ use crate::config::KeyId;
 use crate::input::focus::FocusArea;
 use crate::llm::{LLMError, StreamChunk, PendingToolUse, ToolResult, ToolUse};
 
+/// A question for the ask_user tool
+#[derive(Debug, Clone)]
+pub struct AskUserQuestion {
+    /// Short header/label for the question (max 12 chars)
+    pub header: String,
+    /// The full question text
+    pub question: String,
+    /// Available options to choose from
+    pub options: Vec<AskUserOption>,
+    /// Allow multiple selections
+    pub multi_select: bool,
+}
+
+/// An option for an ask_user question
+#[derive(Debug, Clone)]
+pub struct AskUserOption {
+    /// Display label (1-5 words)
+    pub label: String,
+    /// Description of what this option means
+    pub description: String,
+}
+
+/// Request to show ask_user dialog
+#[derive(Debug, Clone)]
+pub struct AskUserRequest {
+    /// Tool use ID to respond to
+    pub tool_use_id: String,
+    /// Questions to ask (1-4)
+    pub questions: Vec<AskUserQuestion>,
+}
+
+/// Response from ask_user dialog
+#[derive(Debug, Clone)]
+pub struct AskUserResponse {
+    /// Tool use ID this responds to
+    pub tool_use_id: String,
+    /// Map of question index to selected option(s) or custom text
+    pub answers: Vec<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SortColumn {
     Pid,
@@ -475,6 +515,38 @@ pub enum Action {
     SettingsMaxTokensChanged(u32),
     /// Save settings
     SettingsSave,
+
+    // Ask User dialog actions (P2-T2.4)
+    /// Show ask_user dialog with questions
+    AskUserShow(AskUserRequest),
+    /// Navigate to next option in ask_user dialog
+    AskUserNextOption,
+    /// Navigate to previous option in ask_user dialog
+    AskUserPrevOption,
+    /// Navigate to next question in ask_user dialog
+    AskUserNextQuestion,
+    /// Navigate to previous question in ask_user dialog
+    AskUserPrevQuestion,
+    /// Toggle option selection (for multi-select)
+    AskUserToggleOption,
+    /// Select current option and submit (for single-select)
+    AskUserSelectOption,
+    /// Start entering custom "Other" text
+    AskUserStartCustom,
+    /// Cancel custom text entry
+    AskUserCancelCustom,
+    /// Input character for custom text
+    AskUserCustomInput(char),
+    /// Delete character from custom text
+    AskUserCustomBackspace,
+    /// Submit custom text
+    AskUserSubmitCustom,
+    /// Submit all answers
+    AskUserSubmit,
+    /// Cancel ask_user dialog
+    AskUserCancel,
+    /// Response from ask_user dialog (internal - sends result back to tool)
+    AskUserRespond(AskUserResponse),
 
     None,
 }
