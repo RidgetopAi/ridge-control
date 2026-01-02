@@ -55,11 +55,12 @@ pub struct ConversationViewer {
 }
 
 /// Text selection in the conversation viewer
+/// Positions are stored as ABSOLUTE visual line indices (not relative to viewport)
 #[derive(Debug, Clone, Copy)]
 pub struct TextSelection {
-    /// Start position (line, column)
+    /// Start position (absolute_line, column) - absolute_line is scroll_offset + visible_row
     pub start: (usize, usize),
-    /// End position (line, column)  
+    /// End position (absolute_line, column)
     pub end: (usize, usize),
 }
 
@@ -281,8 +282,8 @@ impl ConversationViewer {
     // Text Selection Support
     // =====================================================================
 
-    /// Convert screen coordinates to text position (visible_row, column)
-    /// Returns position indexed into visible_lines (what's currently on screen)
+    /// Convert screen coordinates to text position (absolute_line, column)
+    /// Returns ABSOLUTE line position (scroll_offset + visible_row) for scroll-independent selection
     fn screen_to_text_pos(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
         if self.inner_area.width == 0 || self.inner_area.height == 0 {
             return None;
@@ -299,9 +300,12 @@ impl ConversationViewer {
         let screen_col = (screen_x - self.inner_area.x) as usize;
         let visible_row = (screen_y - self.inner_area.y) as usize;
 
-        // Return visible row directly - it indexes into visible_lines
-        // Clamp to valid range
-        let line = visible_row.min(self.visible_lines.len().saturating_sub(1));
+        // Convert to ABSOLUTE line position by adding scroll offset
+        // This allows selection to persist across scroll operations
+        let absolute_line = (self.scroll_offset as usize) + visible_row;
+
+        // Clamp to valid range (total line count)
+        let line = absolute_line.min(self.line_count.saturating_sub(1));
 
         Some((line, screen_col))
     }
@@ -319,15 +323,60 @@ impl ConversationViewer {
     }
 
     /// Update selection end point during drag
+    /// Handles auto-scroll when mouse is above or below the viewport
     pub fn update_selection(&mut self, screen_x: u16, screen_y: u16) {
         if !self.selecting {
             return;
         }
-        if let Some((line, col)) = self.screen_to_text_pos(screen_x, screen_y) {
+
+        // Check if mouse is above or below the viewport and auto-scroll
+        let scroll_amount = self.check_drag_scroll(screen_y);
+        if scroll_amount != 0 {
+            self.apply_scroll_delta(scroll_amount);
+        }
+
+        // Now update selection end position
+        // If mouse is outside viewport, clamp to edge
+        let clamped_y = screen_y.clamp(
+            self.inner_area.y,
+            self.inner_area.y + self.inner_area.height.saturating_sub(1)
+        );
+
+        if let Some((line, col)) = self.screen_to_text_pos(screen_x, clamped_y) {
             if let Some(ref mut sel) = self.selection {
                 sel.end = (line, col);
             }
         }
+    }
+
+    /// Check if mouse position during drag requires scrolling
+    /// Returns scroll delta: negative for up, positive for down, 0 for no scroll
+    fn check_drag_scroll(&self, screen_y: u16) -> i16 {
+        if self.inner_area.height == 0 {
+            return 0;
+        }
+
+        // Scroll up if mouse is above viewport
+        if screen_y < self.inner_area.y {
+            let distance = self.inner_area.y - screen_y;
+            return -(distance.min(3) as i16); // Scroll up to 3 lines at a time
+        }
+
+        // Scroll down if mouse is below viewport
+        let viewport_bottom = self.inner_area.y + self.inner_area.height;
+        if screen_y >= viewport_bottom {
+            let distance = screen_y - viewport_bottom + 1;
+            return distance.min(3) as i16; // Scroll up to 3 lines at a time
+        }
+
+        0
+    }
+
+    /// Apply scroll delta during drag selection
+    fn apply_scroll_delta(&mut self, delta: i16) {
+        let max_scroll = self.line_count.saturating_sub(self.visible_height as usize) as i32;
+        let new_scroll = (self.scroll_offset as i32 + delta as i32).clamp(0, max_scroll);
+        self.scroll_offset = new_scroll as u16;
     }
 
     /// End selection (mouse up)
@@ -352,7 +401,8 @@ impl ConversationViewer {
     }
 
     /// Get the currently selected text
-    /// Uses visible_lines (extracted from terminal buffer) for accurate selection
+    /// Uses visible_lines (extracted from frame buffer) for accurate text extraction
+    /// Selection positions are absolute visual line indices - convert to visible row for extraction
     pub fn get_selected_text(&self) -> Option<String> {
         let sel = self.selection?;
 
@@ -368,34 +418,55 @@ impl ConversationViewer {
             (sel.end, sel.start)
         };
 
-        let start_line = start.0;
+        // Selection positions are absolute (scroll_offset + visible_row)
+        // Convert to visible row indices for visible_lines lookup
+        let scroll = self.scroll_offset as usize;
+        let visible_height = self.visible_lines.len();
+
+        // Check if selection is at least partially within viewport
+        let start_abs = start.0;
+        let end_abs = end.0;
+
+        // Selection must overlap with current viewport to extract text
+        if end_abs < scroll || start_abs >= scroll + visible_height {
+            // Selection is entirely outside viewport - can't extract
+            return None;
+        }
+
+        // Clamp selection to visible portion
+        let vis_start_line = start_abs.saturating_sub(scroll);
+        let vis_end_line = (end_abs - scroll).min(visible_height.saturating_sub(1));
         let start_col = start.1;
-        let end_line = end.0;
         let end_col = end.1;
 
         let mut result = String::new();
 
-        // Use visible_lines which contains exactly what's displayed on screen
-        for (i, line_text) in self.visible_lines.iter().enumerate() {
-            if i < start_line || i > end_line {
-                continue;
-            }
+        for vis_row in vis_start_line..=vis_end_line {
+            let line_text = match self.visible_lines.get(vis_row) {
+                Some(text) => text,
+                None => continue,
+            };
 
             let line_chars: Vec<char> = line_text.chars().collect();
 
-            if i == start_line && i == end_line {
+            // Determine if this is start/end line based on absolute positions
+            let abs_line = scroll + vis_row;
+            let is_start_line = abs_line == start_abs;
+            let is_end_line = abs_line == end_abs;
+
+            if is_start_line && is_end_line {
                 // Single line selection
                 let start_idx = start_col.min(line_chars.len());
                 let end_idx = (end_col + 1).min(line_chars.len());
                 if start_idx < end_idx {
                     result.push_str(&line_chars[start_idx..end_idx].iter().collect::<String>());
                 }
-            } else if i == start_line {
+            } else if is_start_line {
                 // First line of multi-line selection
                 let start_idx = start_col.min(line_chars.len());
                 result.push_str(&line_chars[start_idx..].iter().collect::<String>());
                 result.push('\n');
-            } else if i == end_line {
+            } else if is_end_line {
                 // Last line of multi-line selection
                 let end_idx = (end_col + 1).min(line_chars.len());
                 result.push_str(&line_chars[..end_idx].iter().collect::<String>());
@@ -468,7 +539,7 @@ impl ConversationViewer {
     }
 
     /// Render selection highlight overlay on the frame buffer
-    /// Selection line indices are visible row indices (0 = top of visible window)
+    /// Selection positions are ABSOLUTE line indices - convert to visible positions for rendering
     fn render_selection_highlight(&self, frame: &mut Frame, inner: Rect, theme: &Theme) {
         let sel = match self.selection {
             Some(s) => s,
@@ -489,20 +560,25 @@ impl ConversationViewer {
             .fg(theme.colors.background.to_color());
 
         let buf = frame.buffer_mut();
+        let scroll = self.scroll_offset as usize;
+        let visible_end = scroll + inner.height as usize;
 
-        // Selection line indices are now visible row indices (0 to visible_height-1)
-        for line in start.0..=end.0 {
+        // Selection positions are absolute - iterate over the absolute range
+        for abs_line in start.0..=end.0 {
             // Skip lines outside visible window
-            if line >= inner.height as usize {
+            if abs_line < scroll || abs_line >= visible_end {
                 continue;
             }
 
-            // Screen Y = inner.y + visible_row
-            let screen_y = inner.y + line as u16;
+            // Convert absolute line to visible row (0-based within viewport)
+            let visible_row = abs_line - scroll;
 
-            // Determine column range
-            let col_start = if line == start.0 { start.1 } else { 0 };
-            let col_end = if line == end.0 { end.1 } else { inner.width as usize - 1 };
+            // Screen Y = inner.y + visible_row
+            let screen_y = inner.y + visible_row as u16;
+
+            // Determine column range based on absolute line position
+            let col_start = if abs_line == start.0 { start.1 } else { 0 };
+            let col_end = if abs_line == end.0 { end.1 } else { inner.width as usize - 1 };
 
             // Render highlight
             for col in col_start..=col_end {
