@@ -2015,35 +2015,15 @@ impl ToolExecutor {
             .ok_or_else(|| ToolError::ParseError("Missing 'project' parameter".to_string()))?;
 
         let mut client_guard = client.write().await;
-        let result = client_guard.project_switch(project).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "success": true,
-            "project": {
-                "id": result.id,
-                "name": result.name,
-                "description": result.description,
-                "status": result.status
-            }
-        }).to_string())
+        client_guard.project_switch(project).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_project_current(&self, _tool: &ToolUse) -> Result<String, ToolError> {
         let client = self.get_mandrel_client()?;
         let client_guard = client.read().await;
-        let result = client_guard.project_current().await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "project": {
-                "id": result.id,
-                "name": result.name,
-                "description": result.description,
-                "status": result.status,
-                "context_count": result.context_count
-            }
-        }).to_string())
+        client_guard.project_current().await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_context_store(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2063,17 +2043,8 @@ impl ToolExecutor {
             .unwrap_or_default();
 
         let client_guard = client.read().await;
-        let result = client_guard.context_store(content, context_type, &tags).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "success": true,
-            "context": {
-                "id": result.id,
-                "type": result.context_type,
-                "tags": result.tags
-            }
-        }).to_string())
+        client_guard.context_store(content, context_type, &tags).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_context_get_recent(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2084,23 +2055,8 @@ impl ToolExecutor {
             .map(|l| l as u32);
 
         let client_guard = client.read().await;
-        let contexts = client_guard.context_get_recent(limit).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        let contexts_json: Vec<serde_json::Value> = contexts.iter().map(|c| {
-            serde_json::json!({
-                "id": c.id,
-                "content": c.content,
-                "type": c.context_type,
-                "tags": c.tags,
-                "created_at": c.created_at
-            })
-        }).collect();
-
-        Ok(serde_json::json!({
-            "contexts": contexts_json,
-            "count": contexts.len()
-        }).to_string())
+        client_guard.context_get_recent(limit).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_context_search(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2111,23 +2067,8 @@ impl ToolExecutor {
             .ok_or_else(|| ToolError::ParseError("Missing 'query' parameter".to_string()))?;
 
         let client_guard = client.read().await;
-        let contexts = client_guard.context_search(query).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        let contexts_json: Vec<serde_json::Value> = contexts.iter().map(|c| {
-            serde_json::json!({
-                "id": c.id,
-                "content": c.content,
-                "type": c.context_type,
-                "tags": c.tags,
-                "similarity": c.similarity
-            })
-        }).collect();
-
-        Ok(serde_json::json!({
-            "results": contexts_json,
-            "count": contexts.len()
-        }).to_string())
+        client_guard.context_search(query).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_task_create(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2141,18 +2082,8 @@ impl ToolExecutor {
         let priority = tool.input.get("priority").and_then(|p| p.as_str());
 
         let client_guard = client.read().await;
-        let task = client_guard.task_create(title, description, priority).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "success": true,
-            "task": {
-                "id": task.id,
-                "title": task.title,
-                "status": task.status,
-                "priority": task.priority
-            }
-        }).to_string())
+        client_guard.task_create(title, description, priority).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_task_update(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2167,17 +2098,8 @@ impl ToolExecutor {
             .ok_or_else(|| ToolError::ParseError("Missing 'status' parameter".to_string()))?;
 
         let client_guard = client.read().await;
-        let task = client_guard.task_update(task_id, status).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "success": true,
-            "task": {
-                "id": task.id,
-                "title": task.title,
-                "status": task.status
-            }
-        }).to_string())
+        client_guard.task_update(task_id, status).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_task_list(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2186,22 +2108,8 @@ impl ToolExecutor {
         let status = tool.input.get("status").and_then(|s| s.as_str());
 
         let client_guard = client.read().await;
-        let tasks = client_guard.task_list(status).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        let tasks_json: Vec<serde_json::Value> = tasks.iter().map(|t| {
-            serde_json::json!({
-                "id": t.id,
-                "title": t.title,
-                "status": t.status,
-                "priority": t.priority
-            })
-        }).collect();
-
-        Ok(serde_json::json!({
-            "tasks": tasks_json,
-            "count": tasks.len()
-        }).to_string())
+        client_guard.task_list(status).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_task_details(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2212,39 +2120,15 @@ impl ToolExecutor {
             .ok_or_else(|| ToolError::ParseError("Missing 'task_id' parameter".to_string()))?;
 
         let client_guard = client.read().await;
-        let task = client_guard.task_details(task_id).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "task": {
-                "id": task.id,
-                "title": task.title,
-                "description": task.description,
-                "status": task.status,
-                "priority": task.priority,
-                "created_at": task.created_at,
-                "updated_at": task.updated_at
-            }
-        }).to_string())
+        client_guard.task_details(task_id).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_task_progress_summary(&self, _tool: &ToolUse) -> Result<String, ToolError> {
         let client = self.get_mandrel_client()?;
-
         let client_guard = client.read().await;
-        let progress = client_guard.task_progress_summary().await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        Ok(serde_json::json!({
-            "progress": {
-                "total": progress.total,
-                "completed": progress.completed,
-                "in_progress": progress.in_progress,
-                "blocked": progress.blocked,
-                "completion_percentage": progress.completion_percentage,
-                "by_status": progress.by_status
-            }
-        }).to_string())
+        client_guard.task_progress_summary().await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 
     async fn execute_mandrel_smart_search(&self, tool: &ToolUse) -> Result<String, ToolError> {
@@ -2255,33 +2139,8 @@ impl ToolExecutor {
             .ok_or_else(|| ToolError::ParseError("Missing 'query' parameter".to_string()))?;
 
         let client_guard = client.read().await;
-        let result = client_guard.smart_search(query).await
-            .map_err(|e| ToolError::MandrelError(e.to_string()))?;
-
-        let contexts_json: Vec<serde_json::Value> = result.contexts.iter().map(|c| {
-            serde_json::json!({
-                "id": c.id,
-                "content": c.content,
-                "type": c.context_type,
-                "tags": c.tags
-            })
-        }).collect();
-
-        let tasks_json: Vec<serde_json::Value> = result.tasks.iter().map(|t| {
-            serde_json::json!({
-                "id": t.id,
-                "title": t.title,
-                "status": t.status
-            })
-        }).collect();
-
-        Ok(serde_json::json!({
-            "results": {
-                "contexts": contexts_json,
-                "tasks": tasks_json,
-                "total_results": result.total_results
-            }
-        }).to_string())
+        client_guard.smart_search(query).await
+            .map_err(|e| ToolError::MandrelError(e.to_string()))
     }
 }
 

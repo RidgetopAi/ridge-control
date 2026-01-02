@@ -163,12 +163,8 @@ impl MandrelClient {
         self.config = config;
     }
 
-    /// Make a tool call to Mandrel
-    async fn call_tool<T: for<'de> Deserialize<'de>>(
-        &self,
-        tool_name: &str,
-        arguments: serde_json::Value,
-    ) -> Result<T, MandrelError> {
+    /// Make a tool call to Mandrel and return the text response
+    async fn call_tool(&self, tool_name: &str, arguments: serde_json::Value) -> Result<String, MandrelError> {
         if !self.config.enabled {
             return Err(MandrelError::NotConnected);
         }
@@ -194,35 +190,30 @@ impl MandrelClient {
 
         let text = response.text().await?;
 
-        // Parse the response - Mandrel returns JSON with "content" array
+        // Parse the MCP response format: {"success": true, "result": {"content": [{"type": "text", "text": "..."}]}}
         let raw: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
             MandrelError::ParseError {
                 message: format!("Failed to parse JSON: {} - Response: {}", e, &text[..text.len().min(200)]),
             }
         })?;
 
-        // Extract content from MCP response format
-        if let Some(content) = raw.get("content") {
-            if let Some(arr) = content.as_array() {
-                if let Some(first) = arr.first() {
-                    if let Some(text_content) = first.get("text") {
-                        if let Some(text_str) = text_content.as_str() {
-                            // Parse the nested text as JSON
-                            return serde_json::from_str(text_str).map_err(|e| {
-                                MandrelError::ParseError {
-                                    message: format!("Failed to parse content: {}", e),
-                                }
-                            });
+        // Extract text from result.content[0].text
+        if let Some(result) = raw.get("result") {
+            if let Some(content) = result.get("content") {
+                if let Some(arr) = content.as_array() {
+                    if let Some(first) = arr.first() {
+                        if let Some(text_content) = first.get("text") {
+                            if let Some(text_str) = text_content.as_str() {
+                                return Ok(text_str.to_string());
+                            }
                         }
                     }
                 }
             }
         }
 
-        // Try parsing the raw response directly
-        serde_json::from_value(raw).map_err(|e| MandrelError::ParseError {
-            message: format!("Failed to parse response: {}", e),
-        })
+        // Fallback: return the raw response
+        Ok(text)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -230,15 +221,15 @@ impl MandrelClient {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Switch to a project
-    pub async fn project_switch(&mut self, project: &str) -> Result<Project, MandrelError> {
+    pub async fn project_switch(&mut self, project: &str) -> Result<String, MandrelError> {
         let args = serde_json::json!({ "project": project });
-        let result: Project = self.call_tool("project_switch", args).await?;
+        let result = self.call_tool("project_switch", args).await?;
         self.config.project = project.to_string();
         Ok(result)
     }
 
     /// Get current project info
-    pub async fn project_current(&self) -> Result<Project, MandrelError> {
+    pub async fn project_current(&self) -> Result<String, MandrelError> {
         self.call_tool("project_current", serde_json::json!({})).await
     }
 
@@ -252,7 +243,7 @@ impl MandrelClient {
         content: &str,
         context_type: &str,
         tags: &[String],
-    ) -> Result<Context, MandrelError> {
+    ) -> Result<String, MandrelError> {
         let args = serde_json::json!({
             "content": content,
             "type": context_type,
@@ -262,35 +253,19 @@ impl MandrelClient {
     }
 
     /// Get recent contexts
-    pub async fn context_get_recent(&self, limit: Option<u32>) -> Result<Vec<Context>, MandrelError> {
+    pub async fn context_get_recent(&self, limit: Option<u32>) -> Result<String, MandrelError> {
         let args = if let Some(l) = limit {
             serde_json::json!({ "limit": l })
         } else {
             serde_json::json!({})
         };
-
-        #[derive(Deserialize)]
-        struct Response {
-            #[serde(default)]
-            contexts: Vec<Context>,
-        }
-
-        let resp: Response = self.call_tool("context_get_recent", args).await?;
-        Ok(resp.contexts)
+        self.call_tool("context_get_recent", args).await
     }
 
     /// Search contexts semantically
-    pub async fn context_search(&self, query: &str) -> Result<Vec<Context>, MandrelError> {
+    pub async fn context_search(&self, query: &str) -> Result<String, MandrelError> {
         let args = serde_json::json!({ "query": query });
-
-        #[derive(Deserialize)]
-        struct Response {
-            #[serde(default)]
-            contexts: Vec<Context>,
-        }
-
-        let resp: Response = self.call_tool("context_search", args).await?;
-        Ok(resp.contexts)
+        self.call_tool("context_search", args).await
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -303,7 +278,7 @@ impl MandrelClient {
         title: &str,
         description: Option<&str>,
         priority: Option<&str>,
-    ) -> Result<Task, MandrelError> {
+    ) -> Result<String, MandrelError> {
         let mut args = serde_json::json!({ "title": title });
         if let Some(desc) = description {
             args["description"] = serde_json::Value::String(desc.to_string());
@@ -315,7 +290,7 @@ impl MandrelClient {
     }
 
     /// Update a task's status
-    pub async fn task_update(&self, task_id: &str, status: &str) -> Result<Task, MandrelError> {
+    pub async fn task_update(&self, task_id: &str, status: &str) -> Result<String, MandrelError> {
         let args = serde_json::json!({
             "taskId": task_id,
             "status": status
@@ -324,31 +299,23 @@ impl MandrelClient {
     }
 
     /// List tasks with optional filtering
-    pub async fn task_list(&self, status: Option<&str>) -> Result<Vec<Task>, MandrelError> {
+    pub async fn task_list(&self, status: Option<&str>) -> Result<String, MandrelError> {
         let args = if let Some(s) = status {
             serde_json::json!({ "status": s })
         } else {
             serde_json::json!({})
         };
-
-        #[derive(Deserialize)]
-        struct Response {
-            #[serde(default)]
-            tasks: Vec<Task>,
-        }
-
-        let resp: Response = self.call_tool("task_list", args).await?;
-        Ok(resp.tasks)
+        self.call_tool("task_list", args).await
     }
 
     /// Get task details
-    pub async fn task_details(&self, task_id: &str) -> Result<Task, MandrelError> {
+    pub async fn task_details(&self, task_id: &str) -> Result<String, MandrelError> {
         let args = serde_json::json!({ "taskId": task_id });
         self.call_tool("task_details", args).await
     }
 
     /// Get task progress summary
-    pub async fn task_progress_summary(&self) -> Result<TaskProgress, MandrelError> {
+    pub async fn task_progress_summary(&self) -> Result<String, MandrelError> {
         self.call_tool("task_progress_summary", serde_json::json!({})).await
     }
 
@@ -357,7 +324,7 @@ impl MandrelClient {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Smart search across all data sources
-    pub async fn smart_search(&self, query: &str) -> Result<SearchResult, MandrelError> {
+    pub async fn smart_search(&self, query: &str) -> Result<String, MandrelError> {
         let args = serde_json::json!({ "query": query });
         self.call_tool("smart_search", args).await
     }
@@ -367,18 +334,8 @@ impl MandrelClient {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Test connection to Mandrel
-    pub async fn ping(&self) -> Result<bool, MandrelError> {
-        #[derive(Deserialize)]
-        struct PingResponse {
-            #[serde(default)]
-            status: String,
-        }
-
-        let resp: Result<PingResponse, _> = self.call_tool("mandrel_ping", serde_json::json!({})).await;
-        match resp {
-            Ok(_) => Ok(true),
-            Err(e) => Err(e),
-        }
+    pub async fn ping(&self) -> Result<String, MandrelError> {
+        self.call_tool("mandrel_ping", serde_json::json!({})).await
     }
 }
 
