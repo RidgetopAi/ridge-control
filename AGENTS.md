@@ -85,18 +85,20 @@ The Monitor reviews all work. Deception will be caught.
 ### Step 1: EXPLORE
 
 ```bash
-# Switch to project
+# Switch to project (if needed)
 project_switch("ridge-control")
 
 # Get your task details
 task_list()  # Find your TRC-XXX task
 
-# Read prior handoffs
-context_get_recent(limit: 5)
-context_search("your task topic")
-
 # Read CONTRACT.md for requirements
 Read CONTRACT.md
+```
+
+**On-demand context retrieval** (only when you need prior session context):
+```bash
+context_get_recent(limit: 5)
+context_search("your task topic")
 ```
 
 ### Step 2: UNDERSTAND
