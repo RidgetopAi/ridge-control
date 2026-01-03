@@ -1,6 +1,8 @@
 // Conversation viewer - some state getters for future UI integration
 #![allow(dead_code)]
 
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
@@ -52,6 +54,15 @@ pub struct ConversationViewer {
     selection: Option<TextSelection>,
     /// Whether we're currently dragging to select
     selecting: bool,
+    // Phase 3: Streaming optimization - caching fields
+    /// Cached rendered lines for stable message content (invalidated on message changes)
+    cached_message_lines: Vec<Line<'static>>,
+    /// Hash of last rendered message content (for cache invalidation)
+    cached_message_hash: u64,
+    /// Last streaming buffer length (for incremental updates)
+    last_streaming_len: usize,
+    /// Last thinking buffer length (for incremental updates)
+    last_thinking_len: usize,
 }
 
 /// Text selection in the conversation viewer
@@ -86,6 +97,11 @@ impl ConversationViewer {
             visible_lines: Vec::new(),
             selection: None,
             selecting: false,
+            // Phase 3: Initialize caching fields
+            cached_message_lines: Vec::new(),
+            cached_message_hash: 0,
+            last_streaming_len: 0,
+            last_thinking_len: 0,
         }
     }
     
@@ -130,6 +146,11 @@ impl ConversationViewer {
         self.visible_lines.clear();
         self.selection = None;
         self.selecting = false;
+        // Phase 3: Clear caching state
+        self.cached_message_lines.clear();
+        self.cached_message_hash = 0;
+        self.last_streaming_len = 0;
+        self.last_thinking_len = 0;
     }
     
     /// Toggle tool results collapse state
@@ -718,10 +739,63 @@ impl ConversationViewer {
         }
     }
 
+    /// Phase 3: Compute hash for cache invalidation
+    /// Includes message content, collapse states, and tool manager state
+    fn compute_message_hash(&self, messages: &[Message]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+
+        // Hash message count and content
+        messages.len().hash(&mut hasher);
+        for msg in messages {
+            // Hash role by discriminant since Role doesn't implement Hash
+            std::mem::discriminant(&msg.role).hash(&mut hasher);
+            for content in &msg.content {
+                match content {
+                    ContentBlock::Text(t) => {
+                        0u8.hash(&mut hasher);
+                        t.hash(&mut hasher);
+                    }
+                    ContentBlock::Thinking(t) => {
+                        1u8.hash(&mut hasher);
+                        t.hash(&mut hasher);
+                    }
+                    ContentBlock::ToolUse(tu) => {
+                        2u8.hash(&mut hasher);
+                        tu.id.hash(&mut hasher);
+                        tu.name.hash(&mut hasher);
+                    }
+                    ContentBlock::ToolResult(tr) => {
+                        3u8.hash(&mut hasher);
+                        tr.tool_use_id.hash(&mut hasher);
+                        tr.is_error.hash(&mut hasher);
+                    }
+                    ContentBlock::Image(_) => {
+                        4u8.hash(&mut hasher);
+                    }
+                }
+            }
+        }
+
+        // Hash collapse states (affect rendering)
+        self.thinking_collapsed.hash(&mut hasher);
+        self.tool_results_collapsed.hash(&mut hasher);
+
+        // Hash tool manager state (affects tool rendering)
+        self.tool_call_manager.len().hash(&mut hasher);
+        for tc in self.tool_call_manager.tool_calls() {
+            tc.tool_id().hash(&mut hasher);
+            tc.expanded.hash(&mut hasher);
+            // Hash status discriminant
+            std::mem::discriminant(&tc.status).hash(&mut hasher);
+        }
+
+        hasher.finish()
+    }
+
     /// Render conversation with messages and current streaming buffers
     /// TRC-017: Now accepts separate thinking_buffer for extended thinking display
     /// TRC-021: Added search support
-    /// Phase 3: Added context_stats for token usage display
+    /// Phase 3: Added context_stats for token usage display + caching optimization
     /// model_info: Optional (provider, model) tuple for header display
     #[allow(clippy::too_many_arguments)] // Parameters are semantically distinct
     pub fn render_conversation(
@@ -766,70 +840,84 @@ impl ConversationViewer {
         let inner = block.inner(conversation_area);
         self.visible_height = inner.height;
 
-        // Build lines from conversation
-        let mut lines: Vec<Line> = Vec::new();
+        // Phase 3: Compute hash for cache invalidation
+        let current_hash = self.compute_message_hash(messages);
 
-        for message in messages {
-            // Check if this is a tool-result-only message (should not show "User:" header)
-            let is_tool_result_only = message.role == Role::User
-                && !message.content.is_empty()
-                && message.content.iter().all(|block| matches!(block, ContentBlock::ToolResult(_)));
+        // Phase 3: Use cached lines if message content hasn't changed
+        // This avoids re-rendering stable message content on every frame
+        if current_hash != self.cached_message_hash {
+            // Cache miss - rebuild message lines
+            let mut message_lines: Vec<Line<'static>> = Vec::new();
 
-            // Add role header (skip for tool-result-only messages)
-            if !is_tool_result_only {
-                let (role_text, role_style) = match message.role {
-                    Role::User => (
-                        "󰀄 User",
-                        Style::default()
-                            .fg(theme.colors.primary.to_color())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Role::Assistant => (
-                        "󰚩 Assistant",
-                        Style::default()
-                            .fg(theme.colors.secondary.to_color())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                };
-                lines.push(Line::from(Span::styled(role_text, role_style)));
-            }
+            for message in messages {
+                // Check if this is a tool-result-only message (should not show "User:" header)
+                let is_tool_result_only = message.role == Role::User
+                    && !message.content.is_empty()
+                    && message.content.iter().all(|block| matches!(block, ContentBlock::ToolResult(_)));
 
-            // Add content blocks
-            for content_block in &message.content {
-                match content_block {
-                    ContentBlock::Text(text) => {
-                        let clean_text = strip_ansi(text);
-                        lines.extend(self.render_text_with_diff_blocks(&clean_text, theme));
-                    }
-                    ContentBlock::Thinking(text) => {
-                        // TRC-017: Collapsible thinking blocks
-                        lines.extend(self.render_thinking_block(text, theme));
-                    }
-                    ContentBlock::ToolUse(tool) => {
-                        // Phase 2: ToolCallManager is single source of truth
-                        // ToolCallWidget renders tool + result together
-                        lines.extend(self.render_tool_use_enhanced(tool, theme));
-                    }
-                    ContentBlock::ToolResult(result) => {
-                        // Phase 2: Skip if tool is tracked in ToolCallManager
-                        // (ToolCallWidget already displays the result inline)
-                        if self.tool_call_manager.get(&result.tool_use_id).is_none() {
-                            // Fallback for tools not in manager (e.g., loaded from history)
-                            lines.extend(self.render_tool_result(result, theme));
+                // Add role header (skip for tool-result-only messages)
+                if !is_tool_result_only {
+                    let (role_text, role_style) = match message.role {
+                        Role::User => (
+                            "󰀄 User",
+                            Style::default()
+                                .fg(theme.colors.primary.to_color())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Role::Assistant => (
+                            "󰚩 Assistant",
+                            Style::default()
+                                .fg(theme.colors.secondary.to_color())
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                    };
+                    message_lines.push(Line::from(Span::styled(role_text, role_style)));
+                }
+
+                // Add content blocks
+                for content_block in &message.content {
+                    match content_block {
+                        ContentBlock::Text(text) => {
+                            let clean_text = strip_ansi(text);
+                            message_lines.extend(self.render_text_with_diff_blocks(&clean_text, theme));
+                        }
+                        ContentBlock::Thinking(text) => {
+                            // TRC-017: Collapsible thinking blocks
+                            message_lines.extend(self.render_thinking_block(text, theme));
+                        }
+                        ContentBlock::ToolUse(tool) => {
+                            // Phase 2: ToolCallManager is single source of truth
+                            // ToolCallWidget renders tool + result together
+                            message_lines.extend(self.render_tool_use_enhanced(tool, theme));
+                        }
+                        ContentBlock::ToolResult(result) => {
+                            // Phase 2: Skip if tool is tracked in ToolCallManager
+                            // (ToolCallWidget already displays the result inline)
+                            if self.tool_call_manager.get(&result.tool_use_id).is_none() {
+                                // Fallback for tools not in manager (e.g., loaded from history)
+                                message_lines.extend(self.render_tool_result(result, theme));
+                            }
+                        }
+                        ContentBlock::Image(_) => {
+                            message_lines.push(Line::from(Span::styled(
+                                "  [Image]",
+                                Style::default().fg(theme.colors.muted.to_color()),
+                            )));
                         }
                     }
-                    ContentBlock::Image(_) => {
-                        lines.push(Line::from(Span::styled(
-                            "  [Image]",
-                            Style::default().fg(theme.colors.muted.to_color()),
-                        )));
-                    }
                 }
+
+                // Add spacing between messages
+                message_lines.push(Line::from(""));
             }
 
-            // Add spacing between messages
-            lines.push(Line::from(""));
+            // Update cache
+            self.cached_message_lines = message_lines;
+            self.cached_message_hash = current_hash;
         }
+
+        // Start with cached message lines (clone for this render)
+        let mut lines: Vec<Line> = self.cached_message_lines.clone();
 
         // TRC-017: Add streaming thinking buffer if present (before text buffer)
         if !thinking_buffer.is_empty() {
@@ -1813,13 +1901,78 @@ mod tests {
     #[test]
     fn test_clear_tool_calls() {
         let mut viewer = ConversationViewer::new();
-        
+
         viewer.register_tool_use(create_test_tool_use("tool1"));
         viewer.register_tool_use(create_test_tool_use("tool2"));
-        
+
         assert_eq!(viewer.tool_call_manager.len(), 2);
-        
+
         viewer.clear_tool_calls();
         assert!(viewer.tool_call_manager.is_empty());
+    }
+
+    #[test]
+    fn test_message_hash_consistency() {
+        // Phase 3: Test that same messages produce same hash
+        let viewer = ConversationViewer::new();
+
+        let messages = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text("Hello".to_string())],
+            },
+            Message {
+                role: Role::Assistant,
+                content: vec![ContentBlock::Text("Hi there".to_string())],
+            },
+        ];
+
+        let hash1 = viewer.compute_message_hash(&messages);
+        let hash2 = viewer.compute_message_hash(&messages);
+
+        assert_eq!(hash1, hash2, "Same messages should produce same hash");
+    }
+
+    #[test]
+    fn test_message_hash_changes_on_content_change() {
+        // Phase 3: Test that different messages produce different hash
+        let viewer = ConversationViewer::new();
+
+        let messages1 = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text("Hello".to_string())],
+            },
+        ];
+
+        let messages2 = vec![
+            Message {
+                role: Role::User,
+                content: vec![ContentBlock::Text("Hello World".to_string())],
+            },
+        ];
+
+        let hash1 = viewer.compute_message_hash(&messages1);
+        let hash2 = viewer.compute_message_hash(&messages2);
+
+        assert_ne!(hash1, hash2, "Different messages should produce different hash");
+    }
+
+    #[test]
+    fn test_cache_cleared_on_clear() {
+        // Phase 3: Test that cache is cleared when viewer is cleared
+        let mut viewer = ConversationViewer::new();
+
+        // Set some cache state
+        viewer.cached_message_hash = 12345;
+        viewer.last_streaming_len = 100;
+        viewer.last_thinking_len = 50;
+
+        viewer.clear();
+
+        assert_eq!(viewer.cached_message_hash, 0);
+        assert_eq!(viewer.last_streaming_len, 0);
+        assert_eq!(viewer.last_thinking_len, 0);
+        assert!(viewer.cached_message_lines.is_empty());
     }
 }
