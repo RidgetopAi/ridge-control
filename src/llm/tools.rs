@@ -16,6 +16,7 @@ use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
 
 use super::types::{ToolDefinition, ToolResult, ToolResultContent, ToolUse};
+use super::shell_session::{ShellSessionPool, SessionError};
 use crate::agent::mandrel::MandrelClient;
 
 /// Truncate a string at a safe UTF-8 character boundary.
@@ -226,11 +227,31 @@ impl ToolRegistry {
             name: "bash_execute".to_string(),
             require_confirmation: true,
             dangerous_mode_only: true,
-            timeout_secs: 60,
+            timeout_secs: 120,  // Increased for longer running commands
             max_output_bytes: 1_048_576,
             allowed_paths: vec![],
         });
-        
+
+        // Bash output - check/wait for background task output
+        self.policies.insert("bash_output".to_string(), ToolPolicy {
+            name: "bash_output".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: true, // Only if dangerous mode is enabled
+            timeout_secs: 600,  // Up to 10 minutes for long-running tasks
+            max_output_bytes: 1_048_576,
+            allowed_paths: vec![],
+        });
+
+        // Bash kill - terminate background task
+        self.policies.insert("bash_kill".to_string(), ToolPolicy {
+            name: "bash_kill".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: true,
+            timeout_secs: 5,
+            max_output_bytes: 1024,
+            allowed_paths: vec![],
+        });
+
         // List directory - safe
         self.policies.insert("list_directory".to_string(), ToolPolicy {
             name: "list_directory".to_string(),
@@ -652,16 +673,76 @@ impl ToolRegistry {
             },
             ToolDefinition {
                 name: "bash_execute".to_string(),
-                description: "Execute a bash command".to_string(),
+                description: "Execute shell commands in a persistent session. Sessions maintain working directory, \
+                    environment variables, and shell history. Use session_id to continue in an existing session \
+                    or start a new one. Commands can run in background with run_in_background=true.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "command": {
                             "type": "string",
-                            "description": "The bash command to execute"
+                            "description": "The shell command to execute"
+                        },
+                        "session_id": {
+                            "type": "string",
+                            "default": "default",
+                            "description": "Session identifier (creates if doesn't exist). Use named sessions like 'build', 'test', 'deploy' for separate contexts."
+                        },
+                        "run_in_background": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Run command in background, return immediately. Use bash_output to check status."
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "default": 120,
+                            "description": "Command timeout in seconds (max 600 for foreground commands)"
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Override working directory for this command only (does not change session cwd)"
                         }
                     },
                     "required": ["command"]
+                }),
+            },
+            ToolDefinition {
+                name: "bash_output".to_string(),
+                description: "Get output from a background shell command. Use block=true to wait for completion, \
+                    block=false for current status and partial output.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "Background task ID from bash_execute command"
+                        },
+                        "block": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Wait for task completion"
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "default": 30,
+                            "description": "Max time to wait (if blocking)"
+                        }
+                    },
+                    "required": ["task_id"]
+                }),
+            },
+            ToolDefinition {
+                name: "bash_kill".to_string(),
+                description: "Kill a running background shell command.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "task_id": {
+                            "type": "string",
+                            "description": "Background task ID to kill"
+                        }
+                    },
+                    "required": ["task_id"]
                 }),
             },
             ToolDefinition {
@@ -1424,6 +1505,8 @@ pub struct ToolExecutor {
     http_client: reqwest::Client,
     /// Web fetch cache (15-minute TTL, 100 entries max)
     web_cache: Arc<Mutex<WebFetchCache>>,
+    /// Shell session pool for persistent bash sessions
+    shell_pool: Arc<Mutex<ShellSessionPool>>,
 }
 
 impl ToolExecutor {
@@ -1446,6 +1529,7 @@ impl ToolExecutor {
             http_client,
             // 100 entries, 15-minute TTL (900 seconds)
             web_cache: Arc::new(Mutex::new(WebFetchCache::new(100, 900))),
+            shell_pool: Arc::new(Mutex::new(ShellSessionPool::new())),
         }
     }
 
@@ -1560,6 +1644,8 @@ impl ToolExecutor {
             "file_write" => self.execute_file_write(tool, policy).await,
             "list_directory" => self.execute_list_directory(tool, policy).await,
             "bash_execute" => self.execute_bash(tool, policy).await,
+            "bash_output" => self.execute_bash_output(tool, policy).await,
+            "bash_kill" => self.execute_bash_kill(tool).await,
             "file_delete" => self.execute_file_delete(tool, policy).await,
             // Search tools
             "grep" => self.execute_grep(tool, policy).await,
@@ -1900,62 +1986,148 @@ impl ToolExecutor {
         if !self.registry.is_dangerous_mode() {
             return Err(ToolError::DangerousModeRequired);
         }
-        
+
         let command = tool.input.get("command")
             .and_then(|c| c.as_str())
             .ok_or_else(|| ToolError::ParseError("Missing 'command' parameter".to_string()))?;
-        
-        let exec_future = async {
-            let child = Command::new("bash")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&self.working_dir)
-                .env_clear()
-                .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-                .env("HOME", dirs::home_dir().unwrap_or_else(|| PathBuf::from("/")))
-                .env("TERM", "xterm-256color")
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()?;
-            
-            let output = child.wait_with_output().await?;
-            Ok::<_, std::io::Error>(output)
-        };
-        
-        let output = timeout(Duration::from_secs(policy.timeout_secs), exec_future)
-            .await
-            .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
+
+        let session_id = tool.input.get("session_id")
+            .and_then(|s| s.as_str())
+            .unwrap_or("default");
+
+        let run_in_background = tool.input.get("run_in_background")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(false);
+
+        let timeout_secs = tool.input.get("timeout_secs")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(policy.timeout_secs)
+            .min(600);  // Max 10 minutes
+
+        let cwd_override = tool.input.get("cwd")
+            .and_then(|c| c.as_str());
+
+        // Get or create session
+        let mut pool = self.shell_pool.lock().await;
+        let session = pool.get_or_create(session_id)
             .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
-        
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let exit_code = output.status.code().unwrap_or(-1);
-        
-        let mut result = String::new();
-        
-        if !stdout.is_empty() {
-            result.push_str(&stdout);
+
+        if run_in_background {
+            // Spawn background task
+            let spawn_result = session.spawn_background(command).await
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
+            Ok(serde_json::to_string_pretty(&spawn_result)
+                .unwrap_or_else(|_| format!("Background task started: {}", spawn_result.task_id)))
+        } else {
+            // Execute foreground command
+            let result = session.execute(command, timeout_secs, cwd_override, policy.max_output_bytes).await
+                .map_err(|e| match e {
+                    SessionError::Timeout(secs) => ToolError::Timeout(secs),
+                    other => ToolError::ExecutionFailed(other.to_string()),
+                })?;
+
+            Ok(serde_json::to_string_pretty(&result)
+                .unwrap_or_else(|_| format!("{}\n\n[Exit code: {}]", result.stdout, result.exit_code)))
         }
-        
-        if !stderr.is_empty() {
-            if !result.is_empty() {
-                result.push_str("\n\n--- STDERR ---\n");
+    }
+
+    async fn execute_bash_output(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<String, ToolError> {
+        if !self.registry.is_dangerous_mode() {
+            return Err(ToolError::DangerousModeRequired);
+        }
+
+        let task_id = tool.input.get("task_id")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'task_id' parameter".to_string()))?;
+
+        let block = tool.input.get("block")
+            .and_then(|b| b.as_bool())
+            .unwrap_or(true);
+
+        let timeout_secs = tool.input.get("timeout_secs")
+            .and_then(|t| t.as_u64())
+            .unwrap_or(30)
+            .min(policy.timeout_secs);
+
+        if block {
+            // Wait for task completion with timeout using a polling loop
+            let start = std::time::Instant::now();
+            let timeout_duration = Duration::from_secs(timeout_secs);
+
+            loop {
+                // Check task status (acquire and release lock each iteration)
+                {
+                    let pool = self.shell_pool.lock().await;
+                    let (_, task) = pool.find_task(task_id)
+                        .ok_or_else(|| ToolError::ExecutionFailed(format!("Task not found: {}", task_id)))?;
+
+                    let status = task.status().await;
+                    if status != super::shell_session::TaskStatus::Running {
+                        // Task completed, return output
+                        let output = task.output().await;
+                        return Ok(serde_json::to_string_pretty(&output)
+                            .unwrap_or_else(|_| format!("Task completed with exit code: {:?}", output.exit_code)));
+                    }
+
+                    if start.elapsed() > timeout_duration {
+                        // Timeout, return partial output
+                        let output = task.output().await;
+                        return Ok(serde_json::to_string_pretty(&serde_json::json!({
+                            "task_id": task_id,
+                            "status": "running",
+                            "message": "Task still running after timeout",
+                            "partial_stdout": output.stdout,
+                            "partial_stderr": output.stderr,
+                        })).unwrap_or_else(|_| "Task still running".to_string()));
+                    }
+                }  // Lock released here
+
+                // Brief sleep before checking again
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-            result.push_str(&stderr);
+        } else {
+            // Non-blocking: return current output
+            let pool = self.shell_pool.lock().await;
+            let (_, task) = pool.find_task(task_id)
+                .ok_or_else(|| ToolError::ExecutionFailed(format!("Task not found: {}", task_id)))?;
+
+            let output = task.output().await;
+            Ok(serde_json::to_string_pretty(&output)
+                .unwrap_or_else(|_| format!("Task status: {:?}", output.status)))
         }
-        
-        result.push_str(&format!("\n\n[Exit code: {}]", exit_code));
-        
-        // Truncate if too large
-        if result.len() > policy.max_output_bytes {
-            result = format!(
-                "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                truncate_utf8_safe(&result, policy.max_output_bytes),
-                policy.max_output_bytes
-            );
+    }
+
+    async fn execute_bash_kill(&self, tool: &ToolUse) -> Result<String, ToolError> {
+        if !self.registry.is_dangerous_mode() {
+            return Err(ToolError::DangerousModeRequired);
         }
-        
-        Ok(result)
+
+        let task_id = tool.input.get("task_id")
+            .and_then(|t| t.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'task_id' parameter".to_string()))?;
+
+        let mut pool = self.shell_pool.lock().await;
+
+        // Find and kill the task
+        let task = pool.find_task_mut(task_id)
+            .ok_or_else(|| ToolError::ExecutionFailed(format!("Task not found: {}", task_id)))?;
+
+        let killed = task.kill().await;
+
+        if killed {
+            Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "task_id": task_id,
+                "status": "killed",
+                "message": "Background task terminated"
+            })).unwrap_or_else(|_| format!("Task {} killed", task_id)))
+        } else {
+            Ok(serde_json::to_string_pretty(&serde_json::json!({
+                "task_id": task_id,
+                "status": "not_running",
+                "message": "Task was not running"
+            })).unwrap_or_else(|_| format!("Task {} was not running", task_id)))
+        }
     }
 
     async fn execute_grep(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<String, ToolError> {
@@ -3690,16 +3862,39 @@ impl PendingToolUse {
                     .unwrap_or_else(|| ".".to_string())
             }
             "bash_execute" => {
-                self.tool.input.get("command")
+                let cmd = self.tool.input.get("command")
                     .and_then(|c| c.as_str())
                     .map(|s| {
-                        if s.len() > 60 {
-                            format!("{}...", &s[..60])
+                        if s.len() > 50 {
+                            format!("{}...", &s[..50])
                         } else {
                             s.to_string()
                         }
                     })
-                    .unwrap_or_else(|| "<unknown>".to_string())
+                    .unwrap_or_else(|| "<unknown>".to_string());
+                let session = self.tool.input.get("session_id")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("default");
+                if self.tool.input.get("run_in_background").and_then(|b| b.as_bool()).unwrap_or(false) {
+                    format!("[{}] (bg) {}", session, cmd)
+                } else {
+                    format!("[{}] {}", session, cmd)
+                }
+            }
+            "bash_output" => {
+                let task_id = self.tool.input.get("task_id")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("<task>");
+                let block = self.tool.input.get("block")
+                    .and_then(|b| b.as_bool())
+                    .unwrap_or(true);
+                format!("{} (block={})", task_id, block)
+            }
+            "bash_kill" => {
+                self.tool.input.get("task_id")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("<task>")
+                    .to_string()
             }
             "grep" => {
                 let pattern = self.tool.input.get("pattern")
@@ -4317,5 +4512,103 @@ mod tests {
         let pending = PendingToolUse::new(tool, ToolExecutionCheck::Allowed);
         let summary = pending.input_summary();
         assert!(summary.contains("query") || summary.contains("rust"));
+    }
+
+    #[test]
+    fn test_bash_tools_registered() {
+        let registry = ToolRegistry::new();
+
+        // Verify all bash-related tools are registered
+        assert!(registry.get_policy("bash_execute").is_some());
+        assert!(registry.get_policy("bash_output").is_some());
+        assert!(registry.get_policy("bash_kill").is_some());
+
+        // Verify they all require dangerous mode
+        assert_eq!(
+            registry.can_execute("bash_execute", true),
+            ToolExecutionCheck::RequiresDangerousMode
+        );
+        assert_eq!(
+            registry.can_execute("bash_output", true),
+            ToolExecutionCheck::RequiresDangerousMode
+        );
+        assert_eq!(
+            registry.can_execute("bash_kill", true),
+            ToolExecutionCheck::RequiresDangerousMode
+        );
+    }
+
+    #[test]
+    fn test_bash_tools_in_definitions() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+        let tool_names: Vec<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+
+        assert!(tool_names.contains(&"bash_execute"));
+        assert!(tool_names.contains(&"bash_output"));
+        assert!(tool_names.contains(&"bash_kill"));
+
+        // Verify bash_execute has session_id and run_in_background params
+        let bash_def = definitions.iter().find(|d| d.name == "bash_execute").unwrap();
+        let props = bash_def.input_schema.get("properties").unwrap();
+        assert!(props.get("command").is_some());
+        assert!(props.get("session_id").is_some());
+        assert!(props.get("run_in_background").is_some());
+        assert!(props.get("timeout_secs").is_some());
+        assert!(props.get("cwd").is_some());
+    }
+
+    #[test]
+    fn test_bash_execute_input_summary() {
+        // Test foreground command
+        let tool = ToolUse {
+            id: "test-bash".to_string(),
+            name: "bash_execute".to_string(),
+            input: serde_json::json!({"command": "echo hello", "session_id": "build"}),
+        };
+        let pending = PendingToolUse::new(tool, ToolExecutionCheck::Allowed);
+        let summary = pending.input_summary();
+        assert!(summary.contains("[build]"));
+        assert!(summary.contains("echo hello"));
+        assert!(!summary.contains("(bg)"));
+
+        // Test background command
+        let tool_bg = ToolUse {
+            id: "test-bash-bg".to_string(),
+            name: "bash_execute".to_string(),
+            input: serde_json::json!({
+                "command": "cargo build --release",
+                "run_in_background": true
+            }),
+        };
+        let pending_bg = PendingToolUse::new(tool_bg, ToolExecutionCheck::Allowed);
+        let summary_bg = pending_bg.input_summary();
+        assert!(summary_bg.contains("(bg)"));
+        assert!(summary_bg.contains("cargo build"));
+    }
+
+    #[test]
+    fn test_bash_output_input_summary() {
+        let tool = ToolUse {
+            id: "test-output".to_string(),
+            name: "bash_output".to_string(),
+            input: serde_json::json!({"task_id": "bg-abc123", "block": false}),
+        };
+        let pending = PendingToolUse::new(tool, ToolExecutionCheck::Allowed);
+        let summary = pending.input_summary();
+        assert!(summary.contains("bg-abc123"));
+        assert!(summary.contains("block=false"));
+    }
+
+    #[test]
+    fn test_bash_kill_input_summary() {
+        let tool = ToolUse {
+            id: "test-kill".to_string(),
+            name: "bash_kill".to_string(),
+            input: serde_json::json!({"task_id": "bg-xyz789"}),
+        };
+        let pending = PendingToolUse::new(tool, ToolExecutionCheck::Allowed);
+        let summary = pending.input_summary();
+        assert_eq!(summary, "bg-xyz789");
     }
 }

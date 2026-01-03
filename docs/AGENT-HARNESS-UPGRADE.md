@@ -28,16 +28,18 @@ This plan upgrades the ridge-control agent harness from ~70% to ~95% feature par
 ## Current State
 
 ### What We Have (Solid)
-| Component | File | Status |
-|-----------|------|--------|
-| Agent state machine | `src/agent/engine.rs` | ✅ Complete |
-| Context management | `src/agent/context.rs` | ✅ Complete |
-| Token counting | `src/agent/tokens.rs` | ✅ Complete |
-| Tool registry | `src/llm/tools.rs` | ✅ Complete |
-| Thread persistence | `src/agent/thread.rs` | ✅ Complete |
-| 9 tools | `src/llm/tools.rs` | ✅ Complete |
+
+| Component           | File                   | Status     |
+| ------------------- | ---------------------- | ---------- |
+| Agent state machine | `src/agent/engine.rs`  | ✅ Complete |
+| Context management  | `src/agent/context.rs` | ✅ Complete |
+| Token counting      | `src/agent/tokens.rs`  | ✅ Complete |
+| Tool registry       | `src/llm/tools.rs`     | ✅ Complete |
+| Thread persistence  | `src/agent/thread.rs`  | ✅ Complete |
+| 9 tools             | `src/llm/tools.rs`     | ✅ Complete |
 
 ### Current Tools
+
 ```
 file_read, file_write, file_delete, bash_execute,
 list_directory, grep, glob, tree, find_symbol
@@ -71,24 +73,27 @@ pub enum GrepOutputMode {
 **Implementation Details**:
 
 1. Update `ToolDefinition` for grep:
-```rust
-"output_mode": {
+   
+   ```rust
+   "output_mode": {
     "type": "string",
     "enum": ["content", "files_with_matches", "count"],
     "default": "files_with_matches",
     "description": "Output format: 'content' for full lines, 'files_with_matches' for paths only, 'count' for match counts"
-}
-```
+   }
+   ```
 
 2. Update `execute_grep()` to handle modes:
-```rust
-// For files_with_matches mode:
-cmd.arg("--files-with-matches");
+   
+   ```rust
+   // For files_with_matches mode:
+   cmd.arg("--files-with-matches");
+   ```
 
 // For count mode:
 cmd.arg("--count");
-```
 
+```
 3. Update JSON output format per mode
 
 **Test Cases**:
@@ -121,6 +126,7 @@ Add `head_limit` and `offset` parameters:
 **Implementation**: Apply after ripgrep returns, slice the results vector.
 
 **Test Cases**:
+
 - [ ] `head_limit: 10` returns only 10 results
 - [ ] `offset: 10, head_limit: 10` returns results 11-20
 - [ ] Works with all output modes
@@ -194,10 +200,12 @@ async fn execute_ast_search(&self, tool: &ToolUse, policy: &ToolPolicy) -> Resul
 ```
 
 **Dependencies**:
+
 - Requires `ast-grep` binary (install: `cargo install ast-grep` or `npm i -g @ast-grep/cli`)
 - Document in README
 
 **Test Cases**:
+
 - [ ] Find all function definitions: `fn $NAME($$$)`
 - [ ] Find all .unwrap() calls: `$EXPR.unwrap()`
 - [ ] Find struct definitions: `struct $NAME { $$$ }`
@@ -292,6 +300,7 @@ async fn execute_edit(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<Stri
 **Policy**: Requires confirmation (same as file_write)
 
 **Test Cases**:
+
 - [ ] Single replacement works
 - [ ] replace_all replaces all occurrences
 - [ ] Error if old_string not found
@@ -373,6 +382,7 @@ impl Default for SubagentsConfig {
 ```
 
 **Config file** (`~/.config/ridge-control/config.toml`):
+
 ```toml
 [subagents.explore]
 model = "claude-3-5-haiku-20241022"
@@ -396,11 +406,13 @@ provider = "openai"
 **Goal**: Allow runtime configuration of subagent models via command palette (matching existing provider/model selection UX)
 
 **Files**:
+
 - `src/action.rs` - New action variants
 - `src/components/command_palette.rs` - New registry methods
 - `src/app.rs` - Handle actions, update command palette
 
 **New Action Variants** (`src/action.rs`):
+
 ```rust
 /// Select model for a specific subagent type
 SubagentSelectModel { agent_type: String, model: String },
@@ -409,6 +421,7 @@ SubagentSelectProvider { agent_type: String, provider: String },
 ```
 
 **CommandRegistry Methods** (`src/components/command_palette.rs`):
+
 ```rust
 /// Set available models for each subagent type
 pub fn set_subagent_models(&mut self, subagent_configs: &SubagentsConfig, available_models: &HashMap<String, Vec<String>>) {
@@ -445,6 +458,7 @@ pub fn set_subagent_models(&mut self, subagent_configs: &SubagentsConfig, availa
 ```
 
 **App Integration** (`src/app.rs`):
+
 ```rust
 // In handle_action match:
 Action::SubagentSelectModel { agent_type, model } => {
@@ -460,12 +474,14 @@ Action::SubagentSelectModel { agent_type, model } => {
 ```
 
 **UX**:
+
 - Commands appear as: `Subagent explore: claude-haiku ✓`
 - Typing "subagent" or "explore" filters to relevant options
 - Current model shows checkmark (✓)
 - Changes take effect immediately for next subagent spawn
 
 **Test Cases**:
+
 - [ ] Subagent commands appear in palette
 - [ ] Checkmark shows current model per agent type
 - [ ] Selection updates config and refreshes palette
@@ -556,6 +572,7 @@ impl SubagentManager {
 ```
 
 **Integration with AgentEngine**:
+
 - Add `SubagentManager` to `AgentEngine` struct
 - Handle `task` tool execution in tool executor
 - Return sub-agent results as tool output
@@ -691,6 +708,7 @@ ToolDefinition {
 ```
 
 **UI Integration**:
+
 - New component `src/components/ask_user_dialog.rs`
 - Shows question, options as selectable list
 - Returns selected option or custom text
@@ -901,23 +919,27 @@ ToolDefinition {
 ## Implementation Order
 
 ### Sprint 1 (Days 1-3): Phase 1 - Search Excellence
+
 1. Task 1.1: grep output_mode
 2. Task 1.2: grep pagination
 3. Task 1.4: Edit tool
 4. Task 1.3: ast_search tool
 
 ### Sprint 2 (Days 4-7): Phase 2a - Sub-agents
+
 1. Task 2.1: SubagentConfig
 2. Task 2.1b: Command palette subagent model selection
 3. Task 2.2: Task tool + SubagentManager
 4. Task 2.4: ask_user tool
 
 ### Sprint 3 (Days 8-10): Phase 2b - Mandrel
+
 1. Task 2.3: MandrelClient
 2. Integration with agent loop
 3. Auto-store on handoff
 
 ### Sprint 4 (Days 11-17): Phase 3 - LSP
+
 1. Task 3.1: LspClient
 2. Task 3.2: LspManager
 3. Task 3.3: LSP tools
@@ -927,16 +949,19 @@ ToolDefinition {
 ## Testing Strategy
 
 ### Unit Tests
+
 - Each tool in isolation
 - Mock LLM responses for sub-agents
 - Mock Mandrel for context operations
 
 ### Integration Tests
+
 - Full agent loop with tool execution
 - Sub-agent spawning and result handling
 - LSP client with real language servers
 
 ### Manual Testing
+
 - Docker environment with all tools
 - Multi-turn conversations
 - Cross-session continuity
@@ -956,6 +981,7 @@ Each phase is independently deployable. If issues arise:
 ## Dependencies
 
 ### External Binaries (Docker)
+
 ```bash
 # Phase 1
 cargo install ast-grep
@@ -969,6 +995,7 @@ pip install python-lsp-server
 ```
 
 ### Rust Crates
+
 ```toml
 # Cargo.toml additions
 tower-lsp = "0.20"  # LSP client
@@ -990,6 +1017,7 @@ task_create: "P1-T1.4: Add Edit tool"
 ```
 
 Update status as work completes:
+
 ```
 task_update: taskId, status: "in_progress"
 task_update: taskId, status: "completed"
