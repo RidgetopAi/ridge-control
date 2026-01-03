@@ -799,12 +799,7 @@ impl ConversationViewer {
                 match content_block {
                     ContentBlock::Text(text) => {
                         let clean_text = strip_ansi(text);
-                        for line in clean_text.lines() {
-                            lines.push(Line::from(Span::styled(
-                                format!("  {}", line),
-                                Style::default().fg(theme.colors.foreground.to_color()),
-                            )));
-                        }
+                        lines.extend(self.render_text_with_diff_blocks(&clean_text, theme));
                     }
                     ContentBlock::Thinking(text) => {
                         // TRC-017: Collapsible thinking blocks
@@ -1230,6 +1225,116 @@ impl ConversationViewer {
         lines
     }
 
+    /// Render text content, detecting and styling ```diff code blocks
+    fn render_text_with_diff_blocks(&self, text: &str, theme: &Theme) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+        let mut in_diff_block = false;
+        let mut in_code_block = false;
+
+        for line in text.lines() {
+            let trimmed = line.trim();
+
+            // Check for code block markers
+            if trimmed.starts_with("```") {
+                if trimmed == "```diff" {
+                    in_diff_block = true;
+                    in_code_block = true;
+                    // Render the marker in muted color
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", line),
+                        Style::default().fg(theme.colors.muted.to_color()),
+                    )));
+                    continue;
+                } else if in_code_block && trimmed == "```" {
+                    // End of code block
+                    in_diff_block = false;
+                    in_code_block = false;
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", line),
+                        Style::default().fg(theme.colors.muted.to_color()),
+                    )));
+                    continue;
+                } else if trimmed.starts_with("```") {
+                    // Start of non-diff code block
+                    in_code_block = true;
+                    lines.push(Line::from(Span::styled(
+                        format!("  {}", line),
+                        Style::default().fg(theme.colors.muted.to_color()),
+                    )));
+                    continue;
+                }
+            }
+
+            if in_diff_block {
+                // Apply diff styling - reuse the existing method with adjusted prefix
+                let styled = self.style_diff_line_for_text(line, theme);
+                lines.push(styled);
+            } else {
+                // Normal text rendering
+                lines.push(Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(theme.colors.foreground.to_color()),
+                )));
+            }
+        }
+
+        lines
+    }
+
+    /// Style a diff line within markdown text (uses "  " prefix instead of "    ")
+    fn style_diff_line_for_text(&self, line: &str, theme: &Theme) -> Line<'static> {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("+++") || trimmed.starts_with("---") {
+            Line::from(Span::styled(
+                format!("  {}", line),
+                Style::default()
+                    .fg(theme.colors.accent.to_color())
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if trimmed.starts_with("@@") {
+            Line::from(Span::styled(
+                format!("  {}", line),
+                Style::default()
+                    .fg(theme.colors.muted.to_color())
+                    .add_modifier(Modifier::ITALIC),
+            ))
+        } else if trimmed.starts_with('+') {
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "+".to_string(),
+                    Style::default()
+                        .fg(theme.colors.success.to_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    trimmed[1..].to_string(),
+                    Style::default().fg(theme.colors.success.to_color()),
+                ),
+            ])
+        } else if trimmed.starts_with('-') {
+            Line::from(vec![
+                Span::styled("  ", Style::default()),
+                Span::styled(
+                    "-".to_string(),
+                    Style::default()
+                        .fg(theme.colors.error.to_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    trimmed[1..].to_string(),
+                    Style::default().fg(theme.colors.error.to_color()),
+                ),
+            ])
+        } else {
+            Line::from(Span::styled(
+                format!("  {}", line),
+                Style::default().fg(theme.colors.foreground.to_color()),
+            ))
+        }
+    }
+
     fn render_tool_result(&self, result: &ToolResult, theme: &Theme) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
 
@@ -1238,7 +1343,7 @@ impl ConversationViewer {
         } else {
             ("󰄬", theme.colors.success.to_color())
         };
-        
+
         let collapse_indicator = if self.tool_results_collapsed { "▶" } else { "▼" };
 
         // Render result content
