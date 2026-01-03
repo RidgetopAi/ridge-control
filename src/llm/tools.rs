@@ -3550,4 +3550,138 @@ mod tests {
         assert!(summary.starts_with("src/lib.rs:"));
         assert!(summary.contains("..."));
     }
+
+    // ========================================
+    // P1-T1: grep output_mode tests
+    // ========================================
+
+    #[test]
+    fn test_grep_definition_has_output_mode() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        let grep_def = definitions.iter().find(|d| d.name == "grep").unwrap();
+        let schema = &grep_def.input_schema;
+        let props = schema.get("properties").unwrap();
+
+        // Verify output_mode parameter exists
+        let output_mode = props.get("output_mode").unwrap();
+        assert!(output_mode.get("enum").is_some());
+
+        // Verify all three modes are present
+        let modes = output_mode.get("enum").unwrap().as_array().unwrap();
+        let mode_strs: Vec<&str> = modes.iter().map(|v| v.as_str().unwrap()).collect();
+        assert!(mode_strs.contains(&"files_with_matches"));
+        assert!(mode_strs.contains(&"content"));
+        assert!(mode_strs.contains(&"count"));
+    }
+
+    #[test]
+    fn test_grep_definition_has_type_filter() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        let grep_def = definitions.iter().find(|d| d.name == "grep").unwrap();
+        let props = grep_def.input_schema.get("properties").unwrap();
+
+        // Verify type parameter exists
+        assert!(props.get("type").is_some());
+
+        // Verify multiline parameter exists
+        assert!(props.get("multiline").is_some());
+
+        // Verify invert parameter exists
+        assert!(props.get("invert").is_some());
+    }
+
+    // ========================================
+    // P1-T3: file_read multi-span tests
+    // ========================================
+
+    #[test]
+    fn test_file_read_definition_has_spans() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        let file_read_def = definitions.iter().find(|d| d.name == "file_read").unwrap();
+        let props = file_read_def.input_schema.get("properties").unwrap();
+
+        // Verify spans parameter exists
+        let spans = props.get("spans").unwrap();
+        assert_eq!(spans.get("type").unwrap().as_str().unwrap(), "array");
+
+        // Verify show_line_numbers exists
+        assert!(props.get("show_line_numbers").is_some());
+    }
+
+    #[test]
+    fn test_merge_spans_empty() {
+        let spans: Vec<(usize, usize)> = vec![];
+        let merged = ToolExecutor::merge_spans(spans);
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn test_merge_spans_single() {
+        let spans = vec![(10, 20)];
+        let merged = ToolExecutor::merge_spans(spans);
+        assert_eq!(merged, vec![(10, 20)]);
+    }
+
+    #[test]
+    fn test_merge_spans_non_overlapping() {
+        let spans = vec![(1, 10), (50, 60), (100, 110)];
+        let merged = ToolExecutor::merge_spans(spans);
+        assert_eq!(merged, vec![(1, 10), (50, 60), (100, 110)]);
+    }
+
+    #[test]
+    fn test_merge_spans_overlapping() {
+        let spans = vec![(1, 20), (15, 30), (25, 40)];
+        let merged = ToolExecutor::merge_spans(spans);
+        assert_eq!(merged, vec![(1, 40)]);
+    }
+
+    #[test]
+    fn test_merge_spans_adjacent() {
+        // Adjacent spans (within 1-line gap) should merge
+        let spans = vec![(1, 10), (11, 20), (21, 30)];
+        let merged = ToolExecutor::merge_spans(spans);
+        assert_eq!(merged, vec![(1, 30)]);
+    }
+
+    #[test]
+    fn test_merge_spans_unsorted() {
+        // Should sort before merging
+        let spans = vec![(50, 60), (1, 10), (100, 110)];
+        let merged = ToolExecutor::merge_spans(spans);
+        assert_eq!(merged, vec![(1, 10), (50, 60), (100, 110)]);
+    }
+
+    #[test]
+    fn test_detect_mime_type_images() {
+        use std::path::Path;
+
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("test.png")), "image/png");
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("test.jpg")), "image/jpeg");
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("test.jpeg")), "image/jpeg");
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("test.gif")), "image/gif");
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("test.webp")), "image/webp");
+    }
+
+    #[test]
+    fn test_detect_mime_type_documents() {
+        use std::path::Path;
+
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("doc.pdf")), "application/pdf");
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("archive.zip")), "application/zip");
+    }
+
+    #[test]
+    fn test_detect_mime_type_unknown() {
+        use std::path::Path;
+
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("unknown.xyz")), "application/octet-stream");
+        assert_eq!(ToolExecutor::detect_mime_type(Path::new("noext")), "application/octet-stream");
+    }
 }
