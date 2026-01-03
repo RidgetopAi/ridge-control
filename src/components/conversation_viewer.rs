@@ -1282,15 +1282,24 @@ impl ConversationViewer {
             let max_lines = 50;
             let truncated = total_lines > max_lines;
 
+            // Detect if this looks like diff output (edit preview)
+            let is_diff_output = content_str.contains("\n--- ") && content_str.contains("\n+++ ");
+
             for line in content_lines.iter().take(max_lines) {
-                lines.push(Line::from(Span::styled(
-                    format!("    {}", line),
-                    Style::default().fg(if result.is_error {
-                        theme.colors.error.to_color()
-                    } else {
-                        theme.colors.foreground.to_color()
-                    }),
-                )));
+                let styled_line = if is_diff_output && !result.is_error {
+                    // Apply diff styling
+                    self.style_diff_line(line, theme)
+                } else {
+                    Line::from(Span::styled(
+                        format!("    {}", line),
+                        Style::default().fg(if result.is_error {
+                            theme.colors.error.to_color()
+                        } else {
+                            theme.colors.foreground.to_color()
+                        }),
+                    ))
+                };
+                lines.push(styled_line);
             }
 
             if truncated {
@@ -1304,6 +1313,71 @@ impl ConversationViewer {
         }
 
         lines
+    }
+
+    /// Style a single diff line with appropriate colors
+    fn style_diff_line(&self, line: &str, theme: &Theme) -> Line<'static> {
+        let trimmed = line.trim_start();
+
+        if trimmed.starts_with("+++") || trimmed.starts_with("---") {
+            // File headers - bold accent color
+            Line::from(Span::styled(
+                format!("    {}", line),
+                Style::default()
+                    .fg(theme.colors.accent.to_color())
+                    .add_modifier(Modifier::BOLD),
+            ))
+        } else if trimmed.starts_with("@@") {
+            // Hunk headers - muted italic
+            Line::from(Span::styled(
+                format!("    {}", line),
+                Style::default()
+                    .fg(theme.colors.muted.to_color())
+                    .add_modifier(Modifier::ITALIC),
+            ))
+        } else if trimmed.starts_with('+') {
+            // Addition - green
+            Line::from(vec![
+                Span::styled(
+                    "    ",
+                    Style::default(),
+                ),
+                Span::styled(
+                    "+".to_string(),
+                    Style::default()
+                        .fg(theme.colors.success.to_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    trimmed[1..].to_string(),
+                    Style::default().fg(theme.colors.success.to_color()),
+                ),
+            ])
+        } else if trimmed.starts_with('-') {
+            // Deletion - red
+            Line::from(vec![
+                Span::styled(
+                    "    ",
+                    Style::default(),
+                ),
+                Span::styled(
+                    "-".to_string(),
+                    Style::default()
+                        .fg(theme.colors.error.to_color())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    trimmed[1..].to_string(),
+                    Style::default().fg(theme.colors.error.to_color()),
+                ),
+            ])
+        } else {
+            // Context line or other - normal foreground
+            Line::from(Span::styled(
+                format!("    {}", line),
+                Style::default().fg(theme.colors.foreground.to_color()),
+            ))
+        }
     }
 
     pub fn scroll_up(&mut self, n: u16) {
