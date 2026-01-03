@@ -580,57 +580,87 @@ impl ToolRegistry {
             },
             ToolDefinition {
                 name: "grep".to_string(),
-                description: "Search for text patterns in files. Returns matches with line numbers and context. Uses ripgrep for fast searching.".to_string(),
+                description: "Search for text patterns in files using ripgrep. Returns matches with context. \
+                    Defaults to files_with_matches mode for efficiency - use output_mode='content' for full match text. \
+                    Respects .gitignore automatically. Uses smart-case by default (case-insensitive for \
+                    lowercase patterns, case-sensitive if pattern contains uppercase).".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "pattern": {
                             "type": "string",
-                            "description": "The text or regex pattern to search for"
+                            "description": "Text or regex pattern to search for"
                         },
                         "path": {
                             "type": "string",
                             "description": "Directory or file to search in (default: current directory)"
                         },
+                        "output_mode": {
+                            "type": "string",
+                            "enum": ["files_with_matches", "content", "count"],
+                            "default": "files_with_matches",
+                            "description": "Output format: 'files_with_matches' returns paths only (most efficient), \
+                                'content' returns matching lines with context, 'count' returns match counts per file"
+                        },
+                        "glob": {
+                            "type": "string",
+                            "description": "Filter files by glob pattern (e.g., '*.rs', '*.{ts,tsx}')"
+                        },
+                        "type": {
+                            "type": "string",
+                            "description": "File type filter (e.g., 'rust', 'typescript', 'python', 'js'). More efficient than glob for standard types."
+                        },
                         "include": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "Glob patterns to include (e.g. ['*.rs', '*.toml'])"
+                            "description": "Multiple glob patterns to include (e.g. ['*.rs', '*.toml'])"
                         },
                         "exclude": {
                             "type": "array",
                             "items": {"type": "string"},
                             "description": "Glob patterns to exclude (e.g. ['target/**', 'node_modules/**'])"
                         },
+                        "context_before": {
+                            "type": "integer",
+                            "description": "Lines of context before each match (only for content mode)"
+                        },
+                        "context_after": {
+                            "type": "integer",
+                            "description": "Lines of context after each match (only for content mode)"
+                        },
+                        "context_lines": {
+                            "type": "integer",
+                            "description": "Lines of context before AND after match (shorthand, default: 2)"
+                        },
+                        "head_limit": {
+                            "type": "integer",
+                            "default": 50,
+                            "description": "Maximum results to return (default: 50)"
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "default": 0,
+                            "description": "Skip first N results for pagination (default: 0)"
+                        },
+                        "case_sensitive": {
+                            "type": "boolean",
+                            "description": "Force case-sensitive search (default: smart-case)"
+                        },
                         "literal": {
                             "type": "boolean",
                             "description": "Treat pattern as literal text, not regex (default: false)"
                         },
-                        "case_sensitive": {
+                        "multiline": {
                             "type": "boolean",
-                            "description": "Case sensitive matching (default: true)"
+                            "description": "Enable multiline matching where patterns can span lines (default: false)"
                         },
-                        "context_lines": {
-                            "type": "integer",
-                            "description": "Lines of context before/after match (default: 2)"
+                        "invert": {
+                            "type": "boolean",
+                            "description": "Return lines that do NOT match the pattern (default: false)"
                         },
                         "max_results": {
                             "type": "integer",
-                            "description": "Maximum matches to return (default: 50)"
-                        },
-                        "output_mode": {
-                            "type": "string",
-                            "enum": ["content", "files_with_matches", "count"],
-                            "default": "files_with_matches",
-                            "description": "Output format: 'content' for full lines with context, 'files_with_matches' for paths only (default), 'count' for match counts per file"
-                        },
-                        "head_limit": {
-                            "type": "integer",
-                            "description": "Limit results to first N entries (default: no limit, use max_results for content mode)"
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "description": "Skip first N entries for pagination (default: 0)"
+                            "description": "Deprecated: use head_limit instead"
                         }
                     },
                     "required": ["pattern"]
@@ -1617,41 +1647,71 @@ impl ToolExecutor {
             return Err(ToolError::PathNotAllowed(search_path.to_string()));
         }
 
-        let literal = tool.input.get("literal")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let case_sensitive = tool.input.get("case_sensitive")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-        let context_lines = tool.input.get("context_lines")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(2) as usize;
-        let max_results = tool.input.get("max_results")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(50) as usize;
-
         // Parse output_mode - default to files_with_matches for efficiency
         let output_mode = tool.input.get("output_mode")
             .and_then(|v| v.as_str())
             .unwrap_or("files_with_matches");
 
         // Parse pagination parameters
+        // Support both head_limit (new) and max_results (deprecated) for backwards compat
         let head_limit = tool.input.get("head_limit")
             .and_then(|v| v.as_i64())
-            .map(|v| v as usize);
+            .or_else(|| tool.input.get("max_results").and_then(|v| v.as_i64()))
+            .unwrap_or(50) as usize;
         let offset = tool.input.get("offset")
             .and_then(|v| v.as_i64())
             .unwrap_or(0) as usize;
 
-        // Build ripgrep command based on output mode
+        // Parse options
+        let literal = tool.input.get("literal")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let case_sensitive = tool.input.get("case_sensitive")
+            .and_then(|v| v.as_bool());
+        let multiline = tool.input.get("multiline")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let invert = tool.input.get("invert")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        // Context lines (for content mode)
+        let context_before = tool.input.get("context_before")
+            .and_then(|v| v.as_i64());
+        let context_after = tool.input.get("context_after")
+            .and_then(|v| v.as_i64());
+        let context_lines = tool.input.get("context_lines")
+            .and_then(|v| v.as_i64())
+            .unwrap_or(2);
+
+        // Build ripgrep command
         let mut cmd = Command::new("rg");
 
+        // Smart-case by default: case-insensitive for lowercase patterns,
+        // case-sensitive if pattern contains uppercase
+        match case_sensitive {
+            Some(true) => { cmd.arg("--case-sensitive"); }
+            Some(false) => { cmd.arg("--ignore-case"); }
+            None => { cmd.arg("--smart-case"); }
+        }
+
+        // Output mode flags
         match output_mode {
             "content" => {
                 // Full content mode: JSON output with context lines
-                cmd.arg("--json")
-                    .arg("--max-count").arg(max_results.to_string())
-                    .arg("-C").arg(context_lines.to_string());
+                cmd.arg("--json");
+
+                // Handle context lines - context_before/after override context_lines
+                if context_before.is_some() || context_after.is_some() {
+                    if let Some(before) = context_before {
+                        cmd.arg("-B").arg(before.to_string());
+                    }
+                    if let Some(after) = context_after {
+                        cmd.arg("-A").arg(after.to_string());
+                    }
+                } else {
+                    cmd.arg("-C").arg(context_lines.to_string());
+                }
             }
             "files_with_matches" => {
                 // Files only mode: just list matching file paths
@@ -1663,19 +1723,37 @@ impl ToolExecutor {
             }
             _ => {
                 return Err(ToolError::ParseError(
-                    format!("Invalid output_mode: '{}'. Use 'content', 'files_with_matches', or 'count'", output_mode)
+                    format!("Invalid output_mode: '{}'. Use 'files_with_matches', 'content', or 'count'", output_mode)
                 ));
             }
         }
 
+        // Literal mode (treat pattern as fixed string, not regex)
         if literal {
             cmd.arg("--fixed-strings");
         }
-        if !case_sensitive {
-            cmd.arg("--ignore-case");
+
+        // Multiline mode (patterns can span lines)
+        if multiline {
+            cmd.arg("-U").arg("--multiline-dotall");
         }
 
-        // Handle include patterns
+        // Invert match (return non-matching lines)
+        if invert {
+            cmd.arg("--invert-match");
+        }
+
+        // File type filter (more efficient than glob for standard types)
+        if let Some(file_type) = tool.input.get("type").and_then(|v| v.as_str()) {
+            cmd.arg("-t").arg(file_type);
+        }
+
+        // Single glob filter
+        if let Some(glob) = tool.input.get("glob").and_then(|v| v.as_str()) {
+            cmd.arg("--glob").arg(glob);
+        }
+
+        // Handle include patterns (array)
         if let Some(includes) = tool.input.get("include").and_then(|v| v.as_array()) {
             for inc in includes {
                 if let Some(glob) = inc.as_str() {
@@ -1684,7 +1762,7 @@ impl ToolExecutor {
             }
         }
 
-        // Handle exclude patterns
+        // Handle exclude patterns (array)
         if let Some(excludes) = tool.input.get("exclude").and_then(|v| v.as_array()) {
             for exc in excludes {
                 if let Some(glob) = exc.as_str() {
@@ -1711,26 +1789,55 @@ impl ToolExecutor {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        // Format output based on mode
+        // Format output based on mode with structured JSON responses
         let result_str = match output_mode {
             "content" => {
                 // Parse ripgrep JSON output and format nicely
                 let mut matches: Vec<serde_json::Value> = Vec::new();
+                let mut context_before_lines: Vec<String> = Vec::new();
+                let mut context_after_lines: Vec<String> = Vec::new();
+                let mut current_file = String::new();
 
                 for line in stdout.lines() {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-                        if json.get("type").and_then(|t| t.as_str()) == Some("match") {
-                            if let Some(data) = json.get("data") {
-                                let path = data.get("path").and_then(|p| p.get("text")).and_then(|t| t.as_str()).unwrap_or("");
-                                let line_num = data.get("line_number").and_then(|n| n.as_i64()).unwrap_or(0);
-                                let text = data.get("lines").and_then(|l| l.get("text")).and_then(|t| t.as_str()).unwrap_or("");
+                        match json.get("type").and_then(|t| t.as_str()) {
+                            Some("match") => {
+                                if let Some(data) = json.get("data") {
+                                    let path = data.get("path").and_then(|p| p.get("text")).and_then(|t| t.as_str()).unwrap_or("");
+                                    let line_num = data.get("line_number").and_then(|n| n.as_i64()).unwrap_or(0);
+                                    let text = data.get("lines").and_then(|l| l.get("text")).and_then(|t| t.as_str()).unwrap_or("");
 
-                                matches.push(serde_json::json!({
-                                    "path": path,
-                                    "line": line_num,
-                                    "text": text.trim_end()
-                                }));
+                                    // Track file changes for context
+                                    if path != current_file {
+                                        current_file = path.to_string();
+                                        context_before_lines.clear();
+                                    }
+
+                                    matches.push(serde_json::json!({
+                                        "file": path,
+                                        "line": line_num,
+                                        "text": text.trim_end(),
+                                        "context_before": context_before_lines.clone(),
+                                        "context_after": context_after_lines.clone()
+                                    }));
+
+                                    context_before_lines.clear();
+                                    context_after_lines.clear();
+                                }
                             }
+                            Some("context") => {
+                                if let Some(data) = json.get("data") {
+                                    let text = data.get("lines").and_then(|l| l.get("text")).and_then(|t| t.as_str()).unwrap_or("");
+                                    // Context lines are added to the appropriate buffer
+                                    // ripgrep outputs context before match, then match, then context after
+                                    if matches.is_empty() || context_after_lines.is_empty() {
+                                        context_before_lines.push(text.trim_end().to_string());
+                                    } else {
+                                        context_after_lines.push(text.trim_end().to_string());
+                                    }
+                                }
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -1741,16 +1848,26 @@ impl ToolExecutor {
                 let paginated: Vec<serde_json::Value> = matches
                     .into_iter()
                     .skip(offset)
-                    .take(head_limit.unwrap_or(usize::MAX))
+                    .take(head_limit)
                     .collect();
 
-                let result = serde_json::json!({
+                let shown = paginated.len();
+                let truncated = offset + shown < total_matches;
+
+                let mut result = serde_json::json!({
+                    "mode": "content",
+                    "pattern": pattern,
                     "matches": paginated,
                     "total_matches": total_matches,
+                    "shown": shown,
                     "offset": offset,
-                    "returned": paginated.len(),
-                    "truncated": total_matches >= max_results
+                    "truncated": truncated
                 });
+
+                // Add next_offset for pagination if truncated
+                if truncated {
+                    result["next_offset"] = serde_json::json!(offset + shown);
+                }
 
                 serde_json::to_string_pretty(&result)
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
@@ -1764,15 +1881,25 @@ impl ToolExecutor {
                 let paginated: Vec<&str> = files
                     .into_iter()
                     .skip(offset)
-                    .take(head_limit.unwrap_or(usize::MAX))
+                    .take(head_limit)
                     .collect();
 
-                let result = serde_json::json!({
+                let shown = paginated.len();
+                let truncated = offset + shown < total_files;
+
+                let mut result = serde_json::json!({
+                    "mode": "files_with_matches",
+                    "pattern": pattern,
                     "files": paginated,
                     "total_files": total_files,
-                    "offset": offset,
-                    "returned": paginated.len()
+                    "files_shown": shown,
+                    "truncated": truncated
                 });
+
+                // Add next_offset for pagination if truncated
+                if truncated {
+                    result["next_offset"] = serde_json::json!(offset + shown);
+                }
 
                 serde_json::to_string_pretty(&result)
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
@@ -1800,16 +1927,25 @@ impl ToolExecutor {
                 let paginated: Vec<serde_json::Value> = counts
                     .into_iter()
                     .skip(offset)
-                    .take(head_limit.unwrap_or(usize::MAX))
+                    .take(head_limit)
                     .collect();
 
-                let result = serde_json::json!({
+                let shown = paginated.len();
+                let truncated = offset + shown < total_files;
+
+                let mut result = serde_json::json!({
+                    "mode": "count",
+                    "pattern": pattern,
                     "counts": paginated,
                     "total_files": total_files,
                     "total_matches": total_matches,
-                    "offset": offset,
-                    "returned": paginated.len()
+                    "truncated": truncated
                 });
+
+                // Add next_offset for pagination if truncated
+                if truncated {
+                    result["next_offset"] = serde_json::json!(offset + shown);
+                }
 
                 serde_json::to_string_pretty(&result)
                     .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?
