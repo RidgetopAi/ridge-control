@@ -494,25 +494,47 @@ impl ToolRegistry {
         vec![
             ToolDefinition {
                 name: "file_read".to_string(),
-                description: "Read contents of a file. Supports reading specific line ranges for efficiency.".to_string(),
+                description: "Read file contents. Supports reading specific line ranges or \
+                    multiple non-contiguous spans in a single call for efficiency. \
+                    Automatically detects binary files and returns metadata only. \
+                    Line numbers are 1-indexed.".to_string(),
                 input_schema: serde_json::json!({
                     "type": "object",
                     "properties": {
                         "path": {
                             "type": "string",
-                            "description": "The path to the file to read"
+                            "description": "Path to the file to read"
                         },
                         "start_line": {
                             "type": "integer",
-                            "description": "First line to read (1-indexed, default: 1)"
+                            "description": "Start line (1-indexed, default: 1). Shorthand for single span."
                         },
                         "end_line": {
                             "type": "integer",
-                            "description": "Last line to read (inclusive, default: end of file)"
+                            "description": "End line (inclusive, default: end of file). Shorthand for single span."
+                        },
+                        "spans": {
+                            "type": "array",
+                            "description": "Multiple line ranges to read: [{\"start\": N, \"end\": M}, ...]. \
+                                More efficient than multiple file_read calls. Adjacent/overlapping spans are merged.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "start": { "type": "integer", "description": "Start line (1-indexed)" },
+                                    "end": { "type": "integer", "description": "End line (inclusive)" }
+                                },
+                                "required": ["start", "end"]
+                            }
                         },
                         "max_lines": {
                             "type": "integer",
-                            "description": "Maximum lines to return (default: 500)"
+                            "default": 500,
+                            "description": "Maximum total lines across all spans (default: 500)"
+                        },
+                        "show_line_numbers": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Prefix each line with line number (default: true)"
                         }
                     },
                     "required": ["path"]
@@ -1420,71 +1442,202 @@ impl ToolExecutor {
         let path = tool.input.get("path")
             .and_then(|p| p.as_str())
             .ok_or_else(|| ToolError::ParseError("Missing 'path' parameter".to_string()))?;
-        
+
         let resolved = self.resolve_path(path);
-        
+
         if !self.is_path_allowed(&tool.name, &resolved) {
             return Err(ToolError::PathNotAllowed(path.to_string()));
         }
 
-        // Parse optional line range parameters
-        let start_line = tool.input.get("start_line")
-            .and_then(|v| v.as_i64())
-            .map(|n| n.max(1) as usize)
-            .unwrap_or(1);
-        let end_line = tool.input.get("end_line")
-            .and_then(|v| v.as_i64())
-            .map(|n| n as usize);
+        // Parse parameters
         let max_lines = tool.input.get("max_lines")
             .and_then(|v| v.as_i64())
             .unwrap_or(500) as usize;
-        
-        let read_future = tokio::fs::read_to_string(&resolved);
-        let content = timeout(Duration::from_secs(policy.timeout_secs), read_future)
+        let show_line_numbers = tool.input.get("show_line_numbers")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        // Read file as bytes first to detect binary
+        let read_future = tokio::fs::read(&resolved);
+        let bytes = timeout(Duration::from_secs(policy.timeout_secs), read_future)
             .await
             .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
             .map_err(|e| ToolError::IoError(e.to_string()))?;
 
-        // Process line range
-        let lines: Vec<&str> = content.lines().collect();
-        let total_lines = lines.len();
-        
-        // Calculate actual range
-        let start_idx = (start_line - 1).min(total_lines);
-        let end_idx = end_line.map(|e| e.min(total_lines)).unwrap_or(total_lines);
-        let end_idx = end_idx.min(start_idx + max_lines);
-        
-        // Build output with line numbers
-        let mut output = String::new();
-        let truncated = end_idx < total_lines && end_line.is_none();
-        
-        for (i, line) in lines[start_idx..end_idx].iter().enumerate() {
-            let line_num = start_idx + i + 1;
-            output.push_str(&format!("{:>4}: {}\n", line_num, line));
+        // Binary file detection: check for null bytes in first 8KB
+        let sample_size = bytes.len().min(8192);
+        let is_binary = bytes[..sample_size].iter().any(|&b| b == 0);
+
+        if is_binary {
+            // Return metadata only for binary files
+            let mime_type = Self::detect_mime_type(&resolved);
+            let result = serde_json::json!({
+                "path": path,
+                "binary": true,
+                "size": bytes.len(),
+                "mime_type": mime_type
+            });
+            return Ok(serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?);
         }
 
-        // Add metadata
-        if start_line > 1 || end_idx < total_lines {
-            output.push_str(&format!(
-                "\n[Lines {}-{} of {} total]",
-                start_idx + 1,
-                end_idx,
-                total_lines
-            ));
-            if truncated {
-                output.push_str(&format!(" [TRUNCATED at {} lines]", max_lines));
+        // Convert to string (we know it's not binary now)
+        let content = String::from_utf8_lossy(&bytes);
+        let lines: Vec<&str> = content.lines().collect();
+        let total_lines = lines.len();
+
+        // Parse spans - either from spans array or start_line/end_line shorthand
+        let mut spans: Vec<(usize, usize)> = Vec::new();
+
+        if let Some(spans_array) = tool.input.get("spans").and_then(|v| v.as_array()) {
+            for span in spans_array {
+                let start = span.get("start")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n.max(1) as usize)
+                    .unwrap_or(1);
+                let end = span.get("end")
+                    .and_then(|v| v.as_i64())
+                    .map(|n| n as usize)
+                    .unwrap_or(total_lines);
+                spans.push((start, end));
             }
+        } else {
+            // Use start_line/end_line as single span
+            let start_line = tool.input.get("start_line")
+                .and_then(|v| v.as_i64())
+                .map(|n| n.max(1) as usize)
+                .unwrap_or(1);
+            let end_line = tool.input.get("end_line")
+                .and_then(|v| v.as_i64())
+                .map(|n| n as usize)
+                .unwrap_or(total_lines);
+            spans.push((start_line, end_line));
         }
-        
+
+        // Merge overlapping/adjacent spans
+        spans = Self::merge_spans(spans);
+
+        // Build structured response with spans
+        let mut span_results: Vec<serde_json::Value> = Vec::new();
+        let mut total_lines_read = 0usize;
+        let mut truncated = false;
+
+        for (span_start, span_end) in spans {
+            if total_lines_read >= max_lines {
+                truncated = true;
+                break;
+            }
+
+            // Convert to 0-indexed and clamp to file bounds
+            let start_idx = (span_start - 1).min(total_lines);
+            let end_idx = span_end.min(total_lines);
+
+            // Apply max_lines limit
+            let available_lines = max_lines - total_lines_read;
+            let actual_end_idx = end_idx.min(start_idx + available_lines);
+
+            if actual_end_idx < end_idx {
+                truncated = true;
+            }
+
+            // Build content for this span
+            let mut span_content = String::new();
+            for (i, line) in lines[start_idx..actual_end_idx].iter().enumerate() {
+                if show_line_numbers {
+                    let line_num = start_idx + i + 1;
+                    span_content.push_str(&format!("{}\t{}\n", line_num, line));
+                } else {
+                    span_content.push_str(line);
+                    span_content.push('\n');
+                }
+            }
+
+            let lines_in_span = actual_end_idx - start_idx;
+            total_lines_read += lines_in_span;
+
+            let mut span_obj = serde_json::json!({
+                "start": start_idx + 1,
+                "end": actual_end_idx,
+                "content": span_content.trim_end()
+            });
+
+            if actual_end_idx < end_idx {
+                span_obj["truncated_at"] = serde_json::json!(actual_end_idx);
+            }
+
+            span_results.push(span_obj);
+        }
+
+        // Build final response
+        let result = serde_json::json!({
+            "path": path,
+            "total_lines": total_lines,
+            "spans": span_results,
+            "total_lines_read": total_lines_read,
+            "truncated": truncated
+        });
+
+        let result_str = serde_json::to_string_pretty(&result)
+            .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?;
+
         // Final size check
-        if output.len() > policy.max_output_bytes {
+        if result_str.len() > policy.max_output_bytes {
             Ok(format!(
                 "{}...\n\n[TRUNCATED: Output exceeds {} bytes]",
-                truncate_utf8_safe(&output, policy.max_output_bytes),
+                truncate_utf8_safe(&result_str, policy.max_output_bytes),
                 policy.max_output_bytes
             ))
         } else {
-            Ok(output)
+            Ok(result_str)
+        }
+    }
+
+    /// Merge overlapping or adjacent spans, returns sorted non-overlapping spans
+    fn merge_spans(mut spans: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+        if spans.is_empty() {
+            return spans;
+        }
+
+        // Sort by start line
+        spans.sort_by_key(|s| s.0);
+
+        let mut merged: Vec<(usize, usize)> = Vec::new();
+        let mut current = spans[0];
+
+        for span in spans.into_iter().skip(1) {
+            // Adjacent or overlapping (allowing 1-line gap for readability)
+            if span.0 <= current.1 + 2 {
+                current.1 = current.1.max(span.1);
+            } else {
+                merged.push(current);
+                current = span;
+            }
+        }
+        merged.push(current);
+
+        merged
+    }
+
+    /// Detect MIME type from file extension
+    fn detect_mime_type(path: &std::path::Path) -> &'static str {
+        match path.extension().and_then(|e| e.to_str()) {
+            Some("png") => "image/png",
+            Some("jpg") | Some("jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            Some("svg") => "image/svg+xml",
+            Some("pdf") => "application/pdf",
+            Some("zip") => "application/zip",
+            Some("tar") => "application/x-tar",
+            Some("gz") | Some("gzip") => "application/gzip",
+            Some("exe") => "application/x-executable",
+            Some("dll") | Some("so") | Some("dylib") => "application/x-sharedlib",
+            Some("wasm") => "application/wasm",
+            Some("mp3") => "audio/mpeg",
+            Some("wav") => "audio/wav",
+            Some("mp4") => "video/mp4",
+            Some("webm") => "video/webm",
+            _ => "application/octet-stream",
         }
     }
     
