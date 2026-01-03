@@ -344,6 +344,8 @@ pub enum Action {
     // Tool result actions
     /// Toggle collapse/expand of tool results (press 'R')
     ToolResultToggleCollapse,
+    /// Phase 4: Cycle through tool verbosity levels (Compact -> Normal -> Verbose)
+    ToolVerbosityCycle,
 
     // Context menu actions (TRC-020)
     /// Show context menu at position for target

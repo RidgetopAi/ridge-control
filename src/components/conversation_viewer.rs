@@ -16,7 +16,7 @@ use crate::action::Action;
 use crate::agent::ContextStats;
 use crate::components::search::{SearchState, SearchBar, SearchAction};
 use crate::components::spinner::{Spinner, SpinnerStyle};
-use crate::components::tool_call_widget::{ToolCallManager, ToolCallWidget, ToolStatus};
+use crate::components::tool_call_widget::{ToolCallManager, ToolCallWidget, ToolStatus, ToolVerbosity};
 use crate::components::Component;
 use crate::config::Theme;
 use crate::llm::{ContentBlock, Message, Role, ToolUse, ToolResult};
@@ -1138,7 +1138,14 @@ impl ConversationViewer {
         if self.search_state.is_active() {
             title_parts.push(" 󰍉".to_string());
         }
-        
+
+        // Phase 4: Add verbosity indicator if not Normal
+        match self.tool_call_manager.verbosity() {
+            ToolVerbosity::Compact => title_parts.push(" [C]".to_string()),
+            ToolVerbosity::Normal => {} // Default, don't show indicator
+            ToolVerbosity::Verbose => title_parts.push(" [V]".to_string()),
+        }
+
         title_parts.push(" ".to_string());
         title_parts.join("")
     }
@@ -1780,8 +1787,22 @@ impl ConversationViewer {
             KeyCode::Char('R') => {
                 Some(Action::ToolResultToggleCollapse)
             }
+            // Phase 4: Cycle tool verbosity with 'V'
+            KeyCode::Char('V') => {
+                Some(Action::ToolVerbosityCycle)
+            }
             _ => None,
         }
+    }
+
+    /// Phase 4: Cycle verbosity mode for tool display
+    pub fn cycle_tool_verbosity(&mut self) {
+        self.tool_call_manager.cycle_verbosity();
+    }
+
+    /// Phase 4: Get current tool verbosity level
+    pub fn tool_verbosity(&self) -> ToolVerbosity {
+        self.tool_call_manager.verbosity()
     }
 }
 

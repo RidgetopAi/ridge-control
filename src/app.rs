@@ -3070,7 +3070,17 @@ impl App {
             Action::ThinkingToggleCollapse => {
                 self.conversation_viewer.toggle_thinking_collapse();
             }
-            
+
+            // Tool result collapse toggle
+            Action::ToolResultToggleCollapse => {
+                self.conversation_viewer.toggle_tool_results_collapse();
+            }
+
+            // Phase 4: Tool verbosity cycle
+            Action::ToolVerbosityCycle => {
+                self.conversation_viewer.cycle_tool_verbosity();
+            }
+
             // TRC-020: Context menu actions
             Action::ContextMenuShow { x, y, target } => {
                 let items = self.build_context_menu_items(&target);

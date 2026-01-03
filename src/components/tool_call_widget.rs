@@ -280,7 +280,10 @@ impl<'a> ToolCallWidget<'a> {
         // Phase 1: Extra info for specific tools (file changes, etc.)
         let extra_info = self.get_compact_extra_info();
 
-        // Phase 1: Compact format - no "Tool:" prefix, no status label (icon shows it)
+        // Phase 4: Get tool type icon for better visual hierarchy
+        let tool_type_icon = self.get_tool_type_icon();
+
+        // Phase 1+4: Compact format with tool type icons for visual hierarchy
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {} ", expand_icon),
@@ -289,6 +292,10 @@ impl<'a> ToolCallWidget<'a> {
             Span::styled(
                 format!("{} ", status_icon),
                 Style::default().fg(status_color).bg(header_bg),
+            ),
+            Span::styled(
+                format!("{} ", tool_type_icon),
+                Style::default().fg(self.theme.colors.secondary.to_color()).bg(header_bg),
             ),
             Span::styled(
                 self.tool_call.tool_name().to_string(),
@@ -469,6 +476,43 @@ impl<'a> ToolCallWidget<'a> {
         }
     }
 
+    /// Phase 4: Get tool type icon for visual categorization
+    /// Different icons for file ops, search, shell, web, etc.
+    fn get_tool_type_icon(&self) -> &'static str {
+        match self.tool_call.tool_name() {
+            // File operations
+            "file_read" => "",      // File icon
+            "file_write" => "",     // Pencil/write icon
+            "edit" => "",           // Edit/pencil icon
+            "glob" | "find" => "",  // Folder search
+
+            // Search operations
+            "grep" => "",           // Search icon
+            "ast_search" => "",     // Code search
+
+            // Shell operations
+            "bash_execute" | "bash_output" | "bash_kill" => "", // Terminal
+
+            // Web operations
+            "web_fetch" | "web_search" => "󰖟",  // Globe
+
+            // LSP operations
+            "lsp_definition" | "lsp_references" | "lsp_hover" => "", // Code
+
+            // Mandrel/MCP operations
+            name if name.starts_with("mcp_") || name.starts_with("mandrel_") => "󱂛", // Database
+
+            // Task/agent operations
+            "task" | "subagent" => "󰜎", // Robot
+
+            // Question/user interaction
+            "ask_user" => "", // Chat bubble
+
+            // Default
+            _ => "󰡨", // Tool icon
+        }
+    }
+
     /// Phase 1: Get compact extra info for specific tool types
     /// Returns info like line counts for file_write, match counts for grep, etc.
     fn get_compact_extra_info(&self) -> String {
@@ -549,11 +593,25 @@ impl<'a> ToolCallWidget<'a> {
     }
 }
 
+/// Phase 4: Verbosity level for tool display
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToolVerbosity {
+    /// Compact view - just summary line (collapsed by default)
+    Compact,
+    /// Normal view - shows details for selected tool
+    #[default]
+    Normal,
+    /// Verbose view - all tools expanded with full details
+    Verbose,
+}
+
 /// Manager for tracking tool calls in a conversation
 #[derive(Debug, Clone, Default)]
 pub struct ToolCallManager {
     tool_calls: Vec<ToolCall>,
     selected_index: Option<usize>,
+    /// Phase 4: Verbosity setting for tool display
+    verbosity: ToolVerbosity,
 }
 
 impl ToolCallManager {
@@ -561,7 +619,27 @@ impl ToolCallManager {
         Self {
             tool_calls: Vec::new(),
             selected_index: None,
+            verbosity: ToolVerbosity::Normal,
         }
+    }
+
+    /// Phase 4: Get current verbosity level
+    pub fn verbosity(&self) -> ToolVerbosity {
+        self.verbosity
+    }
+
+    /// Phase 4: Set verbosity level
+    pub fn set_verbosity(&mut self, verbosity: ToolVerbosity) {
+        self.verbosity = verbosity;
+    }
+
+    /// Phase 4: Cycle through verbosity levels
+    pub fn cycle_verbosity(&mut self) {
+        self.verbosity = match self.verbosity {
+            ToolVerbosity::Compact => ToolVerbosity::Normal,
+            ToolVerbosity::Normal => ToolVerbosity::Verbose,
+            ToolVerbosity::Verbose => ToolVerbosity::Compact,
+        };
     }
     
     /// Register a new tool call
@@ -953,5 +1031,26 @@ mod tests {
         assert_eq!(ToolStatus::Error.label(), "Error");
         assert_eq!(ToolStatus::Rejected.label(), "Rejected");
         assert_eq!(ToolStatus::Timeout.label(), "Timeout");
+    }
+
+    #[test]
+    fn test_tool_verbosity_cycle() {
+        // Phase 4: Test verbosity cycling
+        let mut manager = ToolCallManager::new();
+
+        // Default is Normal
+        assert_eq!(manager.verbosity(), ToolVerbosity::Normal);
+
+        // Cycle: Normal -> Verbose
+        manager.cycle_verbosity();
+        assert_eq!(manager.verbosity(), ToolVerbosity::Verbose);
+
+        // Cycle: Verbose -> Compact
+        manager.cycle_verbosity();
+        assert_eq!(manager.verbosity(), ToolVerbosity::Compact);
+
+        // Cycle: Compact -> Normal
+        manager.cycle_verbosity();
+        assert_eq!(manager.verbosity(), ToolVerbosity::Normal);
     }
 }
