@@ -138,6 +138,10 @@ impl ToolCall {
         } else {
             ToolStatus::Success
         };
+        // Phase 1: Auto-collapse successful tools, keep errors expanded
+        if self.status == ToolStatus::Success {
+            self.expanded = false;
+        }
         self.result = Some(result);
         self.end_time = Some(Instant::now());
     }
@@ -241,31 +245,42 @@ impl<'a> ToolCallWidget<'a> {
     }
     
     /// Render the tool call as lines for embedding in conversation
+    /// Phase 1: Compact summary format - icon + tool(args) + timing
     pub fn render_lines(&self) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
-        
-        // Header line with expand/collapse indicator, icon, tool name, and status
+
+        // Header line with expand/collapse indicator, status icon, tool name, and timing
         let expand_icon = if self.tool_call.expanded { "▼" } else { "▶" };
-        
+
         let status_icon = if self.tool_call.status == ToolStatus::Running {
             self.spinner.map(|s| s.current_frame().to_string())
                 .unwrap_or_else(|| "⋯".to_string())
         } else {
             self.tool_call.status.icon().to_string()
         };
-        
+
         let status_color = self.status_color();
         let header_bg = if self.selected {
-            // Use a subtle version of the primary color for selection
             self.theme.colors.muted.to_color()
         } else {
             Color::Reset
         };
-        
-        let elapsed = self.tool_call.elapsed_ms()
-            .map(|ms| format!(" ({:.1}s)", ms as f64 / 1000.0))
+
+        // Phase 1: Compact timing format (ms for <1s, otherwise Xs)
+        let timing = self.tool_call.elapsed_ms()
+            .map(|ms| {
+                if ms < 1000 {
+                    format!(" [{}ms]", ms)
+                } else {
+                    format!(" [{:.1}s]", ms as f64 / 1000.0)
+                }
+            })
             .unwrap_or_default();
-        
+
+        // Phase 1: Extra info for specific tools (file changes, etc.)
+        let extra_info = self.get_compact_extra_info();
+
+        // Phase 1: Compact format - no "Tool:" prefix, no status label (icon shows it)
         lines.push(Line::from(vec![
             Span::styled(
                 format!("  {} ", expand_icon),
@@ -274,13 +289,6 @@ impl<'a> ToolCallWidget<'a> {
             Span::styled(
                 format!("{} ", status_icon),
                 Style::default().fg(status_color).bg(header_bg),
-            ),
-            Span::styled(
-                "Tool: ",
-                Style::default()
-                    .fg(self.theme.colors.warning.to_color())
-                    .bg(header_bg)
-                    .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
                 self.tool_call.tool_name().to_string(),
@@ -293,8 +301,12 @@ impl<'a> ToolCallWidget<'a> {
                 Style::default().fg(self.theme.colors.muted.to_color()).bg(header_bg),
             ),
             Span::styled(
-                format!(" [{}]{}", self.tool_call.status.label(), elapsed),
-                Style::default().fg(status_color).bg(header_bg),
+                extra_info,
+                Style::default().fg(self.theme.colors.success.to_color()).bg(header_bg),
+            ),
+            Span::styled(
+                timing,
+                Style::default().fg(self.theme.colors.muted.to_color()).bg(header_bg),
             ),
         ]));
         
@@ -454,6 +466,85 @@ impl<'a> ToolCallWidget<'a> {
             ToolStatus::Error => self.theme.colors.error.to_color(),
             ToolStatus::Rejected => self.theme.colors.muted.to_color(),
             ToolStatus::Timeout => self.theme.colors.error.to_color(),
+        }
+    }
+
+    /// Phase 1: Get compact extra info for specific tool types
+    /// Returns info like line counts for file_write, match counts for grep, etc.
+    fn get_compact_extra_info(&self) -> String {
+        if self.tool_call.status != ToolStatus::Success {
+            return String::new();
+        }
+
+        match self.tool_call.tool_name() {
+            "file_write" | "edit" => {
+                // Show +lines/-lines from diff
+                if let Some(ref original) = self.tool_call.original_content {
+                    if let Some(new_content) = self.tool_call.get_file_write_content() {
+                        let old_lines = original.lines().count();
+                        let new_lines = new_content.lines().count();
+                        let added = new_lines.saturating_sub(old_lines);
+                        let removed = old_lines.saturating_sub(new_lines);
+                        if added > 0 && removed > 0 {
+                            return format!(" [+{} -{}]", added, removed);
+                        } else if added > 0 {
+                            return format!(" [+{}]", added);
+                        } else if removed > 0 {
+                            return format!(" [-{}]", removed);
+                        }
+                    }
+                } else if self.tool_call.original_captured {
+                    // New file
+                    if let Some(new_content) = self.tool_call.get_file_write_content() {
+                        let lines = new_content.lines().count();
+                        return format!(" [+{} new]", lines);
+                    }
+                }
+                String::new()
+            }
+            "file_read" => {
+                // Show line count from result
+                if let Some(result_text) = self.tool_call.result_text() {
+                    let lines = result_text.lines().count();
+                    if lines > 0 {
+                        return format!(" [{} lines]", lines);
+                    }
+                }
+                String::new()
+            }
+            "grep" => {
+                // Show match count from result
+                if let Some(result_text) = self.tool_call.result_text() {
+                    let matches = result_text.lines().count();
+                    if matches > 0 {
+                        return format!(" [{} matches]", matches);
+                    }
+                }
+                String::new()
+            }
+            "glob" => {
+                // Show file count from result
+                if let Some(result_text) = self.tool_call.result_text() {
+                    let files = result_text.lines().count();
+                    if files > 0 {
+                        return format!(" [{} files]", files);
+                    }
+                }
+                String::new()
+            }
+            "bash_execute" => {
+                // Show exit code if available (lines of output)
+                if let Some(result_text) = self.tool_call.result_text() {
+                    let lines = result_text.lines().count();
+                    if lines > 0 && lines <= 10 {
+                        return format!(" [{} lines]", lines);
+                    } else if lines > 10 {
+                        return format!(" [{}+ lines]", lines);
+                    }
+                }
+                String::new()
+            }
+            _ => String::new(),
         }
     }
 }
@@ -660,18 +751,50 @@ mod tests {
     fn test_tool_call_execution_lifecycle() {
         let tool_use = create_test_tool_use("bash_execute");
         let mut tool_call = ToolCall::new(tool_use);
-        
+
         assert_eq!(tool_call.status, ToolStatus::Pending);
-        
+
         tool_call.start_execution();
         assert_eq!(tool_call.status, ToolStatus::Running);
         assert!(tool_call.start_time.is_some());
-        
+
         let result = create_test_result("tool_bash_execute", false);
         tool_call.complete(result);
         assert_eq!(tool_call.status, ToolStatus::Success);
         assert!(tool_call.result.is_some());
         assert!(tool_call.end_time.is_some());
+        // Phase 1: Successful tools auto-collapse
+        assert!(!tool_call.expanded);
+    }
+
+    #[test]
+    fn test_tool_call_auto_collapse_on_success() {
+        let tool_use = create_test_tool_use("file_read");
+        let mut tool_call = ToolCall::new(tool_use);
+
+        // Starts expanded
+        assert!(tool_call.expanded);
+
+        // Complete with success - should auto-collapse
+        let result = create_test_result("tool_file_read", false);
+        tool_call.complete(result);
+        assert_eq!(tool_call.status, ToolStatus::Success);
+        assert!(!tool_call.expanded); // Auto-collapsed
+    }
+
+    #[test]
+    fn test_tool_call_error_stays_expanded() {
+        let tool_use = create_test_tool_use("file_read");
+        let mut tool_call = ToolCall::new(tool_use);
+
+        // Starts expanded
+        assert!(tool_call.expanded);
+
+        // Complete with error - should stay expanded
+        let result = create_test_result("tool_file_read", true);
+        tool_call.complete(result);
+        assert_eq!(tool_call.status, ToolStatus::Error);
+        assert!(tool_call.expanded); // Stays expanded for visibility
     }
 
     #[test]
