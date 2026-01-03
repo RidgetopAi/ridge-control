@@ -2552,18 +2552,26 @@ impl App {
                             // Clear conversation viewer state
                             self.conversation_viewer.clear();
                             
-                            // Re-populate tool calls from loaded thread segments
+                            // Phase 2: Re-populate tool calls from loaded thread segments
+                            // Register all tool uses first, then complete with results
                             if let Some(thread) = engine.current_thread() {
                                 for segment in thread.segments() {
                                     for message in &segment.messages {
                                         for content_block in &message.content {
-                                            if let crate::llm::ContentBlock::ToolUse(tool_use) = content_block {
-                                                self.conversation_viewer.register_tool_use(tool_use.clone());
+                                            match content_block {
+                                                crate::llm::ContentBlock::ToolUse(tool_use) => {
+                                                    self.conversation_viewer.register_tool_use(tool_use.clone());
+                                                }
+                                                crate::llm::ContentBlock::ToolResult(result) => {
+                                                    // Complete the tool with its result
+                                                    self.conversation_viewer.complete_tool(&result.tool_use_id, result.clone());
+                                                }
+                                                _ => {}
                                             }
                                         }
                                     }
                                 }
-                                
+
                                 let title = thread.title.clone();
                                 self.notification_manager.info(format!("Loaded thread: {}", title));
                                 tracing::info!("Loaded thread: {} ({})", title, id);

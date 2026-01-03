@@ -806,10 +806,17 @@ impl ConversationViewer {
                         lines.extend(self.render_thinking_block(text, theme));
                     }
                     ContentBlock::ToolUse(tool) => {
+                        // Phase 2: ToolCallManager is single source of truth
+                        // ToolCallWidget renders tool + result together
                         lines.extend(self.render_tool_use_enhanced(tool, theme));
                     }
                     ContentBlock::ToolResult(result) => {
-                        lines.extend(self.render_tool_result(result, theme));
+                        // Phase 2: Skip if tool is tracked in ToolCallManager
+                        // (ToolCallWidget already displays the result inline)
+                        if self.tool_call_manager.get(&result.tool_use_id).is_none() {
+                            // Fallback for tools not in manager (e.g., loaded from history)
+                            lines.extend(self.render_tool_result(result, theme));
+                        }
                     }
                     ContentBlock::Image(_) => {
                         lines.push(Line::from(Span::styled(
