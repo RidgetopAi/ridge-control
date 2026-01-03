@@ -35,9 +35,19 @@ vte = "0.15"
 # ─────────────────────────────────────────────────────────────────────────────
 # Network & Streaming
 # ─────────────────────────────────────────────────────────────────────────────
-reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls", "gzip", "brotli", "cookies"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
 eventsource-stream = "0.2"  # SSE parsing
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Web Access (Phase 2: Agent Tools)
+# ─────────────────────────────────────────────────────────────────────────────
+scraper = "0.22"        # HTML parsing with CSS selectors
+html2md = "0.2"         # HTML to Markdown conversion
+lru = "0.12"            # Response caching
+governor = "0.8"        # Rate limiting
+url = "2.5"             # URL parsing and validation
+urlencoding = "2.1"     # URL parameter encoding
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Serialization & Configuration
@@ -131,7 +141,7 @@ optional = true
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+# Note: panic = "abort" removed for html2md compatibility (uses catch_unwind)
 strip = true
 
 [profile.dev]

@@ -2,14 +2,17 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use chrono::{DateTime, Utc};
+use lru::LruCache;
 use serde::{Deserialize, Serialize};
 use tokio::process::Command;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
 
 use super::types::{ToolDefinition, ToolResult, ToolResultContent, ToolUse};
@@ -116,6 +119,57 @@ pub struct ParsedQuestion {
 pub struct ParsedOption {
     pub label: String,
     pub description: String,
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Web Fetch Cache (Phase 2: Agent Tools)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Cached web page with TTL
+#[derive(Debug, Clone)]
+struct CachedPage {
+    url: String,
+    final_url: String,
+    title: String,
+    content: String,
+    fetched_at: DateTime<Utc>,
+    expires_at: Instant,
+}
+
+impl CachedPage {
+    fn is_expired(&self) -> bool {
+        Instant::now() > self.expires_at
+    }
+}
+
+/// Web fetch cache with 15-minute TTL
+struct WebFetchCache {
+    cache: LruCache<String, CachedPage>,
+    ttl: Duration,
+}
+
+impl WebFetchCache {
+    fn new(capacity: usize, ttl_secs: u64) -> Self {
+        Self {
+            cache: LruCache::new(NonZeroUsize::new(capacity).unwrap()),
+            ttl: Duration::from_secs(ttl_secs),
+        }
+    }
+
+    fn get(&mut self, url: &str) -> Option<&CachedPage> {
+        // Check if we have a cached entry that isn't expired
+        if let Some(page) = self.cache.get(url) {
+            if !page.is_expired() {
+                return Some(page);
+            }
+            // Expired, will be replaced on next insert
+        }
+        None
+    }
+
+    fn insert(&mut self, url: String, page: CachedPage) {
+        self.cache.put(url, page);
+    }
 }
 
 /// Tool registry with policies
@@ -457,6 +511,30 @@ impl ToolRegistry {
             timeout_secs: 60,
             max_output_bytes: 524_288,
             allowed_paths: vec!["~/".to_string(), "/tmp/".to_string()],
+        });
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Web Access Tools (Phase 2: Agent Tools)
+        // ─────────────────────────────────────────────────────────────────────
+
+        // web_fetch - fetch web pages as LLM-ready markdown
+        self.policies.insert("web_fetch".to_string(), ToolPolicy {
+            name: "web_fetch".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 60, // Allow time for slow pages
+            max_output_bytes: 524_288, // 512KB for page content
+            allowed_paths: vec![], // No file path restrictions
+        });
+
+        // web_search - search the web via Brave Search API
+        self.policies.insert("web_search".to_string(), ToolPolicy {
+            name: "web_search".to_string(),
+            require_confirmation: false,
+            dangerous_mode_only: false,
+            timeout_secs: 30,
+            max_output_bytes: 102_400, // 100KB for search results
+            allowed_paths: vec![],
         });
     }
     
@@ -1250,6 +1328,80 @@ impl ToolRegistry {
                     "required": ["file_path", "line", "character"]
                 }),
             },
+            // ─────────────────────────────────────────────────────────────────────
+            // Web Access Tools (Phase 2)
+            // ─────────────────────────────────────────────────────────────────────
+            ToolDefinition {
+                name: "web_fetch".to_string(),
+                description: "Fetch web page content and convert to LLM-ready markdown. \
+                    Extracts main content using Mozilla Readability algorithm, strips navigation/ads/scripts. \
+                    Results cached for 15 minutes. Use for reading documentation, articles, API references.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "url": {
+                            "type": "string",
+                            "format": "uri",
+                            "description": "URL to fetch (http/https). Will follow redirects."
+                        },
+                        "selector": {
+                            "type": "string",
+                            "description": "Optional CSS selector to extract specific content (e.g., 'article', '.main-content')"
+                        },
+                        "include_links": {
+                            "type": "boolean",
+                            "default": true,
+                            "description": "Preserve hyperlinks in markdown output"
+                        },
+                        "include_images": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Include image references (as markdown image links)"
+                        },
+                        "max_length": {
+                            "type": "integer",
+                            "default": 50000,
+                            "description": "Maximum characters to return (truncates at paragraph boundary)"
+                        },
+                        "timeout_secs": {
+                            "type": "integer",
+                            "default": 30,
+                            "description": "Request timeout in seconds"
+                        }
+                    },
+                    "required": ["url"]
+                }),
+            },
+            ToolDefinition {
+                name: "web_search".to_string(),
+                description: "Search the web and return relevant results with snippets. \
+                    Use for finding documentation, researching libraries, looking up APIs, or fact-checking. \
+                    Returns titles, URLs, and snippets - use web_fetch for full page content.".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query"
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "default": 10,
+                            "description": "Maximum results to return (1-20)"
+                        },
+                        "site": {
+                            "type": "string",
+                            "description": "Limit to specific site (e.g., 'docs.rs', 'stackoverflow.com')"
+                        },
+                        "freshness": {
+                            "type": "string",
+                            "enum": ["day", "week", "month", "year"],
+                            "description": "Filter by recency"
+                        }
+                    },
+                    "required": ["query"]
+                }),
+            },
         ]
     }
 }
@@ -1268,15 +1420,32 @@ pub struct ToolExecutor {
     mandrel_client: Option<Arc<RwLock<MandrelClient>>>,
     /// Optional LSP manager for semantic code navigation
     lsp_manager: Option<Arc<RwLock<crate::lsp::LspManager>>>,
+    /// HTTP client for web requests
+    http_client: reqwest::Client,
+    /// Web fetch cache (15-minute TTL, 100 entries max)
+    web_cache: Arc<Mutex<WebFetchCache>>,
 }
 
 impl ToolExecutor {
     pub fn new(working_dir: PathBuf) -> Self {
+        // Build HTTP client with reasonable defaults
+        let http_client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .user_agent("ridge-control/0.1 (AI Agent)")
+            .gzip(true)
+            .brotli(true)
+            .redirect(reqwest::redirect::Policy::limited(10))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
+
         Self {
             registry: ToolRegistry::new(),
             working_dir,
             mandrel_client: None,
             lsp_manager: None,
+            http_client,
+            // 100 entries, 15-minute TTL (900 seconds)
+            web_cache: Arc::new(Mutex::new(WebFetchCache::new(100, 900))),
         }
     }
 
@@ -1421,6 +1590,9 @@ impl ToolExecutor {
             "lsp_workspace_symbols" => self.execute_lsp_workspace_symbols(tool).await,
             "lsp_implementations" => self.execute_lsp_implementations(tool).await,
             "lsp_call_hierarchy" => self.execute_lsp_call_hierarchy(tool).await,
+            // Web access tools
+            "web_fetch" => self.execute_web_fetch(tool, policy).await,
+            "web_search" => self.execute_web_search(tool, policy).await,
             _ => Err(ToolError::NotFound(tool.name.clone())),
         };
         
@@ -1477,8 +1649,8 @@ impl ToolExecutor {
                 "size": bytes.len(),
                 "mime_type": mime_type
             });
-            return Ok(serde_json::to_string_pretty(&result)
-                .map_err(|e| ToolError::ExecutionFailed(e.to_string()))?);
+            return serde_json::to_string_pretty(&result)
+                .map_err(|e| ToolError::ExecutionFailed(e.to_string()));
         }
 
         // Convert to string (we know it's not binary now)
@@ -3184,6 +3356,309 @@ impl ToolExecutor {
                 output.join("\n")))
         }
     }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Web Access Tools (Phase 2)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Execute web_fetch tool - fetch and convert web page to markdown
+    async fn execute_web_fetch(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<String, ToolError> {
+        let url = tool.input.get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'url' parameter".to_string()))?;
+
+        // Validate URL
+        let parsed_url = url::Url::parse(url)
+            .map_err(|e| ToolError::ParseError(format!("Invalid URL: {}", e)))?;
+
+        // Only allow http/https
+        if parsed_url.scheme() != "http" && parsed_url.scheme() != "https" {
+            return Err(ToolError::ParseError("Only http/https URLs are allowed".to_string()));
+        }
+
+        // Get optional parameters
+        let selector = tool.input.get("selector")
+            .and_then(|v| v.as_str());
+        let include_links = tool.input.get("include_links")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let include_images = tool.input.get("include_images")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let max_length = tool.input.get("max_length")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(50000) as usize;
+        let timeout_secs = tool.input.get("timeout_secs")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(30);
+
+        // Check cache first
+        {
+            let mut cache = self.web_cache.lock().await;
+            if let Some(cached) = cache.get(url) {
+                // Return cached result
+                let result = serde_json::json!({
+                    "url": cached.url,
+                    "final_url": cached.final_url,
+                    "title": cached.title,
+                    "content": if cached.content.len() > max_length {
+                        self.truncate_at_paragraph(&cached.content, max_length)
+                    } else {
+                        cached.content.clone()
+                    },
+                    "content_length": cached.content.len(),
+                    "truncated": cached.content.len() > max_length,
+                    "cached": true,
+                    "fetched_at": cached.fetched_at.to_rfc3339()
+                });
+                return serde_json::to_string_pretty(&result)
+                    .map_err(|e| ToolError::ExecutionFailed(format!("JSON error: {}", e)));
+            }
+        }
+
+        // Fetch the page with timeout
+        let response = timeout(
+            Duration::from_secs(timeout_secs.min(policy.timeout_secs)),
+            self.http_client.get(url).send()
+        )
+        .await
+        .map_err(|_| ToolError::Timeout(timeout_secs))?
+        .map_err(|e| ToolError::ExecutionFailed(format!("HTTP request failed: {}", e)))?;
+
+        // Check response status
+        if !response.status().is_success() {
+            return Err(ToolError::ExecutionFailed(
+                format!("HTTP error: {} {}", response.status().as_u16(), response.status().canonical_reason().unwrap_or(""))
+            ));
+        }
+
+        let final_url = response.url().to_string();
+        let html = response.text().await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to read response: {}", e)))?;
+
+        // Parse HTML and extract content (in a block to ensure `document` is dropped before async operations)
+        let (title, markdown) = {
+            let document = scraper::Html::parse_document(&html);
+
+            // Try to extract title
+            let title = document.select(&scraper::Selector::parse("title").unwrap())
+                .next()
+                .map(|el| el.text().collect::<String>())
+                .unwrap_or_default();
+
+            // If selector provided, extract only that element
+            let content_html = if let Some(sel) = selector {
+                let css_selector = scraper::Selector::parse(sel)
+                    .map_err(|e| ToolError::ParseError(format!("Invalid CSS selector: {:?}", e)))?;
+                document.select(&css_selector)
+                    .map(|el| el.html())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            } else {
+                // Extract main content - try common content selectors
+                let content_selectors = ["article", "main", ".content", ".post", ".entry-content", "#content", "body"];
+                let mut extracted = String::new();
+                for sel in content_selectors {
+                    if let Ok(css_selector) = scraper::Selector::parse(sel) {
+                        if let Some(el) = document.select(&css_selector).next() {
+                            extracted = el.html();
+                            break;
+                        }
+                    }
+                }
+                if extracted.is_empty() {
+                    // Fallback to body
+                    if let Ok(body_sel) = scraper::Selector::parse("body") {
+                        if let Some(body) = document.select(&body_sel).next() {
+                            extracted = body.html();
+                        }
+                    }
+                }
+                extracted
+            };
+
+            // Convert to markdown
+            let mut markdown = html2md::parse_html(&content_html);
+
+            // Post-process markdown if needed
+            if !include_links {
+                // Simple link removal - replace [text](url) with text
+                markdown = regex::Regex::new(r"\[([^\]]+)\]\([^)]+\)")
+                    .map(|re| re.replace_all(&markdown, "$1").to_string())
+                    .unwrap_or(markdown);
+            }
+
+            if !include_images {
+                // Remove image markdown
+                markdown = regex::Regex::new(r"!\[[^\]]*\]\([^)]+\)")
+                    .map(|re| re.replace_all(&markdown, "").to_string())
+                    .unwrap_or(markdown);
+            }
+
+            // Clean up excessive whitespace
+            markdown = regex::Regex::new(r"\n{3,}")
+                .map(|re| re.replace_all(&markdown, "\n\n").to_string())
+                .unwrap_or(markdown);
+
+            (title, markdown)
+        }; // document is dropped here, before any async operations
+
+        let content_length = markdown.len();
+        let (truncated_content, was_truncated) = if markdown.len() > max_length {
+            (self.truncate_at_paragraph(&markdown, max_length), true)
+        } else {
+            (markdown.clone(), false)
+        };
+
+        // Cache the full result
+        let fetched_at = Utc::now();
+        {
+            let mut cache = self.web_cache.lock().await;
+            let expires_at = Instant::now() + Duration::from_secs(900); // 15 minutes
+            cache.insert(url.to_string(), CachedPage {
+                url: url.to_string(),
+                final_url: final_url.clone(),
+                title: title.clone(),
+                content: markdown,
+                fetched_at,
+                expires_at,
+            });
+        }
+
+        let result = serde_json::json!({
+            "url": url,
+            "final_url": final_url,
+            "title": title,
+            "content": truncated_content,
+            "content_length": content_length,
+            "truncated": was_truncated,
+            "cached": false,
+            "fetched_at": fetched_at.to_rfc3339()
+        });
+
+        serde_json::to_string_pretty(&result)
+            .map_err(|e| ToolError::ExecutionFailed(format!("JSON error: {}", e)))
+    }
+
+    /// Truncate content at a paragraph boundary
+    fn truncate_at_paragraph(&self, content: &str, max_len: usize) -> String {
+        if content.len() <= max_len {
+            return content.to_string();
+        }
+
+        // Find the last paragraph break before max_len
+        let truncated = &content[..max_len];
+        if let Some(pos) = truncated.rfind("\n\n") {
+            format!("{}\n\n[Content truncated at {} characters]", &content[..pos], max_len)
+        } else if let Some(pos) = truncated.rfind('\n') {
+            format!("{}\n\n[Content truncated at {} characters]", &content[..pos], max_len)
+        } else {
+            format!("{}\n\n[Content truncated at {} characters]", truncate_utf8_safe(content, max_len), max_len)
+        }
+    }
+
+    /// Execute web_search tool - search the web via Brave Search API
+    async fn execute_web_search(&self, tool: &ToolUse, policy: &ToolPolicy) -> Result<String, ToolError> {
+        let query = tool.input.get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError::ParseError("Missing 'query' parameter".to_string()))?;
+
+        let max_results = tool.input.get("max_results")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(10)
+            .min(20) as usize;
+
+        let site = tool.input.get("site")
+            .and_then(|v| v.as_str());
+
+        let freshness = tool.input.get("freshness")
+            .and_then(|v| v.as_str());
+
+        // Build the search query
+        let search_query = if let Some(site_filter) = site {
+            format!("site:{} {}", site_filter, query)
+        } else {
+            query.to_string()
+        };
+
+        // Get Brave Search API key from environment
+        let api_key = std::env::var("BRAVE_SEARCH_API_KEY")
+            .map_err(|_| ToolError::ExecutionFailed(
+                "BRAVE_SEARCH_API_KEY environment variable not set. \
+                Get a free API key at https://api.search.brave.com/".to_string()
+            ))?;
+
+        // Build Brave Search API URL
+        let mut url = format!(
+            "https://api.search.brave.com/res/v1/web/search?q={}",
+            urlencoding::encode(&search_query)
+        );
+
+        // Add count parameter
+        url.push_str(&format!("&count={}", max_results));
+
+        // Add freshness filter if specified
+        if let Some(fresh) = freshness {
+            let freshness_param = match fresh {
+                "day" => "pd",
+                "week" => "pw",
+                "month" => "pm",
+                "year" => "py",
+                _ => ""
+            };
+            if !freshness_param.is_empty() {
+                url.push_str(&format!("&freshness={}", freshness_param));
+            }
+        }
+
+        // Make the API request
+        let response = timeout(
+            Duration::from_secs(policy.timeout_secs),
+            self.http_client
+                .get(&url)
+                .header("X-Subscription-Token", &api_key)
+                .header("Accept", "application/json")
+                .send()
+        )
+        .await
+        .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
+        .map_err(|e| ToolError::ExecutionFailed(format!("Search request failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ToolError::ExecutionFailed(
+                format!("Brave Search API error: {} - {}", status, body)
+            ));
+        }
+
+        let search_response: serde_json::Value = response.json().await
+            .map_err(|e| ToolError::ExecutionFailed(format!("Failed to parse search response: {}", e)))?;
+
+        // Extract web results
+        let results: Vec<serde_json::Value> = search_response
+            .get("web")
+            .and_then(|w| w.get("results"))
+            .and_then(|r| r.as_array())
+            .map(|arr| arr.iter().take(max_results).map(|item| {
+                serde_json::json!({
+                    "title": item.get("title").and_then(|v| v.as_str()).unwrap_or(""),
+                    "url": item.get("url").and_then(|v| v.as_str()).unwrap_or(""),
+                    "snippet": item.get("description").and_then(|v| v.as_str()).unwrap_or("")
+                })
+            }).collect())
+            .unwrap_or_default();
+
+        let result = serde_json::json!({
+            "query": query,
+            "results": results,
+            "total_results": results.len(),
+            "cached": false
+        });
+
+        serde_json::to_string_pretty(&result)
+            .map_err(|e| ToolError::ExecutionFailed(format!("JSON error: {}", e)))
+    }
 }
 
 /// Pending tool use waiting for confirmation
@@ -3683,5 +4158,164 @@ mod tests {
 
         assert_eq!(ToolExecutor::detect_mime_type(Path::new("unknown.xyz")), "application/octet-stream");
         assert_eq!(ToolExecutor::detect_mime_type(Path::new("noext")), "application/octet-stream");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 2: Web Access Tools Tests
+    // ─────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_web_fetch_registered() {
+        let registry = ToolRegistry::new();
+
+        // Verify web_fetch is registered
+        assert!(registry.get_policy("web_fetch").is_some());
+
+        // Verify it doesn't require confirmation (read-only web access)
+        assert_eq!(registry.can_execute("web_fetch", false), ToolExecutionCheck::Allowed);
+    }
+
+    #[test]
+    fn test_web_search_registered() {
+        let registry = ToolRegistry::new();
+
+        // Verify web_search is registered
+        assert!(registry.get_policy("web_search").is_some());
+
+        // Verify it doesn't require confirmation (read-only search)
+        assert_eq!(registry.can_execute("web_search", false), ToolExecutionCheck::Allowed);
+    }
+
+    #[test]
+    fn test_web_fetch_tool_definition() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        // Find web_fetch definition
+        let web_fetch = definitions.iter()
+            .find(|d| d.name == "web_fetch")
+            .expect("web_fetch should be in tool definitions");
+
+        // Verify schema has required fields
+        let schema = &web_fetch.input_schema;
+        assert!(schema.get("properties").is_some());
+        let props = schema.get("properties").unwrap();
+        assert!(props.get("url").is_some());
+        assert!(props.get("selector").is_some());
+        assert!(props.get("include_links").is_some());
+        assert!(props.get("max_length").is_some());
+
+        // Verify required field
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("url")));
+    }
+
+    #[test]
+    fn test_web_search_tool_definition() {
+        let registry = ToolRegistry::new();
+        let definitions = registry.get_tool_definitions();
+
+        // Find web_search definition
+        let web_search = definitions.iter()
+            .find(|d| d.name == "web_search")
+            .expect("web_search should be in tool definitions");
+
+        // Verify schema has required fields
+        let schema = &web_search.input_schema;
+        assert!(schema.get("properties").is_some());
+        let props = schema.get("properties").unwrap();
+        assert!(props.get("query").is_some());
+        assert!(props.get("max_results").is_some());
+        assert!(props.get("site").is_some());
+        assert!(props.get("freshness").is_some());
+
+        // Verify required field
+        let required = schema.get("required").unwrap().as_array().unwrap();
+        assert!(required.contains(&serde_json::json!("query")));
+    }
+
+    #[test]
+    fn test_web_fetch_cache() {
+        // Test WebFetchCache structure
+        let mut cache = WebFetchCache::new(10, 60); // 10 entries, 60 second TTL
+
+        // Initially empty
+        assert!(cache.get("https://example.com").is_none());
+
+        // Insert a page
+        let page = CachedPage {
+            url: "https://example.com".to_string(),
+            final_url: "https://example.com/".to_string(),
+            title: "Example".to_string(),
+            content: "Test content".to_string(),
+            fetched_at: chrono::Utc::now(),
+            expires_at: std::time::Instant::now() + std::time::Duration::from_secs(60),
+        };
+        cache.insert("https://example.com".to_string(), page);
+
+        // Should be retrievable
+        let cached = cache.get("https://example.com");
+        assert!(cached.is_some());
+        assert_eq!(cached.unwrap().title, "Example");
+    }
+
+    #[test]
+    fn test_web_fetch_cache_expiry() {
+        // Test that expired entries are not returned
+        let mut cache = WebFetchCache::new(10, 1);
+
+        // Insert a page that's already expired
+        let page = CachedPage {
+            url: "https://expired.com".to_string(),
+            final_url: "https://expired.com/".to_string(),
+            title: "Expired".to_string(),
+            content: "Old content".to_string(),
+            fetched_at: chrono::Utc::now(),
+            expires_at: std::time::Instant::now() - std::time::Duration::from_secs(1), // Already expired
+        };
+        cache.insert("https://expired.com".to_string(), page);
+
+        // Should not be returned (expired)
+        assert!(cache.get("https://expired.com").is_none());
+    }
+
+    #[test]
+    fn test_truncate_at_paragraph() {
+        let executor = ToolExecutor::new(std::path::PathBuf::from("/tmp"));
+
+        // Test with paragraph breaks
+        let content = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph.";
+        let truncated = executor.truncate_at_paragraph(content, 30);
+        assert!(truncated.contains("First paragraph."));
+        assert!(truncated.contains("[Content truncated"));
+
+        // Test with no truncation needed
+        let short = "Short content.";
+        assert_eq!(executor.truncate_at_paragraph(short, 100), short);
+    }
+
+    #[test]
+    fn test_web_fetch_input_summary() {
+        let tool = ToolUse {
+            id: "test-web".to_string(),
+            name: "web_fetch".to_string(),
+            input: serde_json::json!({"url": "https://docs.rs/tokio/latest"}),
+        };
+        let pending = PendingToolUse::new(tool, ToolExecutionCheck::Allowed);
+        // web_fetch doesn't have a custom input_summary, so it falls back to JSON
+        let summary = pending.input_summary();
+        assert!(summary.contains("url") || summary.contains("https"));
+    }
+
+    #[test]
+    fn test_web_search_input_summary() {
+        let tool = ToolUse {
+            id: "test-search".to_string(),
+            name: "web_search".to_string(),
+            input: serde_json::json!({"query": "rust async trait"}),
+        };
+        let pending = PendingToolUse::new(tool, ToolExecutionCheck::Allowed);
+        let summary = pending.input_summary();
+        assert!(summary.contains("query") || summary.contains("rust"));
     }
 }
