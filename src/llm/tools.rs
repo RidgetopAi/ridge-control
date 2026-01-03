@@ -15,9 +15,12 @@ use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
 use tokio::time::timeout;
 
+use similar::TextDiff;
+
 use super::types::{ToolDefinition, ToolResult, ToolResultContent, ToolUse};
 use super::shell_session::{ShellSessionPool, SessionError};
 use crate::agent::mandrel::MandrelClient;
+use crate::config::{KeyId, KeyStore};
 
 /// Truncate a string at a safe UTF-8 character boundary.
 /// Returns a slice that is at most `max_bytes` long without splitting multi-byte characters.
@@ -974,6 +977,11 @@ impl ToolRegistry {
                             "type": "boolean",
                             "default": false,
                             "description": "Replace all occurrences instead of requiring unique match (default: false)"
+                        },
+                        "preview_only": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "Show unified diff preview without applying changes (default: false)"
                         }
                     },
                     "required": ["file_path", "old_string", "new_string"]
@@ -2941,6 +2949,10 @@ impl ToolExecutor {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let preview_only = tool.input.get("preview_only")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
         let resolved = self.resolve_path(file_path);
 
         if !self.is_path_allowed("edit", &resolved) {
@@ -2982,32 +2994,53 @@ impl ToolExecutor {
             content.replacen(old_string, new_string, 1)
         };
 
-        // Write the file
-        let write_future = tokio::fs::write(&resolved, &new_content);
-        timeout(Duration::from_secs(policy.timeout_secs), write_future)
-            .await
-            .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
-            .map_err(|e| ToolError::IoError(format!("Failed to write file: {}", e)))?;
-
         let replacements = if replace_all { count } else { 1 };
-        Ok(format!(
-            "Replaced {} occurrence{} in {}\n\nOld ({} chars):\n{}\n\nNew ({} chars):\n{}",
-            replacements,
-            if replacements == 1 { "" } else { "s" },
-            file_path,
-            old_string.len(),
-            if old_string.len() > 200 {
-                format!("{}...", &old_string[..200])
-            } else {
-                old_string.to_string()
-            },
-            new_string.len(),
-            if new_string.len() > 200 {
-                format!("{}...", &new_string[..200])
-            } else {
-                new_string.to_string()
+
+        if preview_only {
+            // Generate unified diff without writing
+            let diff = TextDiff::from_lines(&content, &new_content);
+            let mut diff_output = String::new();
+            diff_output.push_str(&format!("--- a/{}\n", file_path));
+            diff_output.push_str(&format!("+++ b/{}\n", file_path));
+
+            for hunk in diff.unified_diff().context_radius(3).iter_hunks() {
+                diff_output.push_str(&hunk.to_string());
             }
-        ))
+
+            Ok(format!(
+                "Preview: {} occurrence{} would be replaced in {}\n\n{}",
+                replacements,
+                if replacements == 1 { "" } else { "s" },
+                file_path,
+                diff_output
+            ))
+        } else {
+            // Write the file
+            let write_future = tokio::fs::write(&resolved, &new_content);
+            timeout(Duration::from_secs(policy.timeout_secs), write_future)
+                .await
+                .map_err(|_| ToolError::Timeout(policy.timeout_secs))?
+                .map_err(|e| ToolError::IoError(format!("Failed to write file: {}", e)))?;
+
+            Ok(format!(
+                "Replaced {} occurrence{} in {}\n\nOld ({} chars):\n{}\n\nNew ({} chars):\n{}",
+                replacements,
+                if replacements == 1 { "" } else { "s" },
+                file_path,
+                old_string.len(),
+                if old_string.len() > 200 {
+                    format!("{}...", &old_string[..200])
+                } else {
+                    old_string.to_string()
+                },
+                new_string.len(),
+                if new_string.len() > 200 {
+                    format!("{}...", &new_string[..200])
+                } else {
+                    new_string.to_string()
+                }
+            ))
+        }
     }
 
     fn resolve_path(&self, path: &str) -> PathBuf {
@@ -3020,6 +3053,26 @@ impl ToolExecutor {
         } else {
             self.working_dir.join(path)
         }
+    }
+
+    /// Get Brave Search API key from KeyStore or environment variable
+    fn get_brave_api_key(&self) -> Result<String, ToolError> {
+        // Try KeyStore first
+        if let Ok(keystore) = KeyStore::new() {
+            let key_id = KeyId::Custom("brave_search".to_string());
+            if let Ok(Some(secret)) = keystore.get(&key_id) {
+                return Ok(secret.expose().to_string());
+            }
+        }
+
+        // Fall back to environment variable
+        std::env::var("BRAVE_SEARCH_API_KEY")
+            .map_err(|_| ToolError::ExecutionFailed(
+                "Brave Search API key not found. Either:\n\
+                1. Store it in KeyStore with key 'brave_search', or\n\
+                2. Set BRAVE_SEARCH_API_KEY environment variable\n\
+                Get a free API key at https://api.search.brave.com/".to_string()
+            ))
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -3753,12 +3806,8 @@ impl ToolExecutor {
             query.to_string()
         };
 
-        // Get Brave Search API key from environment
-        let api_key = std::env::var("BRAVE_SEARCH_API_KEY")
-            .map_err(|_| ToolError::ExecutionFailed(
-                "BRAVE_SEARCH_API_KEY environment variable not set. \
-                Get a free API key at https://api.search.brave.com/".to_string()
-            ))?;
+        // Get Brave Search API key - try KeyStore first, then environment
+        let api_key = self.get_brave_api_key()?;
 
         // Build Brave Search API URL
         let mut url = format!(
@@ -4182,6 +4231,7 @@ mod tests {
         assert!(schema.get("properties").unwrap().get("old_string").is_some());
         assert!(schema.get("properties").unwrap().get("new_string").is_some());
         assert!(schema.get("properties").unwrap().get("replace_all").is_some());
+        assert!(schema.get("properties").unwrap().get("preview_only").is_some());
 
         // Verify required fields
         let required = schema.get("required").unwrap().as_array().unwrap();
