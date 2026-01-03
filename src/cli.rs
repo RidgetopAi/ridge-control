@@ -1,4 +1,4 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 
 /// Ridge-Control: Terminal-based command center with PTY emulator, LLM integration, and process monitoring
 #[derive(Parser, Debug, Clone)]
@@ -7,6 +7,9 @@ use clap::Parser;
 #[command(version)]
 #[command(about = "Terminal-based command center with LLM integration", long_about = None)]
 pub struct Cli {
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Enable dangerous mode: auto-execute all tool calls without confirmation.
     /// 
     /// WARNING: This bypasses all safety confirmations for LLM tool execution
@@ -48,9 +51,51 @@ pub struct Cli {
     pub restore_session: bool,
 }
 
+/// Available subcommands
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Manage API keys in the secure keystore
+    Keys {
+        #[command(subcommand)]
+        action: KeysAction,
+    },
+}
+
+/// Key management actions
+#[derive(Subcommand, Debug, Clone)]
+pub enum KeysAction {
+    /// Store an API key in the keystore
+    Set {
+        /// Key name (e.g., brave_search, anthropic, openai)
+        name: String,
+        /// The API key value
+        value: String,
+    },
+    /// List all stored key names
+    List,
+    /// Delete a key from the keystore
+    Delete {
+        /// Key name to delete
+        name: String,
+    },
+    /// Get a key value (masked by default)
+    Get {
+        /// Key name to retrieve
+        name: String,
+        /// Show the actual value (not masked)
+        #[arg(long)]
+        reveal: bool,
+    },
+}
+
 impl Cli {
     pub fn parse_args() -> Self {
         Self::parse()
+    }
+
+    /// Check if this is a subcommand that should be handled without launching the TUI
+    pub fn has_subcommand(&self) -> bool {
+        self.command.is_some()
     }
 }
 

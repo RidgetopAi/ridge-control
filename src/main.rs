@@ -32,7 +32,8 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
-use cli::Cli;
+use cli::{Cli, Command, KeysAction};
+use config::{KeyId, KeyStore, SecretString};
 
 /// Get the log directory path (~/.local/share/ridge-control/logs/)
 fn log_dir() -> PathBuf {
@@ -81,8 +82,79 @@ fn init_logging(log_level: &str) -> Result<tracing_appender::non_blocking::Worke
         .init();
     
     tracing::info!("Logging initialized. Log directory: {}", log_path.display());
-    
+
     Ok(guard)
+}
+
+/// Handle CLI subcommands (keys, etc.) without launching the TUI
+fn handle_command(command: &Command) -> Result<()> {
+    match command {
+        Command::Keys { action } => handle_keys_command(action),
+    }
+}
+
+/// Handle keys subcommand
+fn handle_keys_command(action: &KeysAction) -> Result<()> {
+    let mut keystore = KeyStore::new().map_err(|e| {
+        color_eyre::eyre::eyre!("Failed to initialize keystore: {}", e)
+    })?;
+
+    match action {
+        KeysAction::Set { name, value } => {
+            let key_id = KeyId::Custom(name.clone());
+            let secret = SecretString::new(value.clone());
+            keystore.store(&key_id, &secret).map_err(|e| {
+                color_eyre::eyre::eyre!("Failed to store key: {}", e)
+            })?;
+            println!("✅ Key '{}' stored successfully", name);
+        }
+        KeysAction::List => {
+            let keys = keystore.list().map_err(|e| {
+                color_eyre::eyre::eyre!("Failed to list keys: {}", e)
+            })?;
+            if keys.is_empty() {
+                println!("No keys stored");
+            } else {
+                println!("Stored keys:");
+                for key in keys {
+                    println!("  • {}", key);
+                }
+            }
+        }
+        KeysAction::Delete { name } => {
+            let key_id = KeyId::Custom(name.clone());
+            keystore.delete(&key_id).map_err(|e| {
+                color_eyre::eyre::eyre!("Failed to delete key: {}", e)
+            })?;
+            println!("✅ Key '{}' deleted", name);
+        }
+        KeysAction::Get { name, reveal } => {
+            let key_id = KeyId::Custom(name.clone());
+            match keystore.get(&key_id) {
+                Ok(Some(secret)) => {
+                    if *reveal {
+                        println!("{}", secret.expose());
+                    } else {
+                        let value = secret.expose();
+                        let masked = if value.len() > 8 {
+                            format!("{}...{}", &value[..4], &value[value.len()-4..])
+                        } else {
+                            "****".to_string()
+                        };
+                        println!("{}: {}", name, masked);
+                    }
+                }
+                Ok(None) => {
+                    println!("Key '{}' not found", name);
+                }
+                Err(e) => {
+                    return Err(color_eyre::eyre::eyre!("Failed to get key: {}", e));
+                }
+            }
+        }
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -103,11 +175,16 @@ async fn main() -> Result<()> {
 
     // Parse CLI arguments
     let cli = Cli::parse_args();
-    
+
+    // Handle subcommands (these don't need the TUI)
+    if let Some(command) = &cli.command {
+        return handle_command(command);
+    }
+
     // Initialize logging FIRST (before anything else can log)
     // Keep guard alive for the entire program lifetime
     let _log_guard = init_logging(&cli.log_level)?;
-    
+
     tracing::info!("Starting ridge-control v{}", env!("CARGO_PKG_VERSION"));
     tracing::info!("CLI options: {:?}", cli);
 
