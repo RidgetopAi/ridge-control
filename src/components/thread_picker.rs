@@ -79,12 +79,6 @@ impl ThreadPicker {
         self.list_state.select(None);
     }
 
-    /// Get the current search query
-    #[allow(dead_code)]
-    pub fn query(&self) -> &str {
-        &self.query
-    }
-
     /// Update filtered results based on current query
     fn update_filtered_results(&mut self) {
         self.filtered_results.clear();

@@ -104,11 +104,6 @@ impl ProcessMonitor {
         monitor
     }
 
-    #[allow(dead_code)]
-    pub fn gpu_available(&self) -> bool {
-        self.gpu_monitor.is_available()
-    }
-
     /// Ensure a row is selected when gaining focus
     pub fn ensure_selection(&mut self) {
         if self.table_state.borrow().selected().is_none() && !self.filtered_processes().is_empty() {

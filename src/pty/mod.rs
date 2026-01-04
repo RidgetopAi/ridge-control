@@ -50,7 +50,11 @@ impl PtyHandle {
 
         let pts = pty.pts().map_err(|e| RidgeError::Pty(e.to_string()))?;
 
+        // Spawn shell as interactive login shell to ensure rc files are sourced
+        // This makes aliases and functions from .bashrc/.zshrc available
         let child = Command::new(&shell)
+            .arg("-l")  // Login shell - sources profile files
+            .arg("-i")  // Interactive - sources rc files (bashrc/zshrc)
             .spawn(&pts)
             .map_err(|e| RidgeError::Pty(e.to_string()))?;
 
