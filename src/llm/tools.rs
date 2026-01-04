@@ -1,5 +1,4 @@
 // Tool execution - some types for future features
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
@@ -147,6 +146,7 @@ impl CachedPage {
 }
 
 /// Web fetch cache with 15-minute TTL
+#[allow(dead_code)]
 struct WebFetchCache {
     cache: LruCache<String, CachedPage>,
     ttl: Duration,
@@ -1517,6 +1517,7 @@ pub struct ToolExecutor {
     shell_pool: Arc<Mutex<ShellSessionPool>>,
 }
 
+#[allow(dead_code)]
 impl ToolExecutor {
     pub fn new(working_dir: PathBuf) -> Self {
         // Build HTTP client with reasonable defaults
@@ -3889,6 +3890,7 @@ pub struct PendingToolUse {
     pub check: ToolExecutionCheck,
 }
 
+#[allow(dead_code)]
 impl PendingToolUse {
     pub fn new(tool: ToolUse, check: ToolExecutionCheck) -> Self {
         Self { tool, check }

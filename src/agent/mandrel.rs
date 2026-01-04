@@ -12,6 +12,7 @@ pub use crate::config::{MandrelConfig, MandrelError};
 
 /// Context entry from Mandrel
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Context {
     pub id: String,
     pub content: String,
@@ -27,6 +28,7 @@ pub struct Context {
 
 /// Task entry from Mandrel
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Task {
     pub id: String,
     pub title: String,
@@ -43,6 +45,7 @@ pub struct Task {
 
 /// Project info from Mandrel
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct Project {
     pub id: String,
     pub name: String,
@@ -56,6 +59,7 @@ pub struct Project {
 
 /// Task progress summary from Mandrel
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct TaskProgress {
     pub total: u32,
     pub completed: u32,
@@ -69,6 +73,7 @@ pub struct TaskProgress {
 
 /// Smart search result from Mandrel
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct SearchResult {
     #[serde(default)]
     pub contexts: Vec<Context>,
@@ -79,6 +84,7 @@ pub struct SearchResult {
 }
 
 /// Client for interacting with Mandrel MCP server
+#[allow(dead_code)]
 pub struct MandrelClient {
     client: Client,
     config: MandrelConfig,
@@ -96,21 +102,25 @@ impl MandrelClient {
     }
 
     /// Check if Mandrel is enabled
+    #[allow(dead_code)]
     pub fn is_enabled(&self) -> bool {
         self.config.enabled
     }
 
     /// Get the current project
+    #[allow(dead_code)]
     pub fn project(&self) -> &str {
         &self.config.project
     }
 
     /// Get the base URL
+    #[allow(dead_code)]
     pub fn base_url(&self) -> &str {
         &self.config.base_url
     }
 
     /// Update configuration
+    #[allow(dead_code)]
     pub fn set_config(&mut self, config: MandrelConfig) {
         self.config = config;
     }
@@ -286,6 +296,7 @@ impl MandrelClient {
     // ─────────────────────────────────────────────────────────────────────────
 
     /// Test connection to Mandrel
+    #[allow(dead_code)]
     pub async fn ping(&self) -> Result<String, MandrelError> {
         self.call_tool("mandrel_ping", serde_json::json!({})).await
     }

@@ -74,6 +74,7 @@ pub enum AgentEvent {
     /// Tool use requested
     ToolUseRequested(ToolUse),
     /// Tool execution complete
+    #[allow(dead_code)]
     ToolExecuted {
         tool_use_id: String,
         success: bool,
@@ -95,6 +96,7 @@ pub enum AgentEvent {
 
 /// Configuration for the agent engine
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AgentConfig {
     /// Tool definitions available to the agent
     pub tools: Vec<ToolDefinition>,
@@ -115,6 +117,7 @@ impl Default for AgentConfig {
 }
 
 /// The main agent engine - orchestrates the agent loop
+#[allow(dead_code)]
 pub struct AgentEngine<S: ThreadStore> {
     /// LLM manager for API calls
     llm: LLMManager,
@@ -173,6 +176,7 @@ impl<S: ThreadStore> AgentEngine<S> {
     }
 
     /// Get current state
+    #[allow(dead_code)]
     pub fn state(&self) -> AgentState {
         self.state
     }
@@ -271,6 +275,7 @@ impl<S: ThreadStore> AgentEngine<S> {
     }
 
     /// Check if LLM is configured (has at least one provider)
+    #[allow(dead_code)]
     pub fn is_configured(&self) -> bool {
         self.llm.is_configured()
     }

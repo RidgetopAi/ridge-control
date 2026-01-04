@@ -6,6 +6,7 @@ use crate::llm::types::{ToolResult, ToolResultContent, ToolUse};
 
 /// Result of tool execution
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct ToolExecutionResult {
     pub tool_use_id: String,
     pub result: ToolResult,
@@ -15,6 +16,7 @@ pub struct ToolExecutionResult {
 
 /// Error during tool execution
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum ToolExecutorError {
     #[error("Unknown tool: {name}")]
     UnknownTool { name: String },
@@ -37,6 +39,7 @@ pub enum ToolExecutorError {
 
 /// Trait for executing tools within the agent loop
 #[async_trait]
+#[allow(dead_code)]
 pub trait ToolExecutor: Send + Sync {
     /// Execute a tool and return the result
     async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, ToolExecutorError>;
@@ -49,6 +52,7 @@ pub trait ToolExecutor: Send + Sync {
 }
 
 /// Default tool executor that bridges to the existing llm::tools system
+#[allow(dead_code)]
 pub struct DefaultToolExecutor {
     /// Tool names that require confirmation
     confirmation_required: Vec<String>,
@@ -56,6 +60,7 @@ pub struct DefaultToolExecutor {
     confirm_all: bool,
 }
 
+#[allow(dead_code)]
 impl DefaultToolExecutor {
     pub fn new() -> Self {
         Self {
@@ -118,6 +123,7 @@ impl ToolExecutor for DefaultToolExecutor {
 
 /// A pass-through executor that always requires confirmation
 /// Used when the UI handles tool confirmation
+#[allow(dead_code)]
 pub struct ConfirmationRequiredExecutor;
 
 #[async_trait]
@@ -136,6 +142,7 @@ impl ToolExecutor for ConfirmationRequiredExecutor {
 }
 
 /// Helper to create a successful tool result
+#[allow(dead_code)]
 pub fn success_result(tool_use_id: impl Into<String>, content: impl Into<String>) -> ToolResult {
     ToolResult {
         tool_use_id: tool_use_id.into(),
@@ -145,6 +152,7 @@ pub fn success_result(tool_use_id: impl Into<String>, content: impl Into<String>
 }
 
 /// Helper to create an error tool result
+#[allow(dead_code)]
 pub fn error_result(tool_use_id: impl Into<String>, error: impl Into<String>) -> ToolResult {
     ToolResult {
         tool_use_id: tool_use_id.into(),

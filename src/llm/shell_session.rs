@@ -80,6 +80,7 @@ pub struct BackgroundTask {
     handle: Option<JoinHandle<()>>,
 }
 
+#[allow(dead_code)]
 impl BackgroundTask {
     /// Get current status
     pub async fn status(&self) -> TaskStatus {
@@ -157,6 +158,7 @@ pub struct BackgroundSpawnResult {
 
 /// Shell session errors
 #[derive(Debug, thiserror::Error)]
+#[allow(dead_code)]
 pub enum SessionError {
     #[error("Session pool full (max {0} sessions)")]
     PoolFull(usize),
@@ -181,6 +183,7 @@ pub enum SessionError {
 }
 
 /// A persistent shell session
+#[allow(dead_code)]
 pub struct ShellSession {
     pub id: String,
     cwd: PathBuf,
@@ -190,6 +193,7 @@ pub struct ShellSession {
     background_tasks: HashMap<String, BackgroundTask>,
 }
 
+#[allow(dead_code)]
 impl ShellSession {
     /// Create a new session with default working directory
     pub fn new(id: String) -> Self {
@@ -484,6 +488,7 @@ impl Default for ShellSessionPool {
     }
 }
 
+#[allow(dead_code)]
 impl ShellSessionPool {
     /// Create a new session pool
     pub fn new() -> Self {
@@ -593,6 +598,7 @@ impl ShellSessionPool {
 
 /// Session info for listing
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct SessionInfo {
     pub id: String,
     pub cwd: String,

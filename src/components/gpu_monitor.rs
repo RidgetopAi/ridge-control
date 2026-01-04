@@ -1,10 +1,10 @@
 // TRC-019: GPU monitor - some fields for future display
-#![allow(dead_code)]
 
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct GpuInfo {
     pub name: String,
     pub utilization: f32,
@@ -14,6 +14,7 @@ pub struct GpuInfo {
     pub power_draw: Option<f32>,
 }
 
+#[allow(dead_code)]
 impl GpuInfo {
     pub fn memory_percent(&self) -> f32 {
         if self.memory_total_mb == 0 {
@@ -52,6 +53,7 @@ impl Default for GpuMonitor {
     }
 }
 
+#[allow(dead_code)]
 impl GpuMonitor {
     pub fn new() -> Self {
         let mut monitor = Self {

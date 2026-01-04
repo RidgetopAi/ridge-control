@@ -1,5 +1,4 @@
 // Command palette - some methods reserved for dynamic command registration
-#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use nucleo::{Config, Matcher, Utf32String};
@@ -111,6 +110,7 @@ impl CommandRegistry {
         &self.commands
     }
 
+    #[allow(dead_code)]
     pub fn add_command(&mut self, cmd: Command) {
         self.commands.push(cmd);
     }
@@ -278,6 +278,7 @@ impl CommandPalette {
         self.list_state.select(None);
     }
 
+    #[allow(dead_code)]
     pub fn query(&self) -> &str {
         &self.query
     }

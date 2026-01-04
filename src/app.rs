@@ -1,3 +1,5 @@
+// App module - some fields for future features
+
 #![allow(dead_code)]
 
 use std::collections::HashMap;

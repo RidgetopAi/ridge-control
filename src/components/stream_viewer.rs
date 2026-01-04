@@ -1,5 +1,4 @@
 // Stream viewer - some fields for future state tracking
-#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -19,6 +18,7 @@ use crate::components::Component;
 use crate::config::Theme;
 use crate::streams::{ConnectionState, StreamClient, StreamData};
 
+#[allow(dead_code)]
 pub struct StreamViewer {
     scroll_offset: u16,
     line_count: usize,
@@ -29,6 +29,7 @@ pub struct StreamViewer {
     cached_lines: Vec<String>,
 }
 
+#[allow(dead_code)]
 impl StreamViewer {
     pub fn new() -> Self {
         Self {

@@ -46,11 +46,13 @@ impl AgentThread {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -84,6 +86,7 @@ impl AgentThread {
     }
 
     /// Update the model
+    #[allow(dead_code)]
     pub fn set_model(&mut self, model: impl Into<String>) {
         self.model = model.into();
         self.updated_at = chrono::Utc::now();
@@ -95,6 +98,7 @@ impl AgentThread {
         self.updated_at = chrono::Utc::now();
     }
 
+    #[allow(dead_code)]
     /// Repair corrupted thread data by removing orphaned ToolResult blocks.
     /// Returns the number of orphaned ToolResults that were removed.
     ///
@@ -159,6 +163,7 @@ impl AgentThread {
 }
 
 /// Trait for thread storage backends
+#[allow(dead_code)]
 pub trait ThreadStore: Send + Sync {
     /// Get a thread by ID
     fn get(&self, id: &str) -> Option<AgentThread>;
@@ -178,6 +183,7 @@ pub trait ThreadStore: Send + Sync {
 
 /// Summary info for thread listing
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct ThreadSummary {
     pub id: String,
     pub title: String,
@@ -187,11 +193,13 @@ pub struct ThreadSummary {
 }
 
 /// In-memory thread store (for development/testing)
+#[allow(dead_code)]
 pub struct InMemoryThreadStore {
     threads: RwLock<HashMap<String, AgentThread>>,
 }
 
 impl InMemoryThreadStore {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             threads: RwLock::new(HashMap::new()),

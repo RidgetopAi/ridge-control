@@ -2,6 +2,10 @@
 //!
 //! Handles server lifecycle, routing requests to appropriate servers,
 //! and document synchronization.
+//!
+//! Note: Used indirectly through LSP tools in ToolExecutor.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

@@ -3,6 +3,8 @@
 //! Allows configuring different models/providers for explore, plan, and review subagents.
 //! Configuration is stored in `~/.config/ridge-control/llm.toml` under `[subagents]`.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Configuration for a single subagent type

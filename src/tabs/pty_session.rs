@@ -1,4 +1,5 @@
 // PTY session - some methods for future use
+
 #![allow(dead_code)]
 
 //! Per-Tab PTY Session Management

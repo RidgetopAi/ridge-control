@@ -1,5 +1,4 @@
 // Confirm dialog - some methods for future tool confirmation features
-#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode};
 use ratatui::{
@@ -19,6 +18,7 @@ pub struct ConfirmDialog {
     pending_tool: Option<PendingToolUse>,
 }
 
+#[allow(dead_code)]
 impl ConfirmDialog {
     pub fn new() -> Self {
         Self { pending_tool: None }

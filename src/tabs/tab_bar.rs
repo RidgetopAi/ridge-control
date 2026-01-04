@@ -1,4 +1,5 @@
 // Tab bar - some types for future theming options
+
 #![allow(dead_code)]
 
 //! Tab Bar Widget

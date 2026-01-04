@@ -58,6 +58,7 @@ impl DiskThreadStore {
     }
 
     /// Get the base path
+    #[allow(dead_code)]
     pub fn base_path(&self) -> &PathBuf {
         &self.base_path
     }

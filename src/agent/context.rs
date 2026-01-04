@@ -47,6 +47,7 @@ impl ContextSegment {
         }
     }
 
+    #[allow(dead_code)]
     pub fn system(text: impl Into<String>, sequence: u64) -> Self {
         Self::new(
             SegmentKind::System,
@@ -55,10 +56,12 @@ impl ContextSegment {
         )
     }
 
+    #[allow(dead_code)]
     pub fn chat(messages: Vec<Message>, sequence: u64) -> Self {
         Self::new(SegmentKind::ChatHistory, messages, sequence)
     }
 
+    #[allow(dead_code)]
     pub fn tool_exchange(messages: Vec<Message>, sequence: u64) -> Self {
         Self::new(SegmentKind::ToolExchange, messages, sequence)
     }
@@ -83,6 +86,7 @@ pub struct BuildContextParams {
 
 /// Result of building a context-aware request
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct BuiltContext {
     /// The request ready to send to LLM
     pub request: LLMRequest,
@@ -100,6 +104,7 @@ pub struct BuiltContext {
 
 /// Lightweight stats for UI display (Phase 3: Context indicator)
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct ContextStats {
     /// Tokens used in current context
     pub tokens_used: u32,
@@ -156,6 +161,7 @@ impl ContextStats {
 }
 
 /// Manages context window budget and builds optimized requests
+#[allow(dead_code)]
 pub struct ContextManager {
     catalog: Arc<ModelCatalog>,
     counter: Arc<dyn TokenCounter>,
@@ -172,6 +178,7 @@ impl ContextManager {
         }
     }
 
+    #[allow(dead_code)]
     pub fn with_safety_margin(mut self, percent: u32) -> Self {
         self.safety_margin_percent = percent;
         self

@@ -1,5 +1,4 @@
 // Conversation viewer - some state getters for future UI integration
-#![allow(dead_code)]
 
 use std::hash::{Hash, Hasher};
 use std::collections::hash_map::DefaultHasher;
@@ -112,16 +111,19 @@ impl ConversationViewer {
     }
     
     /// Toggle thinking block collapse state (TRC-017)
+    #[allow(dead_code)]
     pub fn toggle_thinking_collapse(&mut self) {
         self.thinking_collapsed = !self.thinking_collapsed;
     }
     
     /// Get thinking collapse state (TRC-017)
+    #[allow(dead_code)]
     pub fn is_thinking_collapsed(&self) -> bool {
         self.thinking_collapsed
     }
     
     /// Set thinking collapse state (TRC-017)
+    #[allow(dead_code)]
     pub fn set_thinking_collapsed(&mut self, collapsed: bool) {
         self.thinking_collapsed = collapsed;
     }
@@ -159,6 +161,7 @@ impl ConversationViewer {
     }
     
     /// Get tool results collapse state
+    #[allow(dead_code)]
     pub fn is_tool_results_collapsed(&self) -> bool {
         self.tool_results_collapsed
     }
@@ -169,11 +172,13 @@ impl ConversationViewer {
     }
     
     /// Get the tool call manager for external access
+    #[allow(dead_code)]
     pub fn tool_call_manager(&self) -> &ToolCallManager {
         &self.tool_call_manager
     }
     
     /// Get mutable tool call manager
+    #[allow(dead_code)]
     pub fn tool_call_manager_mut(&mut self) -> &mut ToolCallManager {
         &mut self.tool_call_manager
     }
@@ -219,21 +224,25 @@ impl ConversationViewer {
     }
     
     /// Check if there's a pending tool that needs confirmation
+    #[allow(dead_code)]
     pub fn has_pending_tool(&self) -> bool {
         self.tool_call_manager.has_pending()
     }
     
     /// Check if there's a running tool
+    #[allow(dead_code)]
     pub fn has_running_tool(&self) -> bool {
         self.tool_call_manager.has_running()
     }
     
     /// Toggle tool call navigation mode
+    #[allow(dead_code)]
     pub fn toggle_tool_navigation(&mut self) {
         self.tool_navigation_mode = !self.tool_navigation_mode;
     }
     
     /// Check if in tool navigation mode
+    #[allow(dead_code)]
     pub fn is_tool_navigation_mode(&self) -> bool {
         self.tool_navigation_mode
     }
@@ -244,16 +253,19 @@ impl ConversationViewer {
     }
 
     /// Search state accessor (TRC-021)
+    #[allow(dead_code)]
     pub fn is_search_active(&self) -> bool {
         self.search_state.is_active()
     }
 
     /// Get search state (TRC-021)
+    #[allow(dead_code)]
     pub fn search_state(&self) -> &SearchState {
         &self.search_state
     }
 
     /// Get mutable search state (TRC-021)
+    #[allow(dead_code)]
     pub fn search_state_mut(&mut self) -> &mut SearchState {
         &mut self.search_state
     }
@@ -531,6 +543,7 @@ impl ConversationViewer {
     }
 
     /// Check if position is within selection (for highlighting)
+    #[allow(dead_code)]
     pub fn is_position_selected(&self, line: usize, col: usize) -> bool {
         let sel = match self.selection {
             Some(s) => s,
@@ -1620,6 +1633,7 @@ impl ConversationViewer {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_auto_scroll(&self) -> bool {
         self.auto_scroll
     }
@@ -1801,6 +1815,7 @@ impl ConversationViewer {
     }
 
     /// Phase 4: Get current tool verbosity level
+    #[allow(dead_code)]
     pub fn tool_verbosity(&self) -> ToolVerbosity {
         self.tool_call_manager.verbosity()
     }

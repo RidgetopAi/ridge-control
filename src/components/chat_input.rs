@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
@@ -92,6 +91,7 @@ impl ChatInput {
     }
 
     /// Set the visible height for scroll calculations
+    #[allow(dead_code)]
     pub fn set_visible_height(&mut self, height: u16) {
         self.visible_height = height.saturating_sub(2); // Account for borders
     }
@@ -103,6 +103,7 @@ impl ChatInput {
     }
 
     /// Get line count
+    #[allow(dead_code)]
     pub fn line_count(&self) -> usize {
         self.lines.len()
     }

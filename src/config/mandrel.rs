@@ -3,6 +3,8 @@
 //! These types are used by both the config module and the agent/mandrel client.
 //! Located here to avoid circular dependencies between config and agent modules.
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 
 /// Error types for Mandrel operations

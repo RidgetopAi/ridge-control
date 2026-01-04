@@ -4,6 +4,7 @@ use std::process::Command;
 
 /// Platform information for system prompt
 #[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
 pub struct PlatformInfo {
     pub os: String,
     pub arch: String,
@@ -15,6 +16,7 @@ pub struct PlatformInfo {
 
 impl PlatformInfo {
     /// Gather current platform information
+    #[allow(dead_code)]
     pub fn gather() -> Self {
         Self {
             os: std::env::consts::OS.to_string(),
@@ -42,6 +44,7 @@ pub struct RepoContextInfo {
 
 impl RepoContextInfo {
     /// Gather git repository information from current directory
+    #[allow(dead_code)]
     pub fn gather() -> Self {
         let mut info = Self::default();
 
@@ -113,6 +116,7 @@ impl RepoContextInfo {
 
 /// Builder for constructing system prompts
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SystemPromptBuilder {
     role: String,
     platform: Option<PlatformInfo>,
@@ -163,11 +167,13 @@ impl SystemPromptBuilder {
         )
     }
 
+    #[allow(dead_code)]
     pub fn with_platform(mut self, platform: PlatformInfo) -> Self {
         self.platform = Some(platform);
         self
     }
 
+    #[allow(dead_code)]
     pub fn with_repo(mut self, repo: RepoContextInfo) -> Self {
         self.repo = Some(repo);
         self
@@ -178,11 +184,13 @@ impl SystemPromptBuilder {
         self
     }
 
+    #[allow(dead_code)]
     pub fn add_preference(mut self, pref: impl Into<String>) -> Self {
         self.user_preferences.push(pref.into());
         self
     }
 
+    #[allow(dead_code)]
     pub fn add_coding_guideline(mut self, guideline: impl Into<String>) -> Self {
         self.coding_guidelines.push(guideline.into());
         self

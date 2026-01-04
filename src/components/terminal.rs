@@ -1,5 +1,4 @@
 // Terminal widget - some methods for future scroll display features
-#![allow(dead_code)]
 
 use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
@@ -20,6 +19,7 @@ pub struct TerminalWidget {
     inner_area: Option<Rect>,
 }
 
+#[allow(dead_code)]
 impl TerminalWidget {
     pub fn new(cols: usize, rows: usize) -> Self {
         Self {

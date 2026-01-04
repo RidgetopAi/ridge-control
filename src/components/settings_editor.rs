@@ -93,6 +93,7 @@ pub enum KeyTestStatus {
 }
 
 /// Settings Editor component
+#[allow(dead_code)]
 pub struct SettingsEditor {
     /// Currently selected section
     selected_section: usize,
@@ -156,6 +157,7 @@ impl SettingsEditor {
     }
 
     /// Set provider key statuses
+    #[allow(dead_code)]
     pub fn set_provider_keys(&mut self, keys: Vec<ProviderKeyStatus>) {
         self.provider_keys = keys;
     }
@@ -192,6 +194,7 @@ impl SettingsEditor {
 
     /// Get the provider name for the current editing session (TS-006)
     /// Returns None if not currently editing
+    #[allow(dead_code)]
     pub fn editing_provider(&self) -> Option<&str> {
         if let SettingsInputMode::Editing { field, .. } = &self.input_mode {
             Some(field.as_str())
@@ -232,6 +235,7 @@ impl SettingsEditor {
     }
 
     /// Get current key test status (TS-007)
+    #[allow(dead_code)]
     pub fn key_test_status(&self) -> &KeyTestStatus {
         &self.key_test_status
     }
@@ -247,6 +251,7 @@ impl SettingsEditor {
     }
 
     /// Get current input mode
+    #[allow(dead_code)]
     pub fn input_mode(&self) -> &SettingsInputMode {
         &self.input_mode
     }
@@ -257,11 +262,13 @@ impl SettingsEditor {
     }
 
     /// Get the current provider
+    #[allow(dead_code)]
     pub fn current_provider(&self) -> &str {
         &self.config.defaults.provider
     }
 
     /// Get the current model
+    #[allow(dead_code)]
     pub fn current_model(&self) -> &str {
         &self.config.defaults.model
     }
@@ -411,6 +418,7 @@ impl SettingsEditor {
     }
 
     /// Validate key format for a provider (basic checks)
+    #[allow(dead_code)]
     fn validate_key_format(provider: &str, key: &str) -> Option<&'static str> {
         if key.is_empty() {
             return Some("Key cannot be empty");

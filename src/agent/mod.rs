@@ -8,7 +8,6 @@
 //! - Full agent loop state machine
 
 // Suppress unused warnings for now - these will be used when wired to app
-#![allow(dead_code)]
 #![allow(unused_imports)]
 
 pub mod models;

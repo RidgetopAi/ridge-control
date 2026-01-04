@@ -1,5 +1,4 @@
 // TRC-015: Spinner manager - some key variants for future use
-#![allow(dead_code)]
 
 use std::collections::HashMap;
 
@@ -9,6 +8,7 @@ use super::spinner::{Spinner, SpinnerStyle};
 use crate::config::Theme;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum SpinnerKey {
     LlmLoading,
     StreamConnecting(String),
@@ -16,6 +16,7 @@ pub enum SpinnerKey {
     Custom(String),
 }
 
+#[allow(dead_code)]
 impl SpinnerKey {
     pub fn stream_connecting(name: impl Into<String>) -> Self {
         Self::StreamConnecting(name.into())
@@ -41,6 +42,7 @@ impl Default for SpinnerManager {
     }
 }
 
+#[allow(dead_code)]
 impl SpinnerManager {
     pub fn new() -> Self {
         Self {

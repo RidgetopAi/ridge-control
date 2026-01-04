@@ -80,6 +80,7 @@ impl ThreadPicker {
     }
 
     /// Get the current search query
+    #[allow(dead_code)]
     pub fn query(&self) -> &str {
         &self.query
     }

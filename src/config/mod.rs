@@ -1,4 +1,5 @@
 // Config module - some methods for future hot-reload and CLI features
+
 #![allow(dead_code)]
 
 mod keybindings;

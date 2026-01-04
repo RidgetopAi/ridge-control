@@ -1,10 +1,10 @@
 // TRC-015: Spinner animations - some methods for future use
-#![allow(dead_code)]
 
 use ratatui::style::Color;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[allow(dead_code)]
 pub enum SpinnerStyle {
     #[default]
     Braille,
@@ -19,6 +19,7 @@ pub enum SpinnerStyle {
     Clock,
 }
 
+#[allow(dead_code)]
 impl SpinnerStyle {
     pub fn frames(&self) -> &'static [&'static str] {
         match self {
@@ -83,6 +84,7 @@ impl SpinnerStyle {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Spinner {
     style: SpinnerStyle,
     frame_index: usize,
@@ -98,6 +100,7 @@ impl Default for Spinner {
     }
 }
 
+#[allow(dead_code)]
 impl Spinner {
     pub fn new(style: SpinnerStyle) -> Self {
         Self {

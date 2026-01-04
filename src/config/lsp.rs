@@ -2,6 +2,8 @@
 //!
 //! Configuration for language servers loaded from ~/.config/ridge-control/lsp.toml
 
+#![allow(dead_code)]
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;

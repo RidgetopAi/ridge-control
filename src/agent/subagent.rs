@@ -21,6 +21,7 @@ use crate::llm::types::{ContentBlock, LLMRequest, Message, ToolDefinition};
 
 /// Result of a sub-agent execution
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct SubagentResult {
     /// Unique task ID for this sub-agent run
     pub task_id: String,
@@ -38,6 +39,7 @@ pub struct SubagentResult {
 
 /// Status of a sub-agent task
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum SubagentStatus {
     /// Task is still running (for background tasks)
     Pending,
@@ -49,6 +51,7 @@ pub enum SubagentStatus {
 
 /// Error during sub-agent execution
 #[derive(Debug, Clone, thiserror::Error)]
+#[allow(dead_code)]
 pub enum SubagentError {
     #[error("Provider '{provider}' not configured - add API key in settings")]
     ProviderNotConfigured { provider: String },
@@ -73,6 +76,7 @@ pub enum SubagentError {
 }
 
 /// Manager for spawning and tracking sub-agents
+#[allow(dead_code)]
 pub struct SubagentManager {
     /// Sub-agent configuration
     config: SubagentsConfig,
@@ -96,16 +100,19 @@ impl SubagentManager {
     }
 
     /// Set available tools (called when tools are configured)
+    #[allow(dead_code)]
     pub fn set_tools(&mut self, tools: Vec<ToolDefinition>) {
         self.all_tools = tools;
     }
 
     /// Update configuration
+    #[allow(dead_code)]
     pub fn set_config(&mut self, config: SubagentsConfig) {
         self.config = config;
     }
 
     /// Get configuration
+    #[allow(dead_code)]
     pub fn config(&self) -> &SubagentsConfig {
         &self.config
     }
@@ -117,6 +124,7 @@ impl SubagentManager {
     /// * `agent_type` - Type of agent (explore, plan, review)
     /// * `prompt` - Task description for the sub-agent
     /// * `background` - Run in background (returns immediately with pending status)
+    #[allow(dead_code)]
     pub async fn spawn(
         &mut self,
         keystore: &KeyStore,
@@ -162,6 +170,7 @@ impl SubagentManager {
     }
 
     /// Check if a background task is complete
+    #[allow(dead_code)]
     pub fn is_task_complete(&self, task_id: &str) -> bool {
         if self.completed_results.contains_key(task_id) {
             return true;
@@ -173,6 +182,7 @@ impl SubagentManager {
     }
 
     /// Get result of a background task (blocks if still running)
+    #[allow(dead_code)]
     pub async fn get_task_result(&mut self, task_id: &str) -> Result<SubagentResult, SubagentError> {
         // Check completed cache first
         if let Some(result) = self.completed_results.remove(task_id) {
@@ -202,6 +212,7 @@ impl SubagentManager {
     }
 
     /// Poll a background task without blocking
+    #[allow(dead_code)]
     pub fn poll_task(&mut self, task_id: &str) -> Option<Result<SubagentResult, SubagentError>> {
         // Check completed cache
         if let Some(result) = self.completed_results.get(task_id) {
@@ -235,11 +246,13 @@ impl SubagentManager {
     }
 
     /// Get list of running task IDs
+    #[allow(dead_code)]
     pub fn running_task_ids(&self) -> Vec<String> {
         self.running_tasks.keys().cloned().collect()
     }
 
     /// Cancel a running task
+    #[allow(dead_code)]
     pub fn cancel_task(&mut self, task_id: &str) -> bool {
         if let Some(handle) = self.running_tasks.remove(task_id) {
             handle.abort();
@@ -265,6 +278,7 @@ impl SubagentManager {
 }
 
 /// Create a provider for the given provider name
+#[allow(dead_code)]
 fn create_provider(keystore: &KeyStore, provider_name: &str) -> Result<Arc<dyn Provider>, SubagentError> {
     let key_id = match provider_name {
         "anthropic" => KeyId::Anthropic,
@@ -306,6 +320,7 @@ fn create_provider(keystore: &KeyStore, provider_name: &str) -> Result<Arc<dyn P
 }
 
 /// Build an LLM request for the sub-agent
+#[allow(dead_code)]
 fn build_request(
     config: &SubagentConfig,
     prompt: &str,
@@ -329,6 +344,7 @@ fn build_request(
 }
 
 /// Execute a sub-agent (internal async function)
+#[allow(dead_code)]
 async fn execute_subagent(
     task_id: String,
     agent_type: String,

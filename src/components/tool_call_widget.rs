@@ -1,5 +1,4 @@
 // TRC-016: Tool call widget - some methods for future use
-#![allow(dead_code)]
 
 use ratatui::{
     style::{Color, Modifier, Style},
@@ -14,6 +13,7 @@ use crate::components::diff_view::{DiffComputer, DiffRenderer};
 
 /// Status of a tool execution
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum ToolStatus {
     /// Tool call received, awaiting user confirmation
     Pending,
@@ -29,6 +29,7 @@ pub enum ToolStatus {
     Timeout,
 }
 
+#[allow(dead_code)]
 impl ToolStatus {
     pub fn icon(&self) -> &'static str {
         match self {
@@ -68,6 +69,7 @@ pub struct ToolCall {
     pub original_captured: bool,
 }
 
+#[allow(dead_code)]
 impl ToolCall {
     pub fn new(tool_use: ToolUse) -> Self {
         Self {
@@ -614,6 +616,7 @@ pub struct ToolCallManager {
     verbosity: ToolVerbosity,
 }
 
+#[allow(dead_code)]
 impl ToolCallManager {
     pub fn new() -> Self {
         Self {

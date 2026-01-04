@@ -1,6 +1,12 @@
 //! LSP type definitions
 //!
 //! Core types used in Language Server Protocol communication.
+//!
+//! Note: These types are used indirectly through LSP tools in ToolExecutor
+//! (lsp_definition, lsp_references, lsp_hover, lsp_symbols). The dead_code
+//! warnings are false positives.
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 

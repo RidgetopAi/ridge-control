@@ -2,6 +2,10 @@
 //!
 //! Tracks which documents are "open" in the LSP sense,
 //! managing didOpen/didClose notifications.
+//!
+//! Note: Used indirectly through LSP tools in ToolExecutor.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};

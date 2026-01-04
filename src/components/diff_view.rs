@@ -1,6 +1,5 @@
 // Diff view component for file_write tool calls
 // Shows unified diff between original and new file content
-#![allow(dead_code)]
 
 use ratatui::{
     style::{Modifier, Style},
@@ -25,6 +24,7 @@ pub enum DiffLine {
 
 /// Configuration for diff rendering
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct DiffConfig {
     /// Number of context lines around changes
     pub context_lines: usize,
@@ -49,6 +49,7 @@ pub struct DiffComputer {
     config: DiffConfig,
 }
 
+#[allow(dead_code)]
 impl DiffComputer {
     pub fn new() -> Self {
         Self {
@@ -184,6 +185,7 @@ pub struct DiffRenderer<'a> {
     show_line_numbers: bool,
 }
 
+#[allow(dead_code)]
 impl<'a> DiffRenderer<'a> {
     pub fn new(theme: &'a Theme) -> Self {
         Self {

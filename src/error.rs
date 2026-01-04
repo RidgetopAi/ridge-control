@@ -1,4 +1,5 @@
 // Error types - some variants for future error conditions
+
 #![allow(dead_code)]
 
 use std::path::PathBuf;

@@ -1,4 +1,5 @@
 // TRC-011: Keystore is fully implemented but not yet integrated with UI triggers
+
 #![allow(dead_code)]
 
 use std::collections::HashMap;

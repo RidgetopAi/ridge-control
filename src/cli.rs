@@ -92,11 +92,6 @@ impl Cli {
     pub fn parse_args() -> Self {
         Self::parse()
     }
-
-    /// Check if this is a subcommand that should be handled without launching the TUI
-    pub fn has_subcommand(&self) -> bool {
-        self.command.is_some()
-    }
 }
 
 #[cfg(test)]

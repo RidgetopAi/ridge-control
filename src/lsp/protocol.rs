@@ -2,6 +2,11 @@
 //!
 //! Implements the JSON-RPC 2.0 message format used by LSP,
 //! including Content-Length header parsing for stdio transport.
+//!
+//! Note: These types are used indirectly through LSP tools in ToolExecutor.
+//! The dead_code warnings are false positives.
+
+#![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicI64, Ordering};

@@ -1,5 +1,4 @@
 // TRC-023: Notification system - some convenience methods for future use
-#![allow(dead_code)]
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -50,6 +49,7 @@ pub struct Notification {
     pub dismissable: bool,
 }
 
+#[allow(dead_code)]
 impl Notification {
     pub fn new(level: NotificationLevel, title: impl Into<String>) -> Self {
         Self {
@@ -94,6 +94,7 @@ pub struct NotificationManager {
     next_id: u64,
 }
 
+#[allow(dead_code)]
 impl NotificationManager {
     pub fn new() -> Self {
         Self {

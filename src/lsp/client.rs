@@ -1,6 +1,10 @@
 //! LSP client for a single language server
 //!
 //! Handles spawning, communication, and lifecycle of one language server.
+//!
+//! Note: Used indirectly through LSP tools in ToolExecutor.
+
+#![allow(dead_code)]
 
 use std::collections::HashMap;
 use std::path::PathBuf;

@@ -1,5 +1,4 @@
 // TRC-013/TRC-022: Log viewer with search/filter - some LogLevel variants not used yet
-#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
 use ratatui::{
@@ -20,6 +19,7 @@ use crate::components::Component;
 use crate::config::Theme;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum LogLevel {
     Trace,
     Debug,
@@ -58,6 +58,7 @@ pub struct LogEntry {
     pub message: String,
 }
 
+#[allow(dead_code)]
 impl LogEntry {
     pub fn new(level: LogLevel, target: impl Into<String>, message: impl Into<String>) -> Self {
         let now = chrono::Local::now();
@@ -86,6 +87,7 @@ impl LogEntry {
     }
 }
 
+#[allow(dead_code)]
 pub struct LogViewer {
     logs: VecDeque<LogEntry>,
     max_entries: usize,
@@ -98,6 +100,7 @@ pub struct LogViewer {
     filter_state: FilterState,
 }
 
+#[allow(dead_code)]
 impl LogViewer {
     pub fn new() -> Self {
         Self {

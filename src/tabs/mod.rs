@@ -1,4 +1,5 @@
 // Tab manager - some methods for future tab features
+
 #![allow(dead_code)]
 
 //! Tab System for Ridge-Control

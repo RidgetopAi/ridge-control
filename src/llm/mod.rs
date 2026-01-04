@@ -12,4 +12,6 @@ pub mod shell_session;
 pub use types::*;
 pub use manager::{LLMManager, LLMEvent};
 pub use tools::{ToolExecutor, ToolExecutionCheck, PendingToolUse, ToolError, ParsedQuestion, ParsedOption};
+// Re-export shell session types (used by ToolExecutor)
+#[allow(unused_imports)]
 pub use shell_session::{ShellSessionPool, ShellSession, SessionError, ExecResult, BackgroundTaskOutput};

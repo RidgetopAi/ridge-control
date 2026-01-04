@@ -104,6 +104,7 @@ impl ProcessMonitor {
         monitor
     }
 
+    #[allow(dead_code)]
     pub fn gpu_available(&self) -> bool {
         self.gpu_monitor.is_available()
     }

@@ -1,5 +1,4 @@
 // Streams module - some types for future use
-#![allow(dead_code)]
 
 pub mod client;
 pub mod config;

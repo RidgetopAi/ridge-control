@@ -1,5 +1,4 @@
 // TRC-021/TRC-022: Search and filter - some methods for future use
-#![allow(dead_code)]
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
@@ -35,6 +34,7 @@ pub struct SearchState {
     active: bool,
 }
 
+#[allow(dead_code)]
 impl SearchState {
     pub fn new() -> Self {
         Self::default()
@@ -222,6 +222,7 @@ pub struct SearchBar<'a> {
     focused: bool,
 }
 
+#[allow(dead_code)]
 impl<'a> SearchBar<'a> {
     pub fn new(search_state: &'a SearchState, theme: &'a Theme) -> Self {
         Self {
@@ -307,6 +308,7 @@ pub struct FilterState {
     compiled_regex: Option<Result<Regex, String>>,
 }
 
+#[allow(dead_code)]
 impl FilterState {
     pub fn new() -> Self {
         Self::default()
@@ -491,6 +493,7 @@ pub struct FilterBar<'a> {
     focused: bool,
 }
 
+#[allow(dead_code)]
 impl<'a> FilterBar<'a> {
     pub fn new(filter_state: &'a FilterState, theme: &'a Theme) -> Self {
         Self {

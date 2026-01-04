@@ -1,4 +1,5 @@
 // Terminal grid - some methods for future use
+
 #![allow(dead_code)]
 
 use ratatui::style::{Color, Modifier, Style};

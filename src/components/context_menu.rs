@@ -1,5 +1,4 @@
 // TRC-020: Context menus - some methods for future use
-#![allow(dead_code)]
 
 use crossterm::event::{Event, KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
@@ -67,6 +66,7 @@ pub struct ContextMenu {
     cached_menu_rect: Option<Rect>,
 }
 
+#[allow(dead_code)]
 impl ContextMenu {
     pub fn new() -> Self {
         Self {

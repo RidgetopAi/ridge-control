@@ -35,6 +35,7 @@ pub struct ModelInfo {
 }
 
 impl ModelInfo {
+    #[allow(dead_code)]
     pub fn new(
         name: impl Into<String>,
         max_context_tokens: u32,
@@ -58,6 +59,7 @@ impl ModelInfo {
         self
     }
 
+    #[allow(dead_code)]
     pub fn without_tools(mut self) -> Self {
         self.supports_tools = false;
         self
@@ -117,6 +119,7 @@ impl ModelCatalog {
     }
 
     /// List all known model names
+    #[allow(dead_code)]
     pub fn list(&self) -> Vec<&str> {
         self.models.keys().map(|s| s.as_str()).collect()
     }
