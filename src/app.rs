@@ -66,7 +66,6 @@ pub struct App {
     process_monitor: ProcessMonitor,
     menu: Menu,
     stream_manager: StreamManager,
-    llm_manager: LLMManager,
     llm_response_buffer: String,
     /// Separate buffer for streaming thinking blocks (TRC-017)
     thinking_buffer: String,
@@ -192,18 +191,9 @@ impl App {
         // Initialize selected_stream_index to 0 if streams exist
         let initial_stream_index = if stream_count > 0 { Some(0) } else { None };
 
-        let mut llm_manager = LLMManager::new();
-        
         // Initialize secure key storage (TRC-011)
         let keystore = match KeyStore::new() {
-            Ok(ks) => {
-                // Try to register providers from keystore
-                let registered = llm_manager.register_from_keystore(&ks);
-                if !registered.is_empty() {
-                    tracing::info!("Loaded API keys for providers: {:?}", registered);
-                }
-                Some(ks)
-            }
+            Ok(ks) => Some(ks),
             Err(e) => {
                 tracing::warn!("Failed to initialize keystore: {}", e);
                 None
@@ -246,16 +236,6 @@ impl App {
             tracing::info!("LSP integration disabled");
         }
 
-        // Apply persisted LLM settings from llm.toml (TS-013)
-        let llm_config = config_manager.llm_config();
-        llm_manager.set_provider(&llm_config.defaults.provider);
-        llm_manager.set_model(&llm_config.defaults.model);
-        tracing::info!(
-            "Loaded LLM settings: provider={}, model={}",
-            llm_config.defaults.provider,
-            llm_config.defaults.model
-        );
-        
         // Set up config watcher if enabled
         let config_watcher = if config_manager.app_config().general.watch_config {
             let debounce_ms = config_manager.app_config().general.config_watch_debounce_ms;
@@ -297,6 +277,7 @@ impl App {
         };
         
         // Create separate LLMManager for AgentEngine (with same provider registrations)
+        let llm_config = config_manager.llm_config();
         let mut agent_llm_manager = LLMManager::new();
         if let Some(ref ks) = keystore {
             agent_llm_manager.register_from_keystore(ks);
@@ -304,6 +285,11 @@ impl App {
         // Apply same provider/model settings
         agent_llm_manager.set_provider(&llm_config.defaults.provider);
         agent_llm_manager.set_model(&llm_config.defaults.model);
+        tracing::info!(
+            "Loaded LLM settings: provider={}, model={}",
+            llm_config.defaults.provider,
+            llm_config.defaults.model
+        );
         
         // Configure AgentEngine with tool definitions so continuation requests include tools
         let tool_defs = tool_executor.tool_definitions_for_llm();
@@ -354,7 +340,6 @@ impl App {
             process_monitor: ProcessMonitor::new(),
             menu,
             stream_manager,
-            llm_manager,
             llm_response_buffer: String::new(),
             thinking_buffer: String::new(),
             current_block_type: None,
@@ -448,20 +433,22 @@ impl App {
         }
         
         // Register API keys from CLI (override keystore/config)
-        if let Some(ref key) = cli.anthropic_api_key {
-            app.llm_manager.register_anthropic(key.clone());
-        }
-        if let Some(ref key) = cli.openai_api_key {
-            app.llm_manager.register_openai(key.clone());
-        }
-        if let Some(ref key) = cli.gemini_api_key {
-            app.llm_manager.register_gemini(key.clone());
-        }
-        if let Some(ref key) = cli.grok_api_key {
-            app.llm_manager.register_grok(key.clone());
-        }
-        if let Some(ref key) = cli.groq_api_key {
-            app.llm_manager.register_groq(key.clone());
+        if let Some(ref mut engine) = app.agent_engine {
+            if let Some(ref key) = cli.anthropic_api_key {
+                engine.llm_manager_mut().register_anthropic(key.clone());
+            }
+            if let Some(ref key) = cli.openai_api_key {
+                engine.llm_manager_mut().register_openai(key.clone());
+            }
+            if let Some(ref key) = cli.gemini_api_key {
+                engine.llm_manager_mut().register_gemini(key.clone());
+            }
+            if let Some(ref key) = cli.grok_api_key {
+                engine.llm_manager_mut().register_grok(key.clone());
+            }
+            if let Some(ref key) = cli.groq_api_key {
+                engine.llm_manager_mut().register_groq(key.clone());
+            }
         }
         
         Ok(app)
@@ -1180,7 +1167,7 @@ impl App {
         let show_settings_editor = self.show_settings_editor;
         let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
-        // TP2-002-14: Get messages from AgentThread segments if available, otherwise fallback to llm_manager
+        // TP2-002-14: Get messages from AgentThread segments if available
         let messages: Vec<Message> = if let Some(engine) = &self.agent_engine {
             if let Some(thread) = engine.current_thread() {
                 // Extract all messages from thread segments
@@ -1188,12 +1175,12 @@ impl App {
                     .flat_map(|segment| segment.messages.clone())
                     .collect()
             } else {
-                // AgentEngine exists but no thread yet - use empty or fallback
-                self.llm_manager.conversation().to_vec()
+                // AgentEngine exists but no thread yet
+                Vec::new()
             }
         } else {
-            // No AgentEngine - fallback to llm_manager conversation
-            self.llm_manager.conversation().to_vec()
+            // No AgentEngine (unreachable - always initialized)
+            Vec::new()
         };
         let streaming_buffer = self.llm_response_buffer.clone();
         // TRC-017: Clone thinking buffer for rendering
@@ -2920,13 +2907,15 @@ impl App {
                             tracing::info!("Stored API key for {}", key_id);
                             // Re-register provider with new key
                             if let Ok(Some(s)) = ks.get(&key_id) {
-                                match key_id {
-                                    KeyId::Anthropic => self.llm_manager.register_anthropic(s.expose()),
-                                    KeyId::OpenAI => self.llm_manager.register_openai(s.expose()),
-                                    KeyId::Gemini => self.llm_manager.register_gemini(s.expose()),
-                                    KeyId::Grok => self.llm_manager.register_grok(s.expose()),
-                                    KeyId::Groq => self.llm_manager.register_groq(s.expose()),
-                                    KeyId::Custom(_) => {}
+                                if let Some(ref mut engine) = self.agent_engine {
+                                    match key_id {
+                                        KeyId::Anthropic => engine.llm_manager_mut().register_anthropic(s.expose()),
+                                        KeyId::OpenAI => engine.llm_manager_mut().register_openai(s.expose()),
+                                        KeyId::Gemini => engine.llm_manager_mut().register_gemini(s.expose()),
+                                        KeyId::Grok => engine.llm_manager_mut().register_grok(s.expose()),
+                                        KeyId::Groq => engine.llm_manager_mut().register_groq(s.expose()),
+                                        KeyId::Custom(_) => {}
+                                    }
                                 }
                             }
                         }
@@ -2965,9 +2954,11 @@ impl App {
                         Ok(()) => {
                             tracing::info!("Keystore unlocked");
                             // Re-register providers after unlock
-                            let registered = self.llm_manager.register_from_keystore(ks);
-                            if !registered.is_empty() {
-                                tracing::info!("Loaded API keys for providers: {:?}", registered);
+                            if let Some(ref mut engine) = self.agent_engine {
+                                let registered = engine.llm_manager_mut().register_from_keystore(ks);
+                                if !registered.is_empty() {
+                                    tracing::info!("Loaded API keys for providers: {:?}", registered);
+                                }
                             }
                         }
                         Err(e) => tracing::error!("Failed to unlock keystore: {}", e),
@@ -3049,7 +3040,9 @@ impl App {
             // Config panel actions (TRC-014)
             Action::ConfigPanelShow => {
                 // Refresh config panel with current settings before showing
-                let providers = self.llm_manager.registered_providers();
+                let providers = self.agent_engine.as_ref()
+                    .map(|e| e.registered_providers())
+                    .unwrap_or_default();
                 self.config_panel.refresh(
                     self.config_manager.app_config(),
                     self.config_manager.keybindings(),
@@ -3068,7 +3061,9 @@ impl App {
                     self.show_config_panel = false;
                     self.focus.focus(FocusArea::Menu);
                 } else {
-                    let providers = self.llm_manager.registered_providers();
+                    let providers = self.agent_engine.as_ref()
+                        .map(|e| e.registered_providers())
+                        .unwrap_or_default();
                     self.config_panel.refresh(
                         self.config_manager.app_config(),
                         self.config_manager.keybindings(),
@@ -3394,10 +3389,6 @@ impl App {
         Ok(())
     }
 
-    pub fn llm_manager(&self) -> &LLMManager {
-        &self.llm_manager
-    }
-
     pub fn llm_response_buffer(&self) -> &str {
         &self.llm_response_buffer
     }
@@ -3670,18 +3661,20 @@ impl App {
                 Ok(()) => {
                     // Update settings editor to show key is now configured
                     self.settings_editor.mark_key_configured(&provider);
-                    
-                    // Register the key with LLMManager
+
+                    // Register the key with AgentEngine's LLMManager
                     tracing::info!("Registering {} provider with LLMManager", provider);
-                    match provider.as_str() {
-                        "anthropic" => self.llm_manager.register_anthropic(key),
-                        "openai" => self.llm_manager.register_openai(key),
-                        "gemini" => self.llm_manager.register_gemini(key),
-                        "grok" => self.llm_manager.register_grok(key),
-                        "groq" => self.llm_manager.register_groq(key),
-                        _ => {}
+                    if let Some(ref mut engine) = self.agent_engine {
+                        match provider.as_str() {
+                            "anthropic" => engine.llm_manager_mut().register_anthropic(key),
+                            "openai" => engine.llm_manager_mut().register_openai(key),
+                            "gemini" => engine.llm_manager_mut().register_gemini(key),
+                            "grok" => engine.llm_manager_mut().register_grok(key),
+                            "groq" => engine.llm_manager_mut().register_groq(key),
+                            _ => {}
+                        }
                     }
-                    
+
                     self.notification_manager.success(format!("{} API key saved", provider));
                 }
                 Err(e) => {
