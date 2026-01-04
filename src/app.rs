@@ -149,7 +149,7 @@ pub struct App {
     model_catalog: std::sync::Arc<ModelCatalog>,
     token_counter: std::sync::Arc<dyn TokenCounter>,
     // Phase 2: AgentEngine integration (P2-002)
-    agent_engine: Option<AgentEngine<DiskThreadStore>>,
+    agent_engine: AgentEngine<DiskThreadStore>,
     agent_event_rx: Option<mpsc::UnboundedReceiver<AgentEvent>>,
     // TP2-002-FIX-01: AgentEngine's internal LLM event receiver
     agent_llm_event_rx: Option<mpsc::UnboundedReceiver<LLMEvent>>,
@@ -390,7 +390,7 @@ impl App {
             model_catalog,
             token_counter,
             // Phase 2: AgentEngine initialized (TP2-002-04)
-            agent_engine: Some(agent_engine),
+            agent_engine,
             agent_event_rx: Some(agent_event_rx),
             // TP2-002-FIX-01: Wire AgentEngine's internal LLM event receiver
             agent_llm_event_rx,
@@ -433,22 +433,20 @@ impl App {
         }
         
         // Register API keys from CLI (override keystore/config)
-        if let Some(ref mut engine) = app.agent_engine {
-            if let Some(ref key) = cli.anthropic_api_key {
-                engine.llm_manager_mut().register_anthropic(key.clone());
-            }
-            if let Some(ref key) = cli.openai_api_key {
-                engine.llm_manager_mut().register_openai(key.clone());
-            }
-            if let Some(ref key) = cli.gemini_api_key {
-                engine.llm_manager_mut().register_gemini(key.clone());
-            }
-            if let Some(ref key) = cli.grok_api_key {
-                engine.llm_manager_mut().register_grok(key.clone());
-            }
-            if let Some(ref key) = cli.groq_api_key {
-                engine.llm_manager_mut().register_groq(key.clone());
-            }
+        if let Some(ref key) = cli.anthropic_api_key {
+            app.agent_engine.llm_manager_mut().register_anthropic(key.clone());
+        }
+        if let Some(ref key) = cli.openai_api_key {
+            app.agent_engine.llm_manager_mut().register_openai(key.clone());
+        }
+        if let Some(ref key) = cli.gemini_api_key {
+            app.agent_engine.llm_manager_mut().register_gemini(key.clone());
+        }
+        if let Some(ref key) = cli.grok_api_key {
+            app.agent_engine.llm_manager_mut().register_grok(key.clone());
+        }
+        if let Some(ref key) = cli.groq_api_key {
+            app.agent_engine.llm_manager_mut().register_groq(key.clone());
         }
         
         Ok(app)
@@ -615,9 +613,7 @@ impl App {
             };
             
             for ev in agent_llm_events {
-                if let Some(ref mut engine) = self.agent_engine {
-                    engine.handle_llm_event(ev);
-                }
+                self.agent_engine.handle_llm_event(ev);
             }
             
             // Poll AgentEngine events (TP2-002-05)
@@ -1168,18 +1164,12 @@ impl App {
         let selected_stream_idx = self.selected_stream_index;
         let theme = self.config_manager.theme().clone();
         // TP2-002-14: Get messages from AgentThread segments if available
-        let messages: Vec<Message> = if let Some(engine) = &self.agent_engine {
-            if let Some(thread) = engine.current_thread() {
-                // Extract all messages from thread segments
-                thread.segments().iter()
-                    .flat_map(|segment| segment.messages.clone())
-                    .collect()
-            } else {
-                // AgentEngine exists but no thread yet
-                Vec::new()
-            }
+        let messages: Vec<Message> = if let Some(thread) = self.agent_engine.current_thread() {
+            // Extract all messages from thread segments
+            thread.segments().iter()
+                .flat_map(|segment| segment.messages.clone())
+                .collect()
         } else {
-            // No AgentEngine (unreachable - always initialized)
             Vec::new()
         };
         let streaming_buffer = self.llm_response_buffer.clone();
@@ -1272,21 +1262,19 @@ impl App {
 
                     // TRC-017: Pass thinking_buffer for extended thinking display
                     // Pass model info for header display
-                    let model_info = if let Some(ref agent_engine) = self.agent_engine {
-                        let provider = agent_engine.current_provider();
-                        let model = agent_engine.current_model();
+                    let model_info = {
+                        let provider = self.agent_engine.current_provider();
+                        let model = self.agent_engine.current_model();
                         if provider.is_empty() || model.is_empty() {
                             None
                         } else {
                             Some((provider, model))
                         }
-                    } else {
-                        None
                     };
 
                     // Phase 3: Compute context stats for header display
                     let context_stats = {
-                        let model = self.agent_engine.as_ref().map(|e| e.current_model()).unwrap_or("");
+                        let model = self.agent_engine.current_model();
                         if model.is_empty() || messages.is_empty() {
                             None
                         } else {
@@ -2143,15 +2131,12 @@ impl App {
             Action::OpenCommandPalette => {
                 // Populate dynamic provider/model commands before showing
                 let providers = self.model_catalog.providers();
-                let current_provider = self.agent_engine.as_ref()
-                    .map(|e| e.current_provider())
-                    .unwrap_or("anthropic");
+                let current_provider = self.agent_engine.current_provider();
+                let current_provider = if current_provider.is_empty() { "anthropic" } else { current_provider };
                 self.command_palette.set_providers(&providers, current_provider);
 
                 let models = self.model_catalog.models_for_provider(current_provider);
-                let current_model = self.agent_engine.as_ref()
-                    .map(|e| e.current_model())
-                    .unwrap_or("");
+                let current_model = self.agent_engine.current_model();
                 self.command_palette.set_models(&models, current_model);
 
                 // Populate subagent model commands (T2.1b)
@@ -2375,29 +2360,22 @@ impl App {
                 }
                 
                 // Route through AgentEngine (always available)
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    // Ensure we have an active thread
-                    if agent_engine.current_thread().is_none() {
-                        let model = agent_engine.current_model().to_string();
-                        agent_engine.new_thread(model);
-                        // TP2-002-15: Update current_thread_id when auto-creating thread
-                        self.current_thread_id = agent_engine.current_thread().map(|t| t.id.clone());
-                        tracing::info!("Created new AgentEngine thread: {:?}", self.current_thread_id);
-                    }
-
-                    // Send message through AgentEngine
-                    agent_engine.send_message(msg);
-                    tracing::info!("Message sent through AgentEngine");
-                } else {
-                    // AgentEngine should always be initialized - this path is unreachable
-                    tracing::error!("BUG: AgentEngine not initialized, cannot send message");
+                // Ensure we have an active thread
+                if self.agent_engine.current_thread().is_none() {
+                    let model = self.agent_engine.current_model().to_string();
+                    self.agent_engine.new_thread(model);
+                    // TP2-002-15: Update current_thread_id when auto-creating thread
+                    self.current_thread_id = self.agent_engine.current_thread().map(|t| t.id.clone());
+                    tracing::info!("Created new AgentEngine thread: {:?}", self.current_thread_id);
                 }
+
+                // Send message through AgentEngine
+                self.agent_engine.send_message(msg);
+                tracing::info!("Message sent through AgentEngine");
             }
             Action::LlmCancel => {
                 // Cancel AgentEngine's internal LLM
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    agent_engine.cancel();
-                }
+                self.agent_engine.cancel();
                 // Immediately stop spinner and clear buffers for responsive UI
                 // (don't wait for async AgentEvent::Error to propagate)
                 self.spinner_manager.stop(&SpinnerKey::LlmLoading);
@@ -2411,9 +2389,7 @@ impl App {
             }
             Action::LlmSelectModel(model) => {
                 // Update AgentEngine's LLMManager
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    agent_engine.set_model(&model);
-                }
+                self.agent_engine.set_model(&model);
                 // Also persist to config so model is remembered on restart
                 self.config_manager.llm_config_mut().defaults.model = model.clone();
                 if let Err(e) = self.config_manager.save_llm_config() {
@@ -2422,17 +2398,13 @@ impl App {
             }
             Action::LlmSelectProvider(provider) => {
                 // Update AgentEngine's LLMManager
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    agent_engine.set_provider(&provider);
-                }
+                self.agent_engine.set_provider(&provider);
             }
             Action::LlmClearConversation => {
                 // Start a new thread to clear conversation (AgentEngine tracks via thread)
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    let model = agent_engine.current_model().to_string();
-                    agent_engine.new_thread(model);
-                    self.current_thread_id = agent_engine.current_thread().map(|t| t.id.clone());
-                }
+                let model = self.agent_engine.current_model().to_string();
+                self.agent_engine.new_thread(model);
+                self.current_thread_id = self.agent_engine.current_thread().map(|t| t.id.clone());
                 // Also clear tool calls in conversation viewer (TRC-016)
                 self.conversation_viewer.clear_tool_calls();
             }
@@ -2528,9 +2500,7 @@ impl App {
                         // Check if we have all results now
                         if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
                             let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
-                            if let Some(ref mut engine) = self.agent_engine {
-                                engine.continue_after_tools(all_results);
-                            }
+                            self.agent_engine.continue_after_tools(all_results);
                             self.expected_tool_count = 0;
                         }
                     }
@@ -2575,9 +2545,7 @@ impl App {
                         all_results.len()
                     );
 
-                    if let Some(ref mut engine) = self.agent_engine {
-                        engine.continue_after_tools(all_results);
-                    }
+                    self.agent_engine.continue_after_tools(all_results);
 
                     // Reset tracking state for next tool batch
                     self.expected_tool_count = 0;
@@ -2593,61 +2561,52 @@ impl App {
             
             // Thread management actions (Phase 2)
             Action::ThreadNew => {
-                if let Some(ref mut engine) = self.agent_engine {
-                    let model = engine.current_model().to_string();
-                    engine.new_thread(model);
-                    self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
-                    self.conversation_viewer.clear();
-                    self.notification_manager.info("New conversation thread started");
-                    tracing::info!("Created new thread: {:?}", self.current_thread_id);
-                } else {
-                    tracing::warn!("Cannot create thread: AgentEngine not available");
-                }
+                let model = self.agent_engine.current_model().to_string();
+                self.agent_engine.new_thread(model);
+                self.current_thread_id = self.agent_engine.current_thread().map(|t| t.id.clone());
+                self.conversation_viewer.clear();
+                self.notification_manager.info("New conversation thread started");
+                tracing::info!("Created new thread: {:?}", self.current_thread_id);
             }
             Action::ThreadLoad(id) => {
                 // TP2-002-09: Load existing thread by ID
-                if let Some(ref mut engine) = self.agent_engine {
-                    match engine.load_thread(&id) {
-                        Ok(()) => {
-                            // Update current thread ID
-                            self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
-                            
-                            // Clear conversation viewer state
-                            self.conversation_viewer.clear();
-                            
-                            // Phase 2: Re-populate tool calls from loaded thread segments
-                            // Register all tool uses first, then complete with results
-                            if let Some(thread) = engine.current_thread() {
-                                for segment in thread.segments() {
-                                    for message in &segment.messages {
-                                        for content_block in &message.content {
-                                            match content_block {
-                                                crate::llm::ContentBlock::ToolUse(tool_use) => {
-                                                    self.conversation_viewer.register_tool_use(tool_use.clone());
-                                                }
-                                                crate::llm::ContentBlock::ToolResult(result) => {
-                                                    // Complete the tool with its result
-                                                    self.conversation_viewer.complete_tool(&result.tool_use_id, result.clone());
-                                                }
-                                                _ => {}
+                match self.agent_engine.load_thread(&id) {
+                    Ok(()) => {
+                        // Update current thread ID
+                        self.current_thread_id = self.agent_engine.current_thread().map(|t| t.id.clone());
+
+                        // Clear conversation viewer state
+                        self.conversation_viewer.clear();
+
+                        // Phase 2: Re-populate tool calls from loaded thread segments
+                        // Register all tool uses first, then complete with results
+                        if let Some(thread) = self.agent_engine.current_thread() {
+                            for segment in thread.segments() {
+                                for message in &segment.messages {
+                                    for content_block in &message.content {
+                                        match content_block {
+                                            crate::llm::ContentBlock::ToolUse(tool_use) => {
+                                                self.conversation_viewer.register_tool_use(tool_use.clone());
                                             }
+                                            crate::llm::ContentBlock::ToolResult(result) => {
+                                                // Complete the tool with its result
+                                                self.conversation_viewer.complete_tool(&result.tool_use_id, result.clone());
+                                            }
+                                            _ => {}
                                         }
                                     }
                                 }
-
-                                let title = thread.title.clone();
-                                self.notification_manager.info(format!("Loaded thread: {}", title));
-                                tracing::info!("Loaded thread: {} ({})", title, id);
                             }
-                        }
-                        Err(e) => {
-                            self.notification_manager.error_with_message("Failed to load thread", e.clone());
-                            tracing::error!("Failed to load thread {}: {}", id, e);
+
+                            let title = thread.title.clone();
+                            self.notification_manager.info(format!("Loaded thread: {}", title));
+                            tracing::info!("Loaded thread: {} ({})", title, id);
                         }
                     }
-                } else {
-                    tracing::warn!("Cannot load thread: AgentEngine not available");
-                    self.notification_manager.error("AgentEngine not available");
+                    Err(e) => {
+                        self.notification_manager.error_with_message("Failed to load thread", e.clone());
+                        tracing::error!("Failed to load thread {}: {}", id, e);
+                    }
                 }
             }
             Action::ThreadList => {
@@ -2655,64 +2614,48 @@ impl App {
             }
             Action::ThreadSave => {
                 // TP2-002-10: Manually save current thread to DiskThreadStore
-                if let Some(ref engine) = self.agent_engine {
-                    match engine.save_thread() {
-                        Ok(()) => {
-                            if let Some(thread) = engine.current_thread() {
-                                let title = thread.title.clone();
-                                self.notification_manager.success(format!("Thread saved: {}", title));
-                                tracing::info!("Manually saved thread: {} ({})", title, thread.id);
-                            } else {
-                                self.notification_manager.success("Thread saved");
-                            }
-                        }
-                        Err(e) => {
-                            self.notification_manager.error_with_message("Failed to save thread", e.clone());
-                            tracing::error!("Failed to save thread: {}", e);
+                match self.agent_engine.save_thread() {
+                    Ok(()) => {
+                        if let Some(thread) = self.agent_engine.current_thread() {
+                            let title = thread.title.clone();
+                            self.notification_manager.success(format!("Thread saved: {}", title));
+                            tracing::info!("Manually saved thread: {} ({})", title, thread.id);
+                        } else {
+                            self.notification_manager.success("Thread saved");
                         }
                     }
-                } else {
-                    self.notification_manager.error("AgentEngine not available");
-                    tracing::warn!("Cannot save thread: AgentEngine not available");
+                    Err(e) => {
+                        self.notification_manager.error_with_message("Failed to save thread", e.clone());
+                        tracing::error!("Failed to save thread: {}", e);
+                    }
                 }
             }
             Action::ThreadClear => {
                 // TP2-002-11: Clear current thread (start fresh without deleting)
-                if let Some(ref mut engine) = self.agent_engine {
-                    if engine.current_thread_mut().is_some() {
-                        // Clear the thread segments
-                        if let Some(thread) = engine.current_thread_mut() {
-                            thread.clear();
-                        }
-                        // Clear the UI
-                        self.conversation_viewer.clear();
-                        // Notify user
-                        self.notification_manager.info("Conversation cleared");
-                        tracing::debug!("ThreadClear: cleared current thread and conversation viewer");
-                    } else {
-                        self.notification_manager.warning("No active conversation to clear");
-                        tracing::warn!("ThreadClear: no current thread to clear");
-                    }
+                if let Some(thread) = self.agent_engine.current_thread_mut() {
+                    // Clear the thread segments
+                    thread.clear();
+                    // Clear the UI
+                    self.conversation_viewer.clear();
+                    // Notify user
+                    self.notification_manager.info("Conversation cleared");
+                    tracing::debug!("ThreadClear: cleared current thread and conversation viewer");
                 } else {
-                    self.notification_manager.error("AgentEngine not available");
-                    tracing::warn!("Cannot clear thread: AgentEngine not available");
+                    self.notification_manager.warning("No active conversation to clear");
+                    tracing::warn!("ThreadClear: no current thread to clear");
                 }
             }
 
             // P2-003: Thread picker actions
             Action::ThreadPickerShow => {
-                if let Some(ref engine) = self.agent_engine {
-                    // Get thread summaries from DiskThreadStore
-                    let summaries = engine.thread_store().list_summary();
-                    if summaries.is_empty() {
-                        self.notification_manager.warning("No saved threads to continue");
-                    } else {
-                        self.thread_picker.show(summaries);
-                        self.input_mode = InputMode::ThreadPicker;
-                        tracing::debug!("ThreadPickerShow: showing thread picker");
-                    }
+                // Get thread summaries from DiskThreadStore
+                let summaries = self.agent_engine.thread_store().list_summary();
+                if summaries.is_empty() {
+                    self.notification_manager.warning("No saved threads to continue");
                 } else {
-                    self.notification_manager.error("AgentEngine not available");
+                    self.thread_picker.show(summaries);
+                    self.input_mode = InputMode::ThreadPicker;
+                    tracing::debug!("ThreadPickerShow: showing thread picker");
                 }
             }
             Action::ThreadPickerHide => {
@@ -2723,18 +2666,14 @@ impl App {
 
             // P2-003: Thread rename actions
             Action::ThreadStartRename => {
-                if let Some(ref engine) = self.agent_engine {
-                    if let Some(thread) = engine.current_thread() {
-                        // Initialize rename buffer with current title
-                        self.thread_rename_buffer = Some(thread.title.clone());
-                        self.input_mode = InputMode::Insert { target: crate::input::mode::InsertTarget::ThreadRename };
-                        self.notification_manager.info("Editing thread name (Enter to confirm, Esc to cancel)");
-                        tracing::debug!("ThreadStartRename: started rename mode with title '{}'", thread.title);
-                    } else {
-                        self.notification_manager.warning("No active thread to rename");
-                    }
+                if let Some(thread) = self.agent_engine.current_thread() {
+                    // Initialize rename buffer with current title
+                    self.thread_rename_buffer = Some(thread.title.clone());
+                    self.input_mode = InputMode::Insert { target: crate::input::mode::InsertTarget::ThreadRename };
+                    self.notification_manager.info("Editing thread name (Enter to confirm, Esc to cancel)");
+                    tracing::debug!("ThreadStartRename: started rename mode with title '{}'", thread.title);
                 } else {
-                    self.notification_manager.error("AgentEngine not available");
+                    self.notification_manager.warning("No active thread to rename");
                 }
             }
             Action::ThreadCancelRename => {
@@ -2754,19 +2693,15 @@ impl App {
                 }
             }
             Action::ThreadRename(new_name) => {
-                if let Some(ref mut engine) = self.agent_engine {
-                    match engine.rename_thread(&new_name) {
-                        Ok(()) => {
-                            self.notification_manager.success(format!("Thread renamed to '{}'", new_name));
-                            tracing::info!("ThreadRename: renamed thread to '{}'", new_name);
-                        }
-                        Err(e) => {
-                            self.notification_manager.error_with_message("Failed to rename thread", e.clone());
-                            tracing::error!("ThreadRename: failed to rename - {}", e);
-                        }
+                match self.agent_engine.rename_thread(&new_name) {
+                    Ok(()) => {
+                        self.notification_manager.success(format!("Thread renamed to '{}'", new_name));
+                        tracing::info!("ThreadRename: renamed thread to '{}'", new_name);
                     }
-                } else {
-                    self.notification_manager.error("AgentEngine not available");
+                    Err(e) => {
+                        self.notification_manager.error_with_message("Failed to rename thread", e.clone());
+                        tracing::error!("ThreadRename: failed to rename - {}", e);
+                    }
                 }
                 self.thread_rename_buffer = None;
                 self.input_mode = InputMode::Normal;
@@ -2785,10 +2720,8 @@ impl App {
                 // Re-apply LLM settings when llm.toml changes (fixes model not updating after hot-reload)
                 if path.file_name().and_then(|n| n.to_str()) == Some("llm.toml") {
                     let llm_config = self.config_manager.llm_config();
-                    if let Some(ref mut agent_engine) = self.agent_engine {
-                        agent_engine.set_provider(&llm_config.defaults.provider);
-                        agent_engine.set_model(&llm_config.defaults.model);
-                    }
+                    self.agent_engine.set_provider(&llm_config.defaults.provider);
+                    self.agent_engine.set_model(&llm_config.defaults.model);
                     tracing::info!(
                         "Re-applied LLM settings after hot-reload: provider={}, model={}",
                         llm_config.defaults.provider,
@@ -2907,15 +2840,13 @@ impl App {
                             tracing::info!("Stored API key for {}", key_id);
                             // Re-register provider with new key
                             if let Ok(Some(s)) = ks.get(&key_id) {
-                                if let Some(ref mut engine) = self.agent_engine {
-                                    match key_id {
-                                        KeyId::Anthropic => engine.llm_manager_mut().register_anthropic(s.expose()),
-                                        KeyId::OpenAI => engine.llm_manager_mut().register_openai(s.expose()),
-                                        KeyId::Gemini => engine.llm_manager_mut().register_gemini(s.expose()),
-                                        KeyId::Grok => engine.llm_manager_mut().register_grok(s.expose()),
-                                        KeyId::Groq => engine.llm_manager_mut().register_groq(s.expose()),
-                                        KeyId::Custom(_) => {}
-                                    }
+                                match key_id {
+                                    KeyId::Anthropic => self.agent_engine.llm_manager_mut().register_anthropic(s.expose()),
+                                    KeyId::OpenAI => self.agent_engine.llm_manager_mut().register_openai(s.expose()),
+                                    KeyId::Gemini => self.agent_engine.llm_manager_mut().register_gemini(s.expose()),
+                                    KeyId::Grok => self.agent_engine.llm_manager_mut().register_grok(s.expose()),
+                                    KeyId::Groq => self.agent_engine.llm_manager_mut().register_groq(s.expose()),
+                                    KeyId::Custom(_) => {}
                                 }
                             }
                         }
@@ -2954,11 +2885,9 @@ impl App {
                         Ok(()) => {
                             tracing::info!("Keystore unlocked");
                             // Re-register providers after unlock
-                            if let Some(ref mut engine) = self.agent_engine {
-                                let registered = engine.llm_manager_mut().register_from_keystore(ks);
-                                if !registered.is_empty() {
-                                    tracing::info!("Loaded API keys for providers: {:?}", registered);
-                                }
+                            let registered = self.agent_engine.llm_manager_mut().register_from_keystore(ks);
+                            if !registered.is_empty() {
+                                tracing::info!("Loaded API keys for providers: {:?}", registered);
                             }
                         }
                         Err(e) => tracing::error!("Failed to unlock keystore: {}", e),
@@ -3040,9 +2969,7 @@ impl App {
             // Config panel actions (TRC-014)
             Action::ConfigPanelShow => {
                 // Refresh config panel with current settings before showing
-                let providers = self.agent_engine.as_ref()
-                    .map(|e| e.registered_providers())
-                    .unwrap_or_default();
+                let providers = self.agent_engine.registered_providers();
                 self.config_panel.refresh(
                     self.config_manager.app_config(),
                     self.config_manager.keybindings(),
@@ -3061,9 +2988,7 @@ impl App {
                     self.show_config_panel = false;
                     self.focus.focus(FocusArea::Menu);
                 } else {
-                    let providers = self.agent_engine.as_ref()
-                        .map(|e| e.registered_providers())
-                        .unwrap_or_default();
+                    let providers = self.agent_engine.registered_providers();
                     self.config_panel.refresh(
                         self.config_manager.app_config(),
                         self.config_manager.keybindings(),
@@ -3287,9 +3212,7 @@ impl App {
             }
             Action::SettingsProviderChanged(ref provider) => {
                 // Update AgentEngine with new provider
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    agent_engine.set_provider(provider);
-                }
+                self.agent_engine.set_provider(provider);
                 // Update config_manager so it persists on save
                 self.config_manager.llm_config_mut().defaults.provider = provider.clone();
                 // Refresh models list for the new provider
@@ -3298,9 +3221,7 @@ impl App {
             }
             Action::SettingsModelChanged(ref model) => {
                 // Update AgentEngine with new model
-                if let Some(ref mut agent_engine) = self.agent_engine {
-                    agent_engine.set_model(model);
-                }
+                self.agent_engine.set_model(model);
                 // Update config_manager so it persists on save
                 self.config_manager.llm_config_mut().defaults.model = model.clone();
             }
@@ -3362,9 +3283,7 @@ impl App {
                 // Check if we have all results
                 if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
                     let results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
-                    if let Some(ref mut engine) = self.agent_engine {
-                        engine.continue_after_tools(results);
-                    }
+                    self.agent_engine.continue_after_tools(results);
                     self.expected_tool_count = 0;
                 }
             }
@@ -3627,9 +3546,8 @@ impl App {
         }
         
         // Set current provider/model info
-        let provider = self.agent_engine.as_ref()
-            .map(|e| e.current_provider())
-            .unwrap_or("anthropic");
+        let provider = self.agent_engine.current_provider();
+        let provider = if provider.is_empty() { "anthropic" } else { provider };
         let models = self.model_catalog.models_for_provider(provider);
         self.settings_editor.set_available_models(models.iter().map(|m| m.to_string()).collect());
         
@@ -3664,15 +3582,13 @@ impl App {
 
                     // Register the key with AgentEngine's LLMManager
                     tracing::info!("Registering {} provider with LLMManager", provider);
-                    if let Some(ref mut engine) = self.agent_engine {
-                        match provider.as_str() {
-                            "anthropic" => engine.llm_manager_mut().register_anthropic(key),
-                            "openai" => engine.llm_manager_mut().register_openai(key),
-                            "gemini" => engine.llm_manager_mut().register_gemini(key),
-                            "grok" => engine.llm_manager_mut().register_grok(key),
-                            "groq" => engine.llm_manager_mut().register_groq(key),
-                            _ => {}
-                        }
+                    match provider.as_str() {
+                        "anthropic" => self.agent_engine.llm_manager_mut().register_anthropic(key),
+                        "openai" => self.agent_engine.llm_manager_mut().register_openai(key),
+                        "gemini" => self.agent_engine.llm_manager_mut().register_gemini(key),
+                        "grok" => self.agent_engine.llm_manager_mut().register_grok(key),
+                        "groq" => self.agent_engine.llm_manager_mut().register_groq(key),
+                        _ => {}
                     }
 
                     self.notification_manager.success(format!("{} API key saved", provider));
@@ -3724,10 +3640,8 @@ impl App {
         let config = self.settings_editor.config().clone();
 
         // Update AgentEngine with new settings
-        if let Some(ref mut agent_engine) = self.agent_engine {
-            agent_engine.set_provider(&config.defaults.provider);
-            agent_engine.set_model(&config.defaults.model);
-        }
+        self.agent_engine.set_provider(&config.defaults.provider);
+        self.agent_engine.set_model(&config.defaults.model);
 
         // Update config manager with new settings
         *self.config_manager.llm_config_mut() = config;
