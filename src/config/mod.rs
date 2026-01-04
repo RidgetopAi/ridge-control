@@ -5,6 +5,7 @@ mod keybindings;
 mod keystore;
 mod llm;
 pub mod lsp;
+mod mandrel;
 mod session;
 mod subagent;
 mod theme;
@@ -14,13 +15,11 @@ pub use keybindings::KeybindingsConfig;
 pub use keystore::{KeyId, KeyStore, SecretString};
 pub use llm::LLMConfig;
 pub use lsp::LspConfig;
+pub use mandrel::{MandrelConfig, MandrelError};
 pub use session::{SessionData, SessionManager};
 pub use subagent::{SubagentConfig, SubagentsConfig};
 pub use theme::Theme;
 pub use watcher::{ConfigWatcherMode, ConfigEvent};
-
-// Re-export MandrelConfig from agent module
-pub use crate::agent::mandrel::MandrelConfig;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
