@@ -1285,19 +1285,21 @@ impl App {
 
                     // TRC-017: Pass thinking_buffer for extended thinking display
                     // Pass model info for header display
-                    let model_info = {
-                        let provider = self.llm_manager.current_provider();
-                        let model = self.llm_manager.current_model();
+                    let model_info = if let Some(ref agent_engine) = self.agent_engine {
+                        let provider = agent_engine.current_provider();
+                        let model = agent_engine.current_model();
                         if provider.is_empty() || model.is_empty() {
                             None
                         } else {
                             Some((provider, model))
                         }
+                    } else {
+                        None
                     };
 
                     // Phase 3: Compute context stats for header display
                     let context_stats = {
-                        let model = self.llm_manager.current_model();
+                        let model = self.agent_engine.as_ref().map(|e| e.current_model()).unwrap_or("");
                         if model.is_empty() || messages.is_empty() {
                             None
                         } else {
@@ -2154,11 +2156,15 @@ impl App {
             Action::OpenCommandPalette => {
                 // Populate dynamic provider/model commands before showing
                 let providers = self.model_catalog.providers();
-                let current_provider = self.llm_manager.current_provider();
+                let current_provider = self.agent_engine.as_ref()
+                    .map(|e| e.current_provider())
+                    .unwrap_or("anthropic");
                 self.command_palette.set_providers(&providers, current_provider);
 
                 let models = self.model_catalog.models_for_provider(current_provider);
-                let current_model = self.llm_manager.current_model();
+                let current_model = self.agent_engine.as_ref()
+                    .map(|e| e.current_model())
+                    .unwrap_or("");
                 self.command_palette.set_models(&models, current_model);
 
                 // Populate subagent model commands (T2.1b)
@@ -2385,7 +2391,7 @@ impl App {
                 if let Some(ref mut agent_engine) = self.agent_engine {
                     // Ensure we have an active thread
                     if agent_engine.current_thread().is_none() {
-                        let model = self.llm_manager.current_model();
+                        let model = agent_engine.current_model().to_string();
                         agent_engine.new_thread(model);
                         // TP2-002-15: Update current_thread_id when auto-creating thread
                         self.current_thread_id = agent_engine.current_thread().map(|t| t.id.clone());
@@ -2601,7 +2607,7 @@ impl App {
             // Thread management actions (Phase 2)
             Action::ThreadNew => {
                 if let Some(ref mut engine) = self.agent_engine {
-                    let model = self.llm_manager.current_model().to_string();
+                    let model = engine.current_model().to_string();
                     engine.new_thread(model);
                     self.current_thread_id = engine.current_thread().map(|t| t.id.clone());
                     self.conversation_viewer.clear();
@@ -3630,7 +3636,9 @@ impl App {
         }
         
         // Set current provider/model info
-        let provider = self.llm_manager.current_provider();
+        let provider = self.agent_engine.as_ref()
+            .map(|e| e.current_provider())
+            .unwrap_or("anthropic");
         let models = self.model_catalog.models_for_provider(provider);
         self.settings_editor.set_available_models(models.iter().map(|m| m.to_string()).collect());
         
