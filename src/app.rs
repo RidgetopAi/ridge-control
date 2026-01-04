@@ -979,6 +979,13 @@ impl App {
                 // Stop spinners on error
                 self.spinner_manager.stop(&SpinnerKey::LlmLoading);
                 self.notification_manager.error_with_message("Agent Error", err);
+                // Clear streaming buffers (mirrors LLMEvent::Error cleanup)
+                self.llm_response_buffer.clear();
+                self.thinking_buffer.clear();
+                self.current_block_type = None;
+                self.current_tool_id = None;
+                self.current_tool_name = None;
+                self.current_tool_input.clear();
             }
             AgentEvent::ContextTruncated { segments_dropped, tokens_used, budget } => {
                 tracing::info!(
@@ -2453,10 +2460,23 @@ impl App {
                 if let Some(ref mut agent_engine) = self.agent_engine {
                     agent_engine.cancel();
                 }
+                // Immediately stop spinner and clear buffers for responsive UI
+                // (don't wait for async AgentEvent::Error to propagate)
+                self.spinner_manager.stop(&SpinnerKey::LlmLoading);
+                self.llm_response_buffer.clear();
+                self.thinking_buffer.clear();
+                self.current_block_type = None;
+                self.current_tool_id = None;
+                self.current_tool_name = None;
+                self.current_tool_input.clear();
                 self.notification_manager.info_with_message("Request Cancelled", "LLM request interrupted by user");
             }
             Action::LlmSelectModel(model) => {
                 self.llm_manager.set_model(&model);
+                // Sync to AgentEngine's internal LLMManager
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    agent_engine.set_model(&model);
+                }
                 // Also persist to config so model is remembered on restart
                 self.config_manager.llm_config_mut().defaults.model = model.clone();
                 if let Err(e) = self.config_manager.save_llm_config() {
@@ -2465,6 +2485,10 @@ impl App {
             }
             Action::LlmSelectProvider(provider) => {
                 self.llm_manager.set_provider(&provider);
+                // Sync to AgentEngine's internal LLMManager
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    agent_engine.set_provider(&provider);
+                }
             }
             Action::LlmClearConversation => {
                 self.llm_manager.clear_conversation();

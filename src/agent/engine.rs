@@ -238,6 +238,18 @@ impl<S: ThreadStore> AgentEngine<S> {
         }
     }
 
+    /// Set the LLM provider for this engine's internal LLMManager
+    /// This syncs provider changes from App settings to the AgentEngine
+    pub fn set_provider(&mut self, provider: &str) {
+        self.llm.set_provider(provider);
+    }
+
+    /// Set the LLM model for this engine's internal LLMManager
+    /// This syncs model changes from App settings to the AgentEngine
+    pub fn set_model(&mut self, model: &str) {
+        self.llm.set_model(model);
+    }
+
     /// Send a user message and start the agent loop
     pub fn send_message(&mut self, message: impl Into<String>) {
         let message = message.into();
