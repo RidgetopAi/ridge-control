@@ -2401,8 +2401,7 @@ impl App {
                 }
             }
             Action::LlmCancel => {
-                // Cancel both the direct LLM manager and AgentEngine's internal LLM
-                self.llm_manager.cancel();
+                // Cancel AgentEngine's internal LLM
                 if let Some(ref mut agent_engine) = self.agent_engine {
                     agent_engine.cancel();
                 }
@@ -2418,8 +2417,7 @@ impl App {
                 self.notification_manager.info_with_message("Request Cancelled", "LLM request interrupted by user");
             }
             Action::LlmSelectModel(model) => {
-                self.llm_manager.set_model(&model);
-                // Sync to AgentEngine's internal LLMManager
+                // Update AgentEngine's LLMManager
                 if let Some(ref mut agent_engine) = self.agent_engine {
                     agent_engine.set_model(&model);
                 }
@@ -2430,14 +2428,18 @@ impl App {
                 }
             }
             Action::LlmSelectProvider(provider) => {
-                self.llm_manager.set_provider(&provider);
-                // Sync to AgentEngine's internal LLMManager
+                // Update AgentEngine's LLMManager
                 if let Some(ref mut agent_engine) = self.agent_engine {
                     agent_engine.set_provider(&provider);
                 }
             }
             Action::LlmClearConversation => {
-                self.llm_manager.clear_conversation();
+                // Start a new thread to clear conversation (AgentEngine tracks via thread)
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    let model = agent_engine.current_model().to_string();
+                    agent_engine.new_thread(model);
+                    self.current_thread_id = agent_engine.current_thread().map(|t| t.id.clone());
+                }
                 // Also clear tool calls in conversation viewer (TRC-016)
                 self.conversation_viewer.clear_tool_calls();
             }
@@ -2790,8 +2792,10 @@ impl App {
                 // Re-apply LLM settings when llm.toml changes (fixes model not updating after hot-reload)
                 if path.file_name().and_then(|n| n.to_str()) == Some("llm.toml") {
                     let llm_config = self.config_manager.llm_config();
-                    self.llm_manager.set_provider(&llm_config.defaults.provider);
-                    self.llm_manager.set_model(&llm_config.defaults.model);
+                    if let Some(ref mut agent_engine) = self.agent_engine {
+                        agent_engine.set_provider(&llm_config.defaults.provider);
+                        agent_engine.set_model(&llm_config.defaults.model);
+                    }
                     tracing::info!(
                         "Re-applied LLM settings after hot-reload: provider={}, model={}",
                         llm_config.defaults.provider,
@@ -3281,8 +3285,10 @@ impl App {
                 self.handle_settings_key_entered(provider.clone(), key.clone());
             }
             Action::SettingsProviderChanged(ref provider) => {
-                // Update LLMManager with new provider
-                self.llm_manager.set_provider(provider);
+                // Update AgentEngine with new provider
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    agent_engine.set_provider(provider);
+                }
                 // Update config_manager so it persists on save
                 self.config_manager.llm_config_mut().defaults.provider = provider.clone();
                 // Refresh models list for the new provider
@@ -3290,8 +3296,10 @@ impl App {
                 self.settings_editor.set_available_models(models.iter().map(|m| m.to_string()).collect());
             }
             Action::SettingsModelChanged(ref model) => {
-                // Update LLMManager with new model
-                self.llm_manager.set_model(model);
+                // Update AgentEngine with new model
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    agent_engine.set_model(model);
+                }
                 // Update config_manager so it persists on save
                 self.config_manager.llm_config_mut().defaults.model = model.clone();
             }
@@ -3713,11 +3721,13 @@ impl App {
     /// Handle settings save request
     fn handle_settings_save(&mut self) {
         let config = self.settings_editor.config().clone();
-        
-        // Update LLMManager with new settings
-        self.llm_manager.set_provider(&config.defaults.provider);
-        self.llm_manager.set_model(&config.defaults.model);
-        
+
+        // Update AgentEngine with new settings
+        if let Some(ref mut agent_engine) = self.agent_engine {
+            agent_engine.set_provider(&config.defaults.provider);
+            agent_engine.set_model(&config.defaults.model);
+        }
+
         // Update config manager with new settings
         *self.config_manager.llm_config_mut() = config;
         
