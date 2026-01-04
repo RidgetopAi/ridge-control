@@ -792,13 +792,8 @@ impl App {
                         self.current_block_type = None;
                     }
                     StreamChunk::Stop { .. } => {
-                        // Note: Assistant text is now added in BlockStop before tool_use,
-                        // so we only handle remaining cases here (non-tool responses)
-                        if !self.llm_response_buffer.is_empty() {
-                            self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-                            self.llm_response_buffer.clear();
-                        }
-                        // TRC-017: Clear thinking buffer on stop (it's already been displayed during streaming)
+                        // Clear buffers on stop - AgentEngine tracks conversation via thread
+                        self.llm_response_buffer.clear();
                         self.thinking_buffer.clear();
                         self.current_block_type = None;
                     }
@@ -806,11 +801,8 @@ impl App {
                 }
             }
             LLMEvent::Complete => {
-                if !self.llm_response_buffer.is_empty() {
-                    self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-                    self.llm_response_buffer.clear();
-                }
-                // TRC-017: Clear thinking buffer on complete
+                // Clear buffers on complete - AgentEngine tracks conversation via thread
+                self.llm_response_buffer.clear();
                 self.thinking_buffer.clear();
                 self.current_block_type = None;
             }
@@ -1031,19 +1023,9 @@ impl App {
     }
     
     fn execute_tool(&mut self, pending: PendingToolUse) {
-        // CRITICAL: Ensure there's an assistant message BEFORE adding tool_use
-        // The Anthropic API requires tool_use blocks to be in an assistant message,
-        // and tool_result must reference a tool_use in the PREVIOUS message.
-        // If llm_response_buffer has content, flush it first. If not, we still need
-        // an assistant message to exist so add_tool_use can append to it.
-        if !self.llm_response_buffer.is_empty() {
-            self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-            self.llm_response_buffer.clear();
-        }
-        
-        // Add the tool use to the conversation (appends to last assistant message)
-        self.llm_manager.add_tool_use(pending.tool.clone());
-        
+        // Clear any streaming buffer content - AgentEngine tracks conversation via thread
+        self.llm_response_buffer.clear();
+
         // Update tool state to Running in conversation viewer (TRC-016)
         self.conversation_viewer.start_tool_execution(&pending.tool.id);
         
@@ -2545,24 +2527,16 @@ impl App {
                         };
                         
                         // TP2-002-12: Bridge tool rejection to AgentEngine if active
-                        if self.agent_engine.is_some() {
-                            // Collect rejection as a result
-                            self.collected_results.insert(pending.tool.id.clone(), error_result);
-                            
-                            // Check if we have all results now
-                            if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
-                                let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
-                                if let Some(ref mut engine) = self.agent_engine {
-                                    engine.continue_after_tools(all_results);
-                                }
-                                self.expected_tool_count = 0;
+                        // Collect rejection as a result
+                        self.collected_results.insert(pending.tool.id.clone(), error_result);
+
+                        // Check if we have all results now
+                        if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
+                            let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
+                            if let Some(ref mut engine) = self.agent_engine {
+                                engine.continue_after_tools(all_results);
                             }
-                        } else {
-                            // Legacy path: direct LLMManager interaction
-                            self.llm_manager.add_tool_use(pending.tool);
-                            self.llm_manager.add_tool_result(error_result);
-                            let tools = self.tool_executor.tool_definitions_for_llm();
-                            self.llm_manager.continue_after_tool(None, tools);
+                            self.expected_tool_count = 0;
                         }
                     }
                 }
@@ -2587,39 +2561,31 @@ impl App {
                 // Remove from pending_tools since we got the result
                 self.pending_tools.remove(&tool_use_id);
                 
-                // TP2-002-12: Bridge tool result to AgentEngine if active
-                // AgentEngine manages the full agentic loop including tool execution flow
-                if self.agent_engine.is_some() {
-                    // Collect this result
-                    self.collected_results.insert(tool_use_id.clone(), result);
-                    
+                // TP2-002-12: Bridge tool result to AgentEngine
+                // Collect this result
+                self.collected_results.insert(tool_use_id.clone(), result);
+
+                tracing::info!(
+                    "📥 TOOL_RESULT collected: id={}, collected={}/{} expected",
+                    tool_use_id, self.collected_results.len(), self.expected_tool_count
+                );
+
+                // Only continue when we have ALL expected results
+                if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
+                    // Collect all results and send them together
+                    let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
+
                     tracing::info!(
-                        "📥 TOOL_RESULT collected: id={}, collected={}/{} expected",
-                        tool_use_id, self.collected_results.len(), self.expected_tool_count
+                        "✅ ALL_TOOLS_COMPLETE: sending {} results to engine",
+                        all_results.len()
                     );
-                    
-                    // Only continue when we have ALL expected results
-                    if self.collected_results.len() >= self.expected_tool_count && self.expected_tool_count > 0 {
-                        // Collect all results and send them together
-                        let all_results: Vec<crate::llm::ToolResult> = self.collected_results.drain().map(|(_, r)| r).collect();
-                        
-                        tracing::info!(
-                            "✅ ALL_TOOLS_COMPLETE: sending {} results to engine",
-                            all_results.len()
-                        );
-                        
-                        if let Some(ref mut engine) = self.agent_engine {
-                            engine.continue_after_tools(all_results);
-                        }
-                        
-                        // Reset tracking state for next tool batch
-                        self.expected_tool_count = 0;
+
+                    if let Some(ref mut engine) = self.agent_engine {
+                        engine.continue_after_tools(all_results);
                     }
-                } else {
-                    // Legacy path: direct LLMManager interaction (single tool at a time)
-                    self.llm_manager.add_tool_result(result);
-                    let tools = self.tool_executor.tool_definitions_for_llm();
-                    self.llm_manager.continue_after_tool(None, tools);
+
+                    // Reset tracking state for next tool batch
+                    self.expected_tool_count = 0;
                 }
             }
             Action::ToolToggleDangerousMode => {

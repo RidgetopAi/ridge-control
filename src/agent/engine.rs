@@ -250,6 +250,31 @@ impl<S: ThreadStore> AgentEngine<S> {
         self.llm.set_model(model);
     }
 
+    /// Get the current LLM provider name
+    pub fn current_provider(&self) -> &str {
+        self.llm.current_provider()
+    }
+
+    /// Get the current LLM model name
+    pub fn current_model(&self) -> &str {
+        self.llm.current_model()
+    }
+
+    /// Get list of registered providers
+    pub fn registered_providers(&self) -> Vec<String> {
+        self.llm.registered_providers()
+    }
+
+    /// Get mutable access to the internal LLMManager for provider registration
+    pub fn llm_manager_mut(&mut self) -> &mut LLMManager {
+        &mut self.llm
+    }
+
+    /// Check if LLM is configured (has at least one provider)
+    pub fn is_configured(&self) -> bool {
+        self.llm.is_configured()
+    }
+
     /// Send a user message and start the agent loop
     pub fn send_message(&mut self, message: impl Into<String>) {
         let message = message.into();
