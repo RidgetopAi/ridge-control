@@ -601,8 +601,7 @@ impl App {
 
     pub fn run(&mut self) -> Result<()> {
         let mut stream_rx = self.stream_manager.take_event_rx();
-        let mut llm_rx = self.llm_manager.take_event_rx();
-        
+
         loop {
             self.draw()?;
 
@@ -612,12 +611,6 @@ impl App {
             if let Some(ref mut rx) = stream_rx {
                 while let Ok(stream_event) = rx.try_recv() {
                     self.handle_stream_event(stream_event);
-                }
-            }
-
-            if let Some(ref mut rx) = llm_rx {
-                while let Ok(llm_event) = rx.try_recv() {
-                    self.handle_llm_event(llm_event);
                 }
             }
             
@@ -786,33 +779,13 @@ impl App {
                         }
                         
                         // When a tool use block stops, we have the complete tool use
-                        if let (Some(id), Some(name)) = (self.current_tool_id.take(), self.current_tool_name.take()) {
-                            // RACE FIX: When AgentEngine is active, it owns tool orchestration.
-                            // It buffers ToolUseRequested until AFTER the assistant message is saved.
-                            // If we trigger tools here, we bypass that buffering and cause
-                            // "orphaned tool_result" errors from the API.
-                            if self.agent_engine.is_some() {
-                                // Just discard tool input - AgentEngine has its own state
-                                self.current_tool_input.clear();
-                                tracing::debug!(
-                                    "🚫 LEGACY_BLOCKSTOP: Skipping tool {} (AgentEngine handles this)",
-                                    id
-                                );
-                            } else {
-                                // LEGACY PATH (no AgentEngine): behavior unchanged
-                                // Add assistant text message FIRST, before the tool_use
-                                if !self.llm_response_buffer.is_empty() {
-                                    self.llm_manager.add_assistant_message(self.llm_response_buffer.clone());
-                                    self.llm_response_buffer.clear();
-                                }
-                                
-                                let input: serde_json::Value = serde_json::from_str(&self.current_tool_input)
-                                    .unwrap_or(serde_json::Value::Null);
-                                self.current_tool_input.clear();
-                                
-                                let tool_use = ToolUse { id, name, input };
-                                self.handle_tool_use_request(tool_use);
-                            }
+                        // AgentEngine owns tool orchestration - just clear local state
+                        if let (Some(id), Some(_name)) = (self.current_tool_id.take(), self.current_tool_name.take()) {
+                            self.current_tool_input.clear();
+                            tracing::debug!(
+                                "BlockStop: tool {} handled by AgentEngine, cleared local state",
+                                id
+                            );
                         }
                         
                         // Clear current block type
@@ -852,16 +825,12 @@ impl App {
                 self.current_tool_input.clear();
             }
             LLMEvent::ToolUseDetected(tool_use) => {
-                // RACE FIX: When AgentEngine is active, skip legacy tool detection.
-                // AgentEngine handles tool orchestration via AgentEvent::ToolUseRequested.
-                if self.agent_engine.is_some() {
-                    tracing::debug!(
-                        "🚫 LEGACY_TOOL_DETECTED: Skipping tool {} (AgentEngine handles this)",
-                        tool_use.id
-                    );
-                    return;
-                }
-                self.handle_tool_use_request(tool_use);
+                // AgentEngine handles tool orchestration via AgentEvent::ToolUseRequested
+                // This event is ignored - just log for debugging
+                tracing::debug!(
+                    "ToolUseDetected: tool {} handled by AgentEngine",
+                    tool_use.id
+                );
             }
         }
     }
@@ -2430,7 +2399,7 @@ impl App {
                     self.show_conversation = true;
                 }
                 
-                // Route through AgentEngine if available, otherwise fall back to direct LLM
+                // Route through AgentEngine (always available)
                 if let Some(ref mut agent_engine) = self.agent_engine {
                     // Ensure we have an active thread
                     if agent_engine.current_thread().is_none() {
@@ -2440,18 +2409,13 @@ impl App {
                         self.current_thread_id = agent_engine.current_thread().map(|t| t.id.clone());
                         tracing::info!("Created new AgentEngine thread: {:?}", self.current_thread_id);
                     }
-                    
+
                     // Send message through AgentEngine
                     agent_engine.send_message(msg);
                     tracing::info!("Message sent through AgentEngine");
                 } else {
-                    // Fallback to direct LLM manager (legacy path)
-                    tracing::debug!("LLM manager configured: {}", self.llm_manager.is_configured());
-                    tracing::debug!("Current provider: {}", self.llm_manager.current_provider());
-                    tracing::debug!("Current model: {}", self.llm_manager.current_model());
-                    let tools = self.tool_executor.tool_definitions_for_llm();
-                    self.llm_manager.send_message(msg, None, tools);
-                    tracing::info!("Message sent to LLM manager (fallback)");
+                    // AgentEngine should always be initialized - this path is unreachable
+                    tracing::error!("BUG: AgentEngine not initialized, cannot send message");
                 }
             }
             Action::LlmCancel => {
