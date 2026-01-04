@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use arboard::Clipboard;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton},
+    event::{self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture, Event as CrosstermEvent, KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -119,6 +119,8 @@ pub struct App {
     tab_bar_area: Rect,
     // Conversation area for mouse hit-testing (scroll routing)
     conversation_area: Rect,
+    // Chat input area for mouse hit-testing (paste routing)
+    chat_input_area: Rect,
     // Secure key storage (TRC-011)
     keystore: Option<KeyStore>,
     // Session persistence (TRC-012)
@@ -167,7 +169,7 @@ impl App {
     pub fn new() -> Result<Self> {
         enable_raw_mode().map_err(|e| RidgeError::Terminal(e.to_string()))?;
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+        execute!(stdout, EnterAlternateScreen, EnableMouseCapture, EnableBracketedPaste)
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;
 
         let backend = CrosstermBackend::new(stdout);
@@ -384,6 +386,7 @@ impl App {
             selected_stream_index: initial_stream_index,
             tab_bar_area: Rect::default(),
             conversation_area: Rect::default(),
+            chat_input_area: Rect::default(),
             keystore,
             session_manager,
             log_viewer: LogViewer::new(),
@@ -1386,12 +1389,23 @@ impl App {
                         block.inner(conv_chunks[0])
                     };
                     self.conversation_viewer.set_inner_area(conv_inner);
-                    
+
+                    // Set inner area for chat input mouse coordinate conversion
+                    let chat_input_inner = {
+                        let block = ratatui::widgets::Block::default()
+                            .borders(ratatui::widgets::Borders::ALL);
+                        block.inner(conv_chunks[1])
+                    };
+                    self.chat_input.set_inner_area(chat_input_inner);
+
                     // Save conversation area for mouse hit-testing
                     self.conversation_area = conv_chunks[0];
+                    // Save chat input area for mouse hit-testing (paste routing and selection)
+                    self.chat_input_area = conv_chunks[1];
                 } else {
-                    // Clear conversation area when not visible
+                    // Clear conversation and chat input areas when not visible
                     self.conversation_area = Rect::default();
+                    self.chat_input_area = Rect::default();
                     if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
                         session.terminal().render(
                             frame,
@@ -1618,6 +1632,7 @@ impl App {
         match event {
             CrosstermEvent::Key(key) => self.handle_key(key),
             CrosstermEvent::Mouse(mouse) => self.handle_mouse(mouse),
+            CrosstermEvent::Paste(text) => self.handle_paste(text),
             CrosstermEvent::Resize(cols, rows) => {
                 let (term_cols, term_rows) = Self::calculate_terminal_size(Rect::new(0, 0, cols, rows));
                 Some(Action::PtyResize {
@@ -1626,6 +1641,24 @@ impl App {
                 })
             }
             _ => None,
+        }
+    }
+
+    /// Handle bracketed paste events - route to appropriate component based on focus
+    fn handle_paste(&mut self, text: String) -> Option<Action> {
+        // Route paste based on focus and editing state
+        if self.show_settings_editor && self.settings_editor.is_editing() {
+            // Paste to settings editor when editing
+            self.settings_editor.paste_text(&text);
+            None
+        } else if self.focus.is_focused(FocusArea::ChatInput) {
+            // Paste to chat input when focused
+            self.chat_input.paste_text(&text);
+            None
+        } else {
+            // Otherwise paste to active tab's PTY
+            self.tab_manager.write_to_active_pty(text.into_bytes());
+            None
         }
     }
 
@@ -1925,14 +1958,27 @@ impl App {
                 _ => {}
             }
         }
-        
+
+        // Handle ongoing chat input text selection (drag/up events while selecting)
+        if self.chat_input.is_selecting() {
+            match mouse.kind {
+                MouseEventKind::Drag(MouseButton::Left) | MouseEventKind::Up(MouseButton::Left) => {
+                    if let Some(action) = self.chat_input.handle_mouse(mouse) {
+                        return Some(action);
+                    }
+                    return None;
+                }
+                _ => {}
+            }
+        }
+
         // Mouse events over conversation area - route to conversation viewer for selection
         if self.conversation_area.height > 0 {
             let in_conversation = mouse.row >= self.conversation_area.y
                 && mouse.row < self.conversation_area.y + self.conversation_area.height
                 && mouse.column >= self.conversation_area.x
                 && mouse.column < self.conversation_area.x + self.conversation_area.width;
-            
+
             if in_conversation {
                 // Route mouse events to conversation viewer for text selection
                 if let Some(action) = self.conversation_viewer.handle_mouse(mouse) {
@@ -1945,7 +1991,27 @@ impl App {
                 return None;
             }
         }
-        
+
+        // Mouse events over chat input area - route to chat_input for selection
+        if self.chat_input_area.height > 0 {
+            let in_chat_input = mouse.row >= self.chat_input_area.y
+                && mouse.row < self.chat_input_area.y + self.chat_input_area.height
+                && mouse.column >= self.chat_input_area.x
+                && mouse.column < self.chat_input_area.x + self.chat_input_area.width;
+
+            if in_chat_input {
+                // Route mouse events to chat input for text selection
+                if let Some(action) = self.chat_input.handle_mouse(mouse) {
+                    return Some(action);
+                }
+                // Focus on click if no action returned
+                if let MouseEventKind::Down(MouseButton::Left) = mouse.kind {
+                    self.focus.focus(FocusArea::ChatInput);
+                }
+                return None;
+            }
+        }
+
         // Focus-based mouse handling
         match self.focus.current() {
             FocusArea::Terminal => match mouse.kind {
@@ -2052,7 +2118,24 @@ impl App {
         let right_bottom_y = content_y + right_top_height;
         
         // Determine which area was clicked
-        if x < left_width {
+        // Check chat input area first (it's on the left side, need to check before Terminal)
+        if self.chat_input_area.height > 0 && self.chat_input_area.contains((x, y).into()) {
+            // Focus ChatInput when right-clicking on it
+            self.focus.focus(FocusArea::ChatInput);
+            Some(Action::ContextMenuShow {
+                x,
+                y,
+                target: ContextMenuTarget::ChatInput,
+            })
+        } else if self.conversation_area.height > 0 && self.conversation_area.contains((x, y).into()) {
+            // Conversation viewer area
+            self.focus.focus(FocusArea::StreamViewer);
+            Some(Action::ContextMenuShow {
+                x,
+                y,
+                target: ContextMenuTarget::Conversation,
+            })
+        } else if x < left_width {
             // Terminal area
             Some(Action::ContextMenuShow {
                 x,
@@ -2211,6 +2294,9 @@ impl App {
                         // If settings editor is visible and in editing mode, paste there
                         if self.show_settings_editor && self.settings_editor.is_editing() {
                             self.settings_editor.paste_text(&text);
+                        } else if self.focus.is_focused(FocusArea::ChatInput) {
+                            // Paste to chat input when focused
+                            self.chat_input.paste_text(&text);
                         } else {
                             // Otherwise paste to active tab's PTY (TRC-005)
                             self.tab_manager.write_to_active_pty(text.into_bytes());
@@ -2362,7 +2448,12 @@ impl App {
                 }
             }
             Action::LlmCancel => {
+                // Cancel both the direct LLM manager and AgentEngine's internal LLM
                 self.llm_manager.cancel();
+                if let Some(ref mut agent_engine) = self.agent_engine {
+                    agent_engine.cancel();
+                }
+                self.notification_manager.info_with_message("Request Cancelled", "LLM request interrupted by user");
             }
             Action::LlmSelectModel(model) => {
                 self.llm_manager.set_model(&model);
@@ -2379,6 +2470,29 @@ impl App {
                 self.llm_manager.clear_conversation();
                 // Also clear tool calls in conversation viewer (TRC-016)
                 self.conversation_viewer.clear_tool_calls();
+            }
+            // Chat input actions
+            Action::ChatInputClear => {
+                self.chat_input.clear();
+            }
+            Action::ChatInputPaste(text) => {
+                self.chat_input.paste_text(&text);
+            }
+            Action::ChatInputCopy => {
+                // Copy selected text from chat input to clipboard
+                if let Some(text) = self.chat_input.get_selected_text() {
+                    if let Some(ref mut clipboard) = self.clipboard {
+                        let _ = clipboard.set_text(&text);
+                        self.notification_manager.info("Copied to clipboard");
+                    }
+                }
+                self.chat_input.clear_selection();
+            }
+            Action::ChatInputScrollUp(n) => {
+                self.chat_input.scroll_up(n);
+            }
+            Action::ChatInputScrollDown(n) => {
+                self.chat_input.scroll_down(n);
             }
             // Subagent configuration actions (T2.1b)
             Action::SubagentSelectModel { agent_type, model } => {
@@ -3509,7 +3623,21 @@ impl App {
                     ContextMenuItem::new("Collapse All Tools", Action::ToolCallCollapseAll),
                 ]
             }
-            
+
+            ContextMenuTarget::ChatInput => {
+                let has_selection = self.chat_input.has_selection();
+                vec![
+                    if has_selection {
+                        ContextMenuItem::new("Copy", Action::ChatInputCopy).with_shortcut("Ctrl+C")
+                    } else {
+                        ContextMenuItem::new("Copy", Action::ChatInputCopy).with_shortcut("Ctrl+C").disabled()
+                    },
+                    ContextMenuItem::new("Paste", Action::Paste).with_shortcut("Ctrl+V"),
+                    ContextMenuItem::separator(),
+                    ContextMenuItem::new("Clear Input", Action::ChatInputClear),
+                ]
+            }
+
             ContextMenuTarget::Generic => {
                 vec![
                     ContextMenuItem::new("Command Palette", Action::OpenCommandPalette)
@@ -3654,7 +3782,7 @@ impl App {
 impl Drop for App {
     fn drop(&mut self) {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture);
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, DisableMouseCapture, DisableBracketedPaste);
     }
 }
 

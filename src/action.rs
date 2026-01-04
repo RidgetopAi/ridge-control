@@ -142,6 +142,18 @@ pub enum Action {
     LlmSelectProvider(String),
     LlmClearConversation,
 
+    // Chat input actions
+    /// Clear the chat input buffer
+    ChatInputClear,
+    /// Paste text into chat input
+    ChatInputPaste(String),
+    /// Copy selected text from chat input to clipboard
+    ChatInputCopy,
+    /// Scroll chat input up by n lines
+    ChatInputScrollUp(u16),
+    /// Scroll chat input down by n lines
+    ChatInputScrollDown(u16),
+
     // Subagent configuration actions (T2.1b)
     /// Select model for a specific subagent type (explore, plan, review)
     SubagentSelectModel { agent_type: String, model: String },
@@ -580,6 +592,8 @@ pub enum ContextMenuTarget {
     LogViewer,
     /// Right-clicked on conversation viewer
     Conversation,
+    /// Right-clicked on chat input
+    ChatInput,
     /// Generic/no specific target
     Generic,
 }

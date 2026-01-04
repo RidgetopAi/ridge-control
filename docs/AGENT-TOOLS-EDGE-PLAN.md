@@ -22,16 +22,16 @@
 
 ### Key Insights
 
-| Insight | Source | Application |
-|---------|--------|-------------|
-| Return "contextual relevance over flexibility" | Anthropic | All tools should minimize noise |
-| 25k token response limit | Claude Code | Apply truncation with clear indicators |
-| Resolve IDs to semantic names | Anthropic | Use readable field names always |
-| ripgrep 10x faster than grep | CodeAnt | ripgrep as default, no fallback |
-| Smart-case reduces agent errors | CodeAnt | Enable by default |
-| Firecrawl → LLM-ready markdown | Firecrawl | Web fetch should output markdown |
-| MCP server for ast-grep | ast-grep | Can add as future enhancement |
-| Cursor uses 8 parallel agents | Cursor | Inform sub-agent design |
+| Insight                                        | Source      | Application                            |
+| ---------------------------------------------- | ----------- | -------------------------------------- |
+| Return "contextual relevance over flexibility" | Anthropic   | All tools should minimize noise        |
+| 25k token response limit                       | Claude Code | Apply truncation with clear indicators |
+| Resolve IDs to semantic names                  | Anthropic   | Use readable field names always        |
+| ripgrep 10x faster than grep                   | CodeAnt     | ripgrep as default, no fallback        |
+| Smart-case reduces agent errors                | CodeAnt     | Enable by default                      |
+| Firecrawl → LLM-ready markdown                 | Firecrawl   | Web fetch should output markdown       |
+| MCP server for ast-grep                        | ast-grep    | Can add as future enhancement          |
+| Cursor uses 8 parallel agents                  | Cursor      | Inform sub-agent design                |
 
 ---
 
@@ -44,6 +44,7 @@
 **Current State**: Basic grep exists, missing efficiency features
 
 **Target State**: Exceeds Claude Code with:
+
 - All Claude Code features
 - Smart defaults that reduce agent errors
 - Response format optimization
@@ -133,6 +134,7 @@ ToolDefinition {
 #### Response Formats
 
 **files_with_matches mode** (default - most token-efficient):
+
 ```json
 {
     "mode": "files_with_matches",
@@ -150,6 +152,7 @@ ToolDefinition {
 ```
 
 **content mode** (full context):
+
 ```json
 {
     "mode": "content",
@@ -172,6 +175,7 @@ ToolDefinition {
 ```
 
 **count mode** (statistics):
+
 ```json
 {
     "mode": "count",
@@ -375,6 +379,7 @@ ToolDefinition {
 #### Design Philosophy
 
 Based on research, the best approach is:
+
 1. Use Mozilla Readability for content extraction (same as Firecrawl)
 2. Convert to clean markdown (same format agents are trained on)
 3. Cache results (web pages change slowly, save money)
@@ -535,12 +540,12 @@ governor = "0.8"  # Rate limiting
 
 #### Integration Options
 
-| Option | Cost | Quality | Latency |
-|--------|------|---------|---------|
-| **SerpAPI** | $50/mo 5k searches | High | ~500ms |
-| **Tavily** | $40/mo 3k searches | High (AI-native) | ~800ms |
-| **Brave Search API** | Free tier 2k/mo | Medium | ~300ms |
-| **DuckDuckGo** | Free | Medium | ~400ms |
+| Option               | Cost               | Quality          | Latency |
+| -------------------- | ------------------ | ---------------- | ------- |
+| **SerpAPI**          | $50/mo 5k searches | High             | ~500ms  |
+| **Tavily**           | $40/mo 3k searches | High (AI-native) | ~800ms  |
+| **Brave Search API** | Free tier 2k/mo    | Medium           | ~300ms  |
+| **DuckDuckGo**       | Free               | Medium           | ~400ms  |
 
 **Recommendation**: Start with **Brave Search API** (free tier), upgrade to SerpAPI/Tavily if needed.
 
@@ -728,6 +733,7 @@ impl ShellSessionPool {
 #### Response Formats
 
 **Foreground execution:**
+
 ```json
 {
     "session_id": "default",
@@ -743,6 +749,7 @@ impl ShellSessionPool {
 ```
 
 **Background execution:**
+
 ```json
 {
     "session_id": "build",
@@ -859,49 +866,53 @@ ToolDefinition {
 ## Implementation Phases
 
 ### Phase 1: Search Excellence (Week 1)
+
 **Effort**: 3 days
 **Value**: 5-10x token savings on search operations
 
-| Day | Task | Deliverable |
-|-----|------|-------------|
-| 1 | Grep output modes | `files_with_matches`, `content`, `count` |
-| 1 | Grep pagination | `head_limit`, `offset`, `next_offset` |
-| 2 | Multi-span file_read | `spans` parameter |
-| 2 | Response format optimization | JSON structure tuning |
-| 3 | Testing & integration | End-to-end tests |
+| Day | Task                         | Deliverable                              |
+| --- | ---------------------------- | ---------------------------------------- |
+| 1   | Grep output modes            | `files_with_matches`, `content`, `count` |
+| 1   | Grep pagination              | `head_limit`, `offset`, `next_offset`    |
+| 2   | Multi-span file_read         | `spans` parameter                        |
+| 2   | Response format optimization | JSON structure tuning                    |
+| 3   | Testing & integration        | End-to-end tests                         |
 
 ### Phase 2: Web Access (Week 1-2)
+
 **Effort**: 3 days
 **Value**: Agents can research documentation, APIs, libraries
 
-| Day | Task | Deliverable |
-|-----|------|-------------|
-| 4 | web_fetch core | reqwest + readability |
-| 4 | Markdown conversion | html2md integration |
-| 5 | Caching layer | LRU cache + TTL |
-| 5 | web_search | Brave API integration |
-| 6 | Rate limiting | governor + config |
+| Day | Task                | Deliverable           |
+| --- | ------------------- | --------------------- |
+| 4   | web_fetch core      | reqwest + readability |
+| 4   | Markdown conversion | html2md integration   |
+| 5   | Caching layer       | LRU cache + TTL       |
+| 5   | web_search          | Brave API integration |
+| 6   | Rate limiting       | governor + config     |
 
 ### Phase 3: Persistent Shell (Week 2)
+
 **Effort**: 4 days
 **Value**: Real build workflows, environment persistence
 
-| Day | Task | Deliverable |
-|-----|------|-------------|
-| 7 | Session pool | Creation, cleanup, limits |
-| 7 | PTY integration | pty-process async |
-| 8 | Background execution | spawn, output, kill |
-| 9 | State persistence | cwd, env tracking |
-| 10 | Testing | Multi-session scenarios |
+| Day | Task                 | Deliverable               |
+| --- | -------------------- | ------------------------- |
+| 7   | Session pool         | Creation, cleanup, limits |
+| 7   | PTY integration      | pty-process async         |
+| 8   | Background execution | spawn, output, kill       |
+| 9   | State persistence    | cwd, env tracking         |
+| 10  | Testing              | Multi-session scenarios   |
 
 ### Phase 4: Enhancements (Week 3)
+
 **Effort**: 2 days
 **Value**: Polish, competitive features
 
-| Day | Task | Deliverable |
-|-----|------|-------------|
-| 11 | Edit diff preview | Unified diff output |
-| 12 | Integration testing | Full agent workflows |
+| Day | Task                | Deliverable          |
+| --- | ------------------- | -------------------- |
+| 11  | Edit diff preview   | Unified diff output  |
+| 12  | Integration testing | Full agent workflows |
 
 ---
 
@@ -942,13 +953,13 @@ cargo install ast-grep  # Future enhancement
 
 ## Success Metrics
 
-| Metric | Current | Target | Measurement |
-|--------|---------|--------|-------------|
-| Tokens per search | ~500 | ~50 | `files_with_matches` default |
-| Multi-file read calls | 3 | 1 | Multi-span support |
-| Build workflow calls | 5+ | 2-3 | Persistent sessions |
-| Web research capability | 0% | 100% | web_fetch + web_search |
-| Agent task success rate | ? | +20% | Track in Mandrel |
+| Metric                  | Current | Target | Measurement                  |
+| ----------------------- | ------- | ------ | ---------------------------- |
+| Tokens per search       | ~500    | ~50    | `files_with_matches` default |
+| Multi-file read calls   | 3       | 1      | Multi-span support           |
+| Build workflow calls    | 5+      | 2-3    | Persistent sessions          |
+| Web research capability | 0%      | 100%   | web_fetch + web_search       |
+| Agent task success rate | ?       | +20%   | Track in Mandrel             |
 
 ---
 
@@ -979,12 +990,12 @@ cargo install ast-grep  # Future enhancement
 
 ## Risk Mitigation
 
-| Risk | Mitigation |
-|------|------------|
-| ripgrep not installed | Graceful error, clear install instructions |
-| Web fetch blocked/rate-limited | Exponential backoff, cache heavily |
-| PTY resource leak | Idle session cleanup, max session limit |
-| Large output overwhelms agent | Truncation with clear indicators |
+| Risk                           | Mitigation                                 |
+| ------------------------------ | ------------------------------------------ |
+| ripgrep not installed          | Graceful error, clear install instructions |
+| Web fetch blocked/rate-limited | Exponential backoff, cache heavily         |
+| PTY resource leak              | Idle session cleanup, max session limit    |
+| Large output overwhelms agent  | Truncation with clear indicators           |
 
 ---
 

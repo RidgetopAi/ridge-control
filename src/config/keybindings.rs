@@ -227,6 +227,10 @@ impl Default for KeybindingsConfig {
             ActionBinding { action: "quit".to_string(), args: vec![] },
         );
         normal.bindings.insert(
+            "C-q".to_string(),
+            ActionBinding { action: "llm_cancel".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
             "tab".to_string(),
             ActionBinding { action: "focus_next".to_string(), args: vec![] },
         );
@@ -365,6 +369,10 @@ impl Default for KeybindingsConfig {
         pty_raw.bindings.insert(
             "C-esc".to_string(),
             ActionBinding { action: "enter_normal_mode".to_string(), args: vec![] },
+        );
+        pty_raw.bindings.insert(
+            "C-q".to_string(),
+            ActionBinding { action: "llm_cancel".to_string(), args: vec![] },
         );
         pty_raw.bindings.insert(
             "C-v".to_string(),
