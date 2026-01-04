@@ -53,7 +53,7 @@ use crate::tabs::{TabId, TabManager, TabBar};
 use crate::agent::{
     AgentEngine, AgentEvent, ConfirmationRequiredExecutor, ContextManager, DiskThreadStore,
     ModelCatalog, DefaultTokenCounter, TokenCounter, ContextStats, SystemPromptBuilder,
-    SubagentManager, ToolExecutor as AgentToolExecutor, ThreadStore,
+    SubagentManager, AgentToolOrchestrator, ThreadStore,
     MandrelClient,
 };
 use crate::lsp::LspManager;
@@ -267,7 +267,7 @@ impl App {
         let (agent_event_tx, agent_event_rx) = mpsc::unbounded_channel::<AgentEvent>();
         let context_manager = std::sync::Arc::new(ContextManager::new(model_catalog.clone(), token_counter.clone()));
         let prompt_builder = SystemPromptBuilder::ridge_control();
-        let agent_tool_executor: std::sync::Arc<dyn AgentToolExecutor> = std::sync::Arc::new(ConfirmationRequiredExecutor);
+        let agent_tool_executor: std::sync::Arc<dyn AgentToolOrchestrator> = std::sync::Arc::new(ConfirmationRequiredExecutor);
         let thread_store = match DiskThreadStore::new() {
             Ok(store) => std::sync::Arc::new(store),
             Err(e) => {

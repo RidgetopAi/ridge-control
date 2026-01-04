@@ -3,7 +3,7 @@
 //! Handles server lifecycle, routing requests to appropriate servers,
 //! and document synchronization.
 //!
-//! Note: Used indirectly through LSP tools in ToolExecutor.
+//! Note: Used indirectly through LSP tools in llm::ToolExecutor.
 
 #![allow(dead_code)]
 

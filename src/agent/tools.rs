@@ -1,4 +1,4 @@
-//! Tool executor - bridge between agent loop and existing tool system
+//! Agent tool orchestrator - bridge between agent loop and existing tool system
 
 use async_trait::async_trait;
 
@@ -14,10 +14,10 @@ pub struct ToolExecutionResult {
     pub should_continue: bool,
 }
 
-/// Error during tool execution
+/// Error during tool orchestration
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)]
-pub enum ToolExecutorError {
+pub enum AgentToolOrchestratorError {
     #[error("Unknown tool: {name}")]
     UnknownTool { name: String },
 
@@ -37,12 +37,12 @@ pub enum ToolExecutorError {
     Timeout { timeout_secs: u32 },
 }
 
-/// Trait for executing tools within the agent loop
+/// Trait for orchestrating tool execution within the agent loop
 #[async_trait]
 #[allow(dead_code)]
-pub trait ToolExecutor: Send + Sync {
+pub trait AgentToolOrchestrator: Send + Sync {
     /// Execute a tool and return the result
-    async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, ToolExecutorError>;
+    async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, AgentToolOrchestratorError>;
 
     /// Check if a tool requires user confirmation
     fn requires_confirmation(&self, tool_name: &str) -> bool;
@@ -51,9 +51,9 @@ pub trait ToolExecutor: Send + Sync {
     fn available_tools(&self) -> Vec<String>;
 }
 
-/// Default tool executor that bridges to the existing llm::tools system
+/// Default tool orchestrator that bridges to the existing llm::tools system
 #[allow(dead_code)]
-pub struct DefaultToolExecutor {
+pub struct DefaultAgentToolOrchestrator {
     /// Tool names that require confirmation
     confirmation_required: Vec<String>,
     /// Whether to require confirmation for all tools (dangerously_allow_all = false)
@@ -61,7 +61,7 @@ pub struct DefaultToolExecutor {
 }
 
 #[allow(dead_code)]
-impl DefaultToolExecutor {
+impl DefaultAgentToolOrchestrator {
     pub fn new() -> Self {
         Self {
             confirmation_required: vec![
@@ -86,24 +86,24 @@ impl DefaultToolExecutor {
     }
 }
 
-impl Default for DefaultToolExecutor {
+impl Default for DefaultAgentToolOrchestrator {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl ToolExecutor for DefaultToolExecutor {
-    async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, ToolExecutorError> {
+impl AgentToolOrchestrator for DefaultAgentToolOrchestrator {
+    async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, AgentToolOrchestratorError> {
         // Check if confirmation is required
         if self.requires_confirmation(&tool_use.name) {
-            return Err(ToolExecutorError::RequiresConfirmation { tool_use });
+            return Err(AgentToolOrchestratorError::RequiresConfirmation { tool_use });
         }
 
         // Execute the tool based on name
         // Currently all tools go through UI confirmation flow
         // This will be expanded when we wire up direct tool execution
-        Err(ToolExecutorError::UnknownTool {
+        Err(AgentToolOrchestratorError::UnknownTool {
             name: tool_use.name.clone(),
         })
     }
@@ -121,15 +121,15 @@ impl ToolExecutor for DefaultToolExecutor {
     }
 }
 
-/// A pass-through executor that always requires confirmation
+/// A pass-through orchestrator that always requires confirmation
 /// Used when the UI handles tool confirmation
 #[allow(dead_code)]
 pub struct ConfirmationRequiredExecutor;
 
 #[async_trait]
-impl ToolExecutor for ConfirmationRequiredExecutor {
-    async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, ToolExecutorError> {
-        Err(ToolExecutorError::RequiresConfirmation { tool_use })
+impl AgentToolOrchestrator for ConfirmationRequiredExecutor {
+    async fn execute(&self, tool_use: ToolUse) -> Result<ToolExecutionResult, AgentToolOrchestratorError> {
+        Err(AgentToolOrchestratorError::RequiresConfirmation { tool_use })
     }
 
     fn requires_confirmation(&self, _tool_name: &str) -> bool {
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn test_confirmation_required() {
-        let executor = DefaultToolExecutor::new();
+        let executor = DefaultAgentToolOrchestrator::new();
         assert!(executor.requires_confirmation("bash_run"));
         assert!(executor.requires_confirmation("file_write"));
     }

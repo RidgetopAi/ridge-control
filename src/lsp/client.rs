@@ -2,7 +2,7 @@
 //!
 //! Handles spawning, communication, and lifecycle of one language server.
 //!
-//! Note: Used indirectly through LSP tools in ToolExecutor.
+//! Note: Used indirectly through LSP tools in llm::ToolExecutor.
 
 #![allow(dead_code)]
 

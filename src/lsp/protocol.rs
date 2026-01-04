@@ -3,7 +3,7 @@
 //! Implements the JSON-RPC 2.0 message format used by LSP,
 //! including Content-Length header parsing for stdio transport.
 //!
-//! Note: These types are used indirectly through LSP tools in ToolExecutor.
+//! Note: These types are used indirectly through LSP tools in llm::ToolExecutor.
 //! The dead_code warnings are false positives.
 
 #![allow(dead_code)]

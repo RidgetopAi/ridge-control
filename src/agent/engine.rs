@@ -10,7 +10,7 @@ use crate::llm::{LLMEvent, LLMManager};
 use super::context::{BuildContextParams, ContextManager, ContextSegment, SegmentKind};
 use super::prompt::SystemPromptBuilder;
 use super::thread::{AgentThread, ThreadStore};
-use super::tools::ToolExecutor;
+use super::tools::AgentToolOrchestrator;
 
 /// Maximum length for auto-generated thread titles
 const MAX_TITLE_LENGTH: usize = 60;
@@ -125,8 +125,8 @@ pub struct AgentEngine<S: ThreadStore> {
     context_manager: Arc<ContextManager>,
     /// System prompt builder
     prompt_builder: SystemPromptBuilder,
-    /// Tool executor
-    tool_executor: Arc<dyn ToolExecutor>,
+    /// Tool orchestrator
+    tool_executor: Arc<dyn AgentToolOrchestrator>,
     /// Thread storage
     thread_store: Arc<S>,
     /// Current active thread
@@ -150,7 +150,7 @@ impl<S: ThreadStore> AgentEngine<S> {
         llm: LLMManager,
         context_manager: Arc<ContextManager>,
         prompt_builder: SystemPromptBuilder,
-        tool_executor: Arc<dyn ToolExecutor>,
+        tool_executor: Arc<dyn AgentToolOrchestrator>,
         thread_store: Arc<S>,
         event_tx: mpsc::UnboundedSender<AgentEvent>,
     ) -> Self {

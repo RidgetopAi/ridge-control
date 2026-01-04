@@ -3,7 +3,7 @@
 //! Tracks which documents are "open" in the LSP sense,
 //! managing didOpen/didClose notifications.
 //!
-//! Note: Used indirectly through LSP tools in ToolExecutor.
+//! Note: Used indirectly through LSP tools in llm::ToolExecutor.
 
 #![allow(dead_code)]
 

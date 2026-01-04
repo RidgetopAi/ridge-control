@@ -27,7 +27,7 @@ pub use context::{ContextSegment, SegmentKind, ContextManager, BuildContextParam
 pub use prompt::{SystemPromptBuilder, PlatformInfo, RepoContextInfo};
 pub use thread::{AgentThread, ThreadStore, InMemoryThreadStore};
 pub use disk_store::DiskThreadStore;
-pub use tools::{ToolExecutor, ConfirmationRequiredExecutor};
+pub use tools::{AgentToolOrchestrator, ConfirmationRequiredExecutor};
 pub use engine::{AgentEngine, AgentState, AgentEvent, AgentConfig};
 pub use subagent::{SubagentManager, SubagentResult, SubagentStatus, SubagentError};
 pub use mandrel::{MandrelClient, MandrelConfig, MandrelError, Context as MandrelContext, Task as MandrelTask};
