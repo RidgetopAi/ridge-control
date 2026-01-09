@@ -771,6 +771,10 @@ impl SettingsEditor {
                 self.handle_edit_backspace();
                 None
             }
+            // Tab/BackTab: Consume but do nothing in editing mode to prevent focus escape
+            KeyCode::Tab | KeyCode::BackTab => {
+                Some(Action::Noop)
+            }
             // Ctrl+U: Toggle mask visibility
             KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.toggle_mask_visibility();
@@ -789,7 +793,7 @@ impl SettingsEditor {
                 self.handle_edit_char(c);
                 None
             }
-            _ => None,
+            _ => Some(Action::Noop), // Consume all other keys to prevent focus escape
         }
     }
 

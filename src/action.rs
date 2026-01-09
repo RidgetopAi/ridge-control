@@ -65,6 +65,8 @@ pub enum SortOrder {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum Action {
+    /// No-op action - used to consume input without triggering any behavior
+    Noop,
     Quit,
     ForceQuit,
     Tick,

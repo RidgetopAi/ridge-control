@@ -56,6 +56,24 @@ impl TerminalWidget {
         self.grid.scroll_to_bottom();
     }
 
+    /// Calculate view_offset - the same offset used by GridWidget::render()
+    /// This handles cases where cursor is below the visible area (e.g., Claude Code running)
+    fn calculate_view_offset(&self) -> usize {
+        let inner = match self.inner_area {
+            Some(area) => area,
+            None => return 0,
+        };
+        let area_height = inner.height as usize;
+        let scroll_offset = self.grid.scroll_offset();
+        let (_, cursor_y) = self.grid.cursor();
+        
+        if scroll_offset == 0 && cursor_y >= area_height {
+            cursor_y - area_height + 1
+        } else {
+            0
+        }
+    }
+
     fn screen_to_grid(&self, screen_x: u16, screen_y: u16) -> Option<(usize, usize)> {
         let inner = self.inner_area?;
         if screen_x < inner.x || screen_y < inner.y {
@@ -63,8 +81,14 @@ impl TerminalWidget {
         }
         let x = (screen_x - inner.x) as usize;
         let y = (screen_y - inner.y) as usize;
-        if x < self.grid.cols() && y < self.grid.rows() {
-            Some((x, y))
+        
+        // Apply view_offset to match what's actually rendered on screen
+        // This fixes selection offset when cursor is below visible area
+        let view_offset = self.calculate_view_offset();
+        let grid_y = y + view_offset;
+        
+        if x < self.grid.cols() && grid_y < self.grid.rows() {
+            Some((x, grid_y))
         } else {
             None
         }
@@ -185,6 +209,21 @@ impl TerminalWidget {
                 None
             }
             MouseEventKind::Drag(MouseButton::Left) => {
+                // Check for drag-to-scroll: if dragging outside the terminal area,
+                // scroll in that direction while extending selection
+                if let Some(inner) = self.inner_area {
+                    if mouse.row < inner.y {
+                        // Dragging above terminal - scroll up and extend selection to top
+                        self.scroll_up(1);
+                        self.update_selection(mouse.column, inner.y);
+                        return Some(Action::ScrollUp(1));
+                    } else if mouse.row >= inner.y + inner.height {
+                        // Dragging below terminal - scroll down and extend selection to bottom
+                        self.scroll_down(1);
+                        self.update_selection(mouse.column, inner.y + inner.height - 1);
+                        return Some(Action::ScrollDown(1));
+                    }
+                }
                 self.update_selection(mouse.column, mouse.row);
                 None
             }

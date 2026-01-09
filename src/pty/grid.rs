@@ -29,6 +29,8 @@ impl Cell {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Position {
     pub x: usize,
+    /// Absolute Y position in the virtual buffer (scrollback + visible)
+    /// This allows selection to persist correctly across scrolling
     pub y: usize,
 }
 
@@ -582,9 +584,10 @@ impl Grid {
     }
 
     pub fn process(&mut self, data: &[u8]) {
-        if self.scroll_offset > 0 {
-            self.scroll_offset = 0;
-        }
+        // NOTE: Previously reset scroll_offset to 0 on every output, preventing
+        // users from scrolling up while Claude Code or other tools were responding.
+        // Now we preserve scroll position - user can scroll while output continues.
+        // scroll_to_bottom() is called explicitly when entering PTY mode.
         self.parser.advance(&mut self.performer, data);
     }
 
@@ -650,14 +653,41 @@ impl Grid {
         }
     }
 
-    pub fn start_selection(&mut self, x: usize, y: usize) {
-        let pos = Position::new(x, y);
+    /// Convert a visible row (0 = top of screen) to absolute buffer position
+    /// Absolute position counts from the start of scrollback history
+    fn visible_to_absolute(&self, visible_y: usize) -> usize {
+        let scrollback_len = self.performer.scrollback.len();
+        // Absolute Y = how far into scrollback we are + visible row
+        // When scroll_offset=0 (at bottom), first visible row is at scrollback_len
+        // When scroll_offset=N, we've scrolled up N lines, so first visible row is at scrollback_len - N
+        scrollback_len.saturating_sub(self.scroll_offset) + visible_y
+    }
+
+    /// Convert an absolute buffer position back to visible row
+    /// Returns None if the position is not currently visible
+    #[allow(dead_code)]
+    fn absolute_to_visible(&self, absolute_y: usize) -> Option<usize> {
+        let scrollback_len = self.performer.scrollback.len();
+        let first_visible = scrollback_len.saturating_sub(self.scroll_offset);
+        let last_visible = first_visible + self.performer.rows;
+        
+        if absolute_y >= first_visible && absolute_y < last_visible {
+            Some(absolute_y - first_visible)
+        } else {
+            None
+        }
+    }
+
+    pub fn start_selection(&mut self, x: usize, visible_y: usize) {
+        let absolute_y = self.visible_to_absolute(visible_y);
+        let pos = Position::new(x, absolute_y);
         self.selection = Some(Selection::new(pos, pos));
     }
 
-    pub fn update_selection(&mut self, x: usize, y: usize) {
+    pub fn update_selection(&mut self, x: usize, visible_y: usize) {
+        let absolute_y = self.visible_to_absolute(visible_y);
         if let Some(ref mut sel) = self.selection {
-            sel.end = Position::new(x, y);
+            sel.end = Position::new(x, absolute_y);
         }
     }
 
@@ -672,28 +702,42 @@ impl Grid {
         self.selection.as_ref()
     }
 
+    /// Get a line by absolute buffer position
+    fn get_line_absolute(&self, absolute_y: usize) -> Option<&Vec<Cell>> {
+        let scrollback_len = self.performer.scrollback.len();
+        if absolute_y < scrollback_len {
+            // Line is in scrollback
+            self.performer.scrollback.get(absolute_y)
+        } else {
+            // Line is in active buffer
+            let active_row = absolute_y - scrollback_len;
+            self.performer.cells.get(active_row)
+        }
+    }
+
     pub fn get_selected_text(&self) -> Option<String> {
         let sel = self.selection.as_ref()?;
         let (start, end) = sel.normalized();
 
         let mut text = String::new();
-        let rows = self.performer.rows;
+        let scrollback_len = self.performer.scrollback.len();
+        let max_absolute = scrollback_len + self.performer.rows;
 
-        for y in start.y..=end.y.min(rows.saturating_sub(1)) {
-            let line = if let Some(line) = self.get_visible_line(y) {
+        for abs_y in start.y..=end.y.min(max_absolute.saturating_sub(1)) {
+            let line = if let Some(line) = self.get_line_absolute(abs_y) {
                 line
             } else {
                 continue;
             };
 
-            let x_start = if y == start.y { start.x } else { 0 };
-            let x_end = if y == end.y { end.x } else { line.len().saturating_sub(1) };
+            let x_start = if abs_y == start.y { start.x } else { 0 };
+            let x_end = if abs_y == end.y { end.x } else { line.len().saturating_sub(1) };
 
             for cell in line.iter().take(x_end + 1).skip(x_start) {
                 text.push(cell.c);
             }
 
-            if y < end.y {
+            if abs_y < end.y {
                 text.push('\n');
             }
         }
@@ -706,9 +750,12 @@ impl Grid {
         }
     }
 
-    pub fn is_position_selected(&self, x: usize, y: usize) -> bool {
+    /// Check if a visible position is selected
+    /// Takes visible coordinates and converts to absolute for comparison
+    pub fn is_position_selected(&self, x: usize, visible_y: usize) -> bool {
         if let Some(ref sel) = self.selection {
-            sel.contains(Position::new(x, y))
+            let absolute_y = self.visible_to_absolute(visible_y);
+            sel.contains(Position::new(x, absolute_y))
         } else {
             false
         }

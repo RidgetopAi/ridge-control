@@ -570,6 +570,9 @@ impl App {
 
     pub(super) fn dispatch(&mut self, action: Action) -> Result<()> {
         match action {
+            Action::Noop => {
+                // Do nothing - used to consume input without triggering behavior
+            }
             Action::Quit | Action::ForceQuit => {
                 // Auto-save session on quit (TRC-012)
                 self.save_session();
