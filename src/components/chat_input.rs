@@ -356,7 +356,7 @@ impl ChatInput {
             let num_visual_rows = if chars.is_empty() {
                 1
             } else {
-                (chars.len() + wrap_width - 1) / wrap_width
+                chars.len().div_ceil(wrap_width)
             };
 
             // Check if target row is within this logical line's visual rows

@@ -2,7 +2,7 @@
 name = "ridge-control"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.80"
 authors = ["RidgetopAI"]
 description = "Terminal-based command center with PTY emulator, LLM integration, and process monitoring"
 license = "MIT"

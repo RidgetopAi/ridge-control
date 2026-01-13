@@ -326,11 +326,9 @@ fn build_request(
     prompt: &str,
     tools: Vec<ToolDefinition>,
 ) -> LLMRequest {
-    let system_prompt = format!(
-        "You are a specialized sub-agent. Complete the following task and provide a concise summary of your findings.\n\
+    let system_prompt = "You are a specialized sub-agent. Complete the following task and provide a concise summary of your findings.\n\
          Focus on actionable information and specific details.\n\
-         When done, provide a clear summary of what you found or accomplished."
-    );
+         When done, provide a clear summary of what you found or accomplished.".to_string();
 
     LLMRequest {
         model: config.model.clone(),

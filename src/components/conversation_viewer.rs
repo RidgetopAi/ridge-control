@@ -1414,7 +1414,7 @@ impl ConversationViewer {
                     .fg(theme.colors.muted.to_color())
                     .add_modifier(Modifier::ITALIC),
             ))
-        } else if trimmed.starts_with('+') {
+        } else if let Some(rest) = trimmed.strip_prefix('+') {
             Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(
@@ -1424,11 +1424,11 @@ impl ConversationViewer {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    trimmed[1..].to_string(),
+                    rest.to_string(),
                     Style::default().fg(theme.colors.success.to_color()),
                 ),
             ])
-        } else if trimmed.starts_with('-') {
+        } else if let Some(rest) = trimmed.strip_prefix('-') {
             Line::from(vec![
                 Span::styled("  ", Style::default()),
                 Span::styled(
@@ -1438,7 +1438,7 @@ impl ConversationViewer {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    trimmed[1..].to_string(),
+                    rest.to_string(),
                     Style::default().fg(theme.colors.error.to_color()),
                 ),
             ])
@@ -1555,7 +1555,7 @@ impl ConversationViewer {
                     .fg(theme.colors.muted.to_color())
                     .add_modifier(Modifier::ITALIC),
             ))
-        } else if trimmed.starts_with('+') {
+        } else if let Some(rest) = trimmed.strip_prefix('+') {
             // Addition - green
             Line::from(vec![
                 Span::styled(
@@ -1569,11 +1569,11 @@ impl ConversationViewer {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    trimmed[1..].to_string(),
+                    rest.to_string(),
                     Style::default().fg(theme.colors.success.to_color()),
                 ),
             ])
-        } else if trimmed.starts_with('-') {
+        } else if let Some(rest) = trimmed.strip_prefix('-') {
             // Deletion - red
             Line::from(vec![
                 Span::styled(
@@ -1587,7 +1587,7 @@ impl ConversationViewer {
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    trimmed[1..].to_string(),
+                    rest.to_string(),
                     Style::default().fg(theme.colors.error.to_color()),
                 ),
             ])

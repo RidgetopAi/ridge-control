@@ -426,8 +426,10 @@ impl AskUserDialog {
                 let is_selected = current_answers.contains(&opt.label);
                 let marker = if question.multi_select {
                     if is_selected { "[x]" } else { "[ ]" }
+                } else if is_selected {
+                    "(*)"
                 } else {
-                    if is_selected { "(*)" } else { "( )" }
+                    "( )"
                 };
 
                 let style = if i == self.selected_option {
@@ -452,8 +454,10 @@ impl AskUserDialog {
                 let has_custom = current_answers.iter().any(|a| a.starts_with("Other:"));
                 let marker = if question.multi_select {
                     if has_custom { "[x]" } else { "[ ]" }
+                } else if has_custom {
+                    "(*)"
                 } else {
-                    if has_custom { "(*)" } else { "( )" }
+                    "( )"
                 };
 
                 let style = if is_other_selected {

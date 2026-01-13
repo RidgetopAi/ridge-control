@@ -93,7 +93,7 @@ mod integration_tests {
         
         // Unknown uses heuristic (chars/4), may differ
         // 50 chars / 4 = ~12-13 tokens
-        assert!(unknown_tokens >= 10 && unknown_tokens <= 15);
+        assert!((10..=15).contains(&unknown_tokens));
     }
 
     #[test]

@@ -140,6 +140,6 @@ mod tests {
         let text = "a".repeat(400);
         let tokens = counter.count_text("unknown-model", &text);
         // ~4 chars per token = ~100 tokens
-        assert!(tokens >= 99 && tokens <= 101);
+        assert!((99..=101).contains(&tokens));
     }
 }

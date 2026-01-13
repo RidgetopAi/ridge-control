@@ -100,7 +100,7 @@ impl DiffComputer {
         let mut lines = Vec::new();
 
         // Header for new file
-        lines.push(DiffLine::Header(format!("--- /dev/null")));
+        lines.push(DiffLine::Header("--- /dev/null".to_string()));
         lines.push(DiffLine::Header(format!("+++ b/{}", path)));
         lines.push(DiffLine::Header("@@ -0,0 +1 @@".to_string()));
 
@@ -162,7 +162,7 @@ impl DiffComputer {
 
         // Add trailing context after last change
         if last_change_idx.is_some() {
-            for (_, change) in changes.iter().enumerate() {
+            for change in changes.iter() {
                 if let DiffLine::Context(_) = change {
                     // Already handled in main loop
                 }

@@ -1733,7 +1733,7 @@ impl ToolExecutor {
 
         // Binary file detection: check for null bytes in first 8KB
         let sample_size = bytes.len().min(8192);
-        let is_binary = bytes[..sample_size].iter().any(|&b| b == 0);
+        let is_binary = bytes[..sample_size].contains(&0);
 
         if is_binary {
             // Return metadata only for binary files

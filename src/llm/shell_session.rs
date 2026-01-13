@@ -424,8 +424,8 @@ async fn run_background_command(
 
     // Spawn tasks to read stdout and stderr
     let buffer_stdout = buffer.clone();
-    let stdout_handle = if let Some(mut stdout) = stdout {
-        Some(tokio::spawn(async move {
+    let stdout_handle = stdout.map(|mut stdout| {
+        tokio::spawn(async move {
             let mut buf = [0u8; 4096];
             loop {
                 match stdout.read(&mut buf).await {
@@ -436,14 +436,12 @@ async fn run_background_command(
                     Err(_) => break,
                 }
             }
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     let buffer_stderr = buffer.clone();
-    let stderr_handle = if let Some(mut stderr) = stderr {
-        Some(tokio::spawn(async move {
+    let stderr_handle = stderr.map(|mut stderr| {
+        tokio::spawn(async move {
             let mut buf = [0u8; 4096];
             loop {
                 match stderr.read(&mut buf).await {
@@ -454,10 +452,8 @@ async fn run_background_command(
                     Err(_) => break,
                 }
             }
-        }))
-    } else {
-        None
-    };
+        })
+    });
 
     // Wait for child to complete
     let status = child.wait().await?;

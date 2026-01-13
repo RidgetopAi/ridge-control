@@ -172,6 +172,12 @@ pub struct App {
     lsp_manager: Arc<RwLock<LspManager>>,
     // T2.4: Ask user dialog for structured questions
     ask_user_dialog: crate::components::ask_user_dialog::AskUserDialog,
+    // Double-tap ESC tracking: last time ESC was pressed in PTY mode
+    last_esc_press: Option<Instant>,
+    // Dirty flag: only redraw when state has changed
+    needs_redraw: bool,
+    // Cached token count: (message_count, token_count) to avoid recounting every frame
+    cached_token_count: Option<(usize, u32)>,
 }
 
 impl App {
@@ -413,7 +419,19 @@ impl App {
             lsp_manager,
             // T2.4: Ask user dialog for structured questions
             ask_user_dialog: crate::components::ask_user_dialog::AskUserDialog::new(),
+            // Double-tap ESC tracking
+            last_esc_press: None,
+            // First frame always needs to draw
+            needs_redraw: true,
+            // Token count cache starts empty
+            cached_token_count: None,
         })
+    }
+
+    /// Mark the UI as needing a redraw
+    #[inline]
+    fn mark_dirty(&mut self) {
+        self.needs_redraw = true;
     }
 
     /// Create App with CLI arguments (TRC-018)
@@ -679,6 +697,8 @@ impl App {
                 }
             }
             AgentEvent::Chunk(chunk) => {
+                // Invalidate token cache - content is changing
+                self.cached_token_count = None;
                 // Forward to existing LLM event handler for streaming display
                 self.handle_llm_event(LLMEvent::Chunk(chunk));
             }
@@ -708,6 +728,9 @@ impl App {
             }
             AgentEvent::TurnComplete { stop_reason, usage } => {
                 tracing::debug!("Agent turn complete: {:?}, usage: {:?}", stop_reason, usage);
+                
+                // Invalidate token cache - turn complete means messages finalized
+                self.cached_token_count = None;
                 
                 // Stop any running spinners
                 self.spinner_manager.stop(&SpinnerKey::LlmLoading);
@@ -760,6 +783,9 @@ impl App {
                     "Context truncated: dropped {} segments, using {}/{} tokens",
                     segments_dropped, tokens_used, budget
                 );
+                
+                // Invalidate token cache - context has been trimmed
+                self.cached_token_count = None;
                 
                 // Notify user that context was truncated
                 self.notification_manager.warning(format!(

@@ -33,7 +33,7 @@ impl Position {
     }
 
     /// Convert to 1-indexed (user-facing) from 0-indexed (LSP)
-    pub fn to_one_indexed(&self) -> (u32, u32) {
+    pub fn to_one_indexed(self) -> (u32, u32) {
         (self.line + 1, self.character + 1)
     }
 }

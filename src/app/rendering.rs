@@ -15,7 +15,16 @@ use crate::tabs::TabBar;
 impl App {
     /// Main drawing method - renders entire UI
     pub(super) fn draw(&mut self) -> Result<()> {
-        let focus = self.focus.clone();
+        // Pre-compute focus booleans to avoid cloning FocusManager
+        let focus_terminal = self.focus.is_focused(FocusArea::Terminal);
+        let focus_stream_viewer = self.focus.is_focused(FocusArea::StreamViewer);
+        let focus_chat_input = self.focus.is_focused(FocusArea::ChatInput);
+        let focus_process_monitor = self.focus.is_focused(FocusArea::ProcessMonitor);
+        let focus_menu = self.focus.is_focused(FocusArea::Menu);
+        let focus_log_viewer = self.focus.is_focused(FocusArea::LogViewer);
+        let focus_config_panel = self.focus.is_focused(FocusArea::ConfigPanel);
+        let focus_settings_editor = self.focus.is_focused(FocusArea::SettingsEditor);
+        
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
         let show_confirm = self.confirm_dialog.is_visible();
         let show_palette = self.command_palette.is_visible();
@@ -32,6 +41,7 @@ impl App {
         let show_config_panel = self.show_config_panel;
         let show_settings_editor = self.show_settings_editor;
         let selected_stream_idx = self.selected_stream_index;
+        // Clone theme once - it's small (just color values)
         let theme = self.config_manager.theme().clone();
         // TP2-002-14: Get messages from AgentThread segments if available
         let messages: Vec<Message> = if let Some(thread) = self.agent_engine.current_thread() {
@@ -119,7 +129,7 @@ impl App {
                         session.terminal().render(
                             frame,
                             left_chunks[0],
-                            focus.is_focused(FocusArea::Terminal),
+                            focus_terminal,
                             &theme,
                         );
                     }
@@ -142,14 +152,22 @@ impl App {
                         }
                     };
 
-                    // Phase 3: Compute context stats for header display
+                    // Phase 3: Compute context stats for header display (with caching)
                     let context_stats = {
                         let model = self.agent_engine.current_model();
                         if model.is_empty() || messages.is_empty() {
                             None
                         } else {
                             let model_info = self.model_catalog.info_for(model);
-                            let tokens_used = self.token_counter.count_messages(model, &messages);
+                            // Use cached token count if message count hasn't changed
+                            let tokens_used = match self.cached_token_count {
+                                Some((count, tokens)) if count == messages.len() => tokens,
+                                _ => {
+                                    let tokens = self.token_counter.count_messages(model, &messages);
+                                    self.cached_token_count = Some((messages.len(), tokens));
+                                    tokens
+                                }
+                            };
                             // Budget = context window - default output tokens - 2% safety
                             let safety = model_info.max_context_tokens / 50; // 2%
                             let budget = model_info.max_context_tokens
@@ -162,7 +180,7 @@ impl App {
                     self.conversation_viewer.render_conversation(
                         frame,
                         conv_chunks[0],
-                        focus.is_focused(FocusArea::StreamViewer), // Conversation history focus
+                        focus_stream_viewer, // Conversation history focus
                         &messages,
                         &streaming_buffer,
                         &thinking_buffer,
@@ -175,7 +193,7 @@ impl App {
                     self.chat_input.render(
                         frame,
                         conv_chunks[1],
-                        focus.is_focused(FocusArea::ChatInput),
+                        focus_chat_input,
                         &theme,
                     );
 
@@ -215,7 +233,7 @@ impl App {
                         session.terminal().render(
                             frame,
                             main_chunks[0],
-                            focus.is_focused(FocusArea::Terminal),
+                            focus_terminal,
                             &theme,
                         );
                     }
@@ -233,13 +251,13 @@ impl App {
                 self.process_monitor.render(
                     frame,
                     right_chunks[0],
-                    focus.is_focused(FocusArea::ProcessMonitor),
+                    focus_process_monitor,
                     &theme,
                 );
                 self.menu.render_with_streams(
                     frame,
                     right_chunks[1],
-                    focus.is_focused(FocusArea::Menu),
+                    focus_menu,
                     &streams,
                     &theme,
                 );
@@ -278,7 +296,7 @@ impl App {
                     self.stream_viewer.render_stream_themed(
                         frame,
                         stream_area,
-                        focus.is_focused(FocusArea::StreamViewer),
+                        focus_stream_viewer,
                         selected_stream,
                         &theme,
                     );
@@ -299,7 +317,7 @@ impl App {
                     self.log_viewer.render(
                         frame,
                         log_area,
-                        focus.is_focused(FocusArea::LogViewer),
+                        focus_log_viewer,
                         &theme,
                     );
 
@@ -326,7 +344,7 @@ impl App {
                     self.config_panel.render(
                         frame,
                         config_area,
-                        focus.is_focused(FocusArea::ConfigPanel),
+                        focus_config_panel,
                         &theme,
                     );
 
@@ -353,7 +371,7 @@ impl App {
                     self.settings_editor.render(
                         frame,
                         settings_area,
-                        focus.is_focused(FocusArea::SettingsEditor),
+                        focus_settings_editor,
                         &theme,
                     );
                 }

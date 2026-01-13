@@ -82,9 +82,22 @@ impl App {
                     return Some(action);
                 }
 
-                // Esc exits PTY mode (like vim's Esc to exit insert mode)
+                // Double-tap ESC exits PTY mode (single ESC passes through to PTY)
+                // This allows nvim/vim to receive single ESC for mode switching
                 if key.code == KeyCode::Esc {
-                    return Some(Action::EnterNormalMode);
+                    let now = std::time::Instant::now();
+                    const DOUBLE_TAP_THRESHOLD: std::time::Duration = std::time::Duration::from_millis(300);
+                    
+                    if let Some(last) = self.last_esc_press {
+                        if now.duration_since(last) < DOUBLE_TAP_THRESHOLD {
+                            // Double-tap detected: exit PTY mode
+                            self.last_esc_press = None;
+                            return Some(Action::EnterNormalMode);
+                        }
+                    }
+                    // First ESC or too slow: record time and pass ESC to PTY
+                    self.last_esc_press = Some(now);
+                    return Some(Action::PtyInput(vec![0x1b])); // Send ESC byte to PTY
                 }
 
                 // Copy with selection (special handling) - use active tab's terminal (TRC-005)
