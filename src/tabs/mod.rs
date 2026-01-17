@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::error::Result;
 use crate::event::PtyEvent;
+use crate::pty::MouseMode;
 
 /// Unique identifier for a tab
 pub type TabId = u32;
@@ -203,6 +204,24 @@ impl TabManager {
         if let Some(session) = self.pty_sessions.get(&tab_id) {
             session.write(data);
         }
+    }
+    
+    /// Get mouse tracking mode for the active tab's nested application
+    pub fn active_mouse_mode(&self) -> MouseMode {
+        let tab_id = self.active_tab().id();
+        self.pty_sessions
+            .get(&tab_id)
+            .map(|s| s.mouse_mode())
+            .unwrap_or_default()
+    }
+
+    /// Check if the active tab's nested app is in alternate screen mode
+    pub fn is_active_alternate_screen(&self) -> bool {
+        let tab_id = self.active_tab().id();
+        self.pty_sessions
+            .get(&tab_id)
+            .map(|s| s.is_alternate_screen())
+            .unwrap_or(false)
     }
 
     /// Process PTY output for a specific tab

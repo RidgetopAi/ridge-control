@@ -16,26 +16,26 @@ impl App {
     /// Main drawing method - renders entire UI
     pub(super) fn draw(&mut self) -> Result<()> {
         // Pre-compute focus booleans to avoid cloning FocusManager
-        let focus_terminal = self.focus.is_focused(FocusArea::Terminal);
-        let focus_stream_viewer = self.focus.is_focused(FocusArea::StreamViewer);
-        let focus_chat_input = self.focus.is_focused(FocusArea::ChatInput);
-        let focus_process_monitor = self.focus.is_focused(FocusArea::ProcessMonitor);
-        let focus_menu = self.focus.is_focused(FocusArea::Menu);
-        let focus_log_viewer = self.focus.is_focused(FocusArea::LogViewer);
-        let focus_config_panel = self.focus.is_focused(FocusArea::ConfigPanel);
-        let focus_settings_editor = self.focus.is_focused(FocusArea::SettingsEditor);
+        let focus_terminal = self.ui.focus.is_focused(FocusArea::Terminal);
+        let focus_stream_viewer = self.ui.focus.is_focused(FocusArea::StreamViewer);
+        let focus_chat_input = self.ui.focus.is_focused(FocusArea::ChatInput);
+        let focus_process_monitor = self.ui.focus.is_focused(FocusArea::ProcessMonitor);
+        let focus_menu = self.ui.focus.is_focused(FocusArea::Menu);
+        let focus_log_viewer = self.ui.focus.is_focused(FocusArea::LogViewer);
+        let focus_config_panel = self.ui.focus.is_focused(FocusArea::ConfigPanel);
+        let focus_settings_editor = self.ui.focus.is_focused(FocusArea::SettingsEditor);
         
         let streams: Vec<_> = self.stream_manager.clients().to_vec();
-        let show_confirm = self.confirm_dialog.is_visible();
-        let show_palette = self.command_palette.is_visible();
-        let show_thread_picker = self.thread_picker.is_visible();
-        let show_thread_rename = self.thread_rename_buffer.is_some();
-        let thread_rename_text = self.thread_rename_buffer.clone().unwrap_or_default();
-        let show_ask_user = self.ask_user_dialog.is_visible();
-        let show_context_menu = self.context_menu.is_visible();
-        let has_notifications = self.notification_manager.has_notifications();
-        let _show_tabs = self.tab_manager.count() > 1; // Kept for potential future use
-        let show_conversation = self.show_conversation || !self.llm_response_buffer.is_empty() || !self.thinking_buffer.is_empty();
+        let show_confirm = self.ui.confirm_dialog.is_visible();
+        let show_palette = self.ui.command_palette.is_visible();
+        let show_thread_picker = self.agent.thread_picker.is_visible();
+        let show_thread_rename = self.agent.thread_rename_buffer.is_some();
+        let thread_rename_text = self.agent.thread_rename_buffer.clone().unwrap_or_default();
+        let show_ask_user = self.ui.ask_user_dialog.is_visible();
+        let show_context_menu = self.ui.context_menu.is_visible();
+        let has_notifications = self.ui.notification_manager.has_notifications();
+        let _show_tabs = self.pty.tab_manager.count() > 1; // Kept for potential future use
+        let show_conversation = self.agent.show_conversation || !self.agent.llm_response_buffer.is_empty() || !self.agent.thinking_buffer.is_empty();
         let show_stream_viewer = self.show_stream_viewer;
         let show_log_viewer = self.show_log_viewer;
         let show_config_panel = self.show_config_panel;
@@ -44,7 +44,7 @@ impl App {
         // Clone theme once - it's small (just color values)
         let theme = self.config_manager.theme().clone();
         // TP2-002-14: Get messages from AgentThread segments if available
-        let messages: Vec<Message> = if let Some(thread) = self.agent_engine.current_thread() {
+        let messages: Vec<Message> = if let Some(thread) = self.agent.agent_engine.current_thread() {
             // Extract all messages from thread segments
             thread.segments().iter()
                 .flat_map(|segment| segment.messages.clone())
@@ -52,15 +52,15 @@ impl App {
         } else {
             Vec::new()
         };
-        let streaming_buffer = self.llm_response_buffer.clone();
+        let streaming_buffer = self.agent.llm_response_buffer.clone();
         // TRC-017: Clone thinking buffer for rendering
-        let thinking_buffer = self.thinking_buffer.clone();
+        let thinking_buffer = self.agent.thinking_buffer.clone();
         
         // Get active tab's PTY session for rendering (TRC-005)
-        let active_tab_id = self.tab_manager.active_tab().id();
+        let active_tab_id = self.pty.tab_manager.active_tab().id();
         
         // Pre-calculate tab bar area for mouse hit-testing (TRC-010)
-        let term_size = self.terminal.size().unwrap_or_default();
+        let term_size = self.pty.terminal.size().unwrap_or_default();
         let term_rect = Rect::new(0, 0, term_size.width, term_size.height);
         // Always show status bar for mode indicator
         let show_status_bar_pre = true;
@@ -73,11 +73,11 @@ impl App {
         } else {
             (Rect::default(), term_rect)
         };
-        self.tab_bar_area = computed_tab_bar_area;
+        self.ui.tab_bar_area = computed_tab_bar_area;
         // TRC-024: Store content area for pane resize mouse hit-testing
-        self.content_area = computed_content_area;
+        self.ui.content_area = computed_content_area;
 
-        self.terminal
+        self.pty.terminal
             .draw(|frame| {
                 let size = frame.area();
 
@@ -99,9 +99,9 @@ impl App {
                 // Render tab bar if multiple tabs OR dangerous mode warning bar
                 // TRC-018: Pass dangerous_mode to show warning indicator
                 if show_status_bar {
-                    let tab_bar = TabBar::from_manager_themed(&self.tab_manager, &theme)
-                        .dangerous_mode(self.dangerous_mode)
-                        .input_mode(self.input_mode.clone());
+                    let tab_bar = TabBar::from_manager_themed(&self.pty.tab_manager, &theme)
+                        .dangerous_mode(self.agent.dangerous_mode)
+                        .input_mode(self.ui.input_mode.clone());
                     frame.render_widget(tab_bar, tab_bar_area);
                 }
 
@@ -109,12 +109,12 @@ impl App {
                 // Main layout: left (terminal or terminal+conversation) and right (process monitor + menu)
                 let main_chunks = Layout::default()
                     .direction(Direction::Horizontal)
-                    .constraints(self.pane_layout.main_constraints())
+                    .constraints(self.ui.pane_layout.main_constraints())
                     .split(content_area);
 
                 let right_chunks = Layout::default()
                     .direction(Direction::Vertical)
-                    .constraints(self.pane_layout.right_constraints())
+                    .constraints(self.ui.pane_layout.right_constraints())
                     .split(main_chunks[1]);
 
                 // Left area: split between terminal and conversation if conversation is visible
@@ -122,10 +122,13 @@ impl App {
                 if show_conversation {
                     let left_chunks = Layout::default()
                         .direction(Direction::Vertical)
-                        .constraints(self.pane_layout.left_constraints())
+                        .constraints(self.ui.pane_layout.left_constraints())
                         .split(main_chunks[0]);
 
-                    if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
+                    // Save terminal area for mouse coordinate translation
+                    self.ui.terminal_area = left_chunks[0];
+                    
+                    if let Some(session) = self.pty.tab_manager.get_pty_session(active_tab_id) {
                         session.terminal().render(
                             frame,
                             left_chunks[0],
@@ -143,8 +146,8 @@ impl App {
                     // TRC-017: Pass thinking_buffer for extended thinking display
                     // Pass model info for header display
                     let model_info = {
-                        let provider = self.agent_engine.current_provider();
-                        let model = self.agent_engine.current_model();
+                        let provider = self.agent.agent_engine.current_provider();
+                        let model = self.agent.agent_engine.current_model();
                         if provider.is_empty() || model.is_empty() {
                             None
                         } else {
@@ -154,17 +157,17 @@ impl App {
 
                     // Phase 3: Compute context stats for header display (with caching)
                     let context_stats = {
-                        let model = self.agent_engine.current_model();
+                        let model = self.agent.agent_engine.current_model();
                         if model.is_empty() || messages.is_empty() {
                             None
                         } else {
-                            let model_info = self.model_catalog.info_for(model);
+                            let model_info = self.agent.model_catalog.info_for(model);
                             // Use cached token count if message count hasn't changed
-                            let tokens_used = match self.cached_token_count {
+                            let tokens_used = match self.agent.cached_token_count {
                                 Some((count, tokens)) if count == messages.len() => tokens,
                                 _ => {
-                                    let tokens = self.token_counter.count_messages(model, &messages);
-                                    self.cached_token_count = Some((messages.len(), tokens));
+                                    let tokens = self.agent.token_counter.count_messages(model, &messages);
+                                    self.agent.cached_token_count = Some((messages.len(), tokens));
                                     tokens
                                 }
                             };
@@ -177,7 +180,7 @@ impl App {
                         }
                     };
 
-                    self.conversation_viewer.render_conversation(
+                    self.agent.conversation_viewer.render_conversation(
                         frame,
                         conv_chunks[0],
                         focus_stream_viewer, // Conversation history focus
@@ -190,7 +193,7 @@ impl App {
                     );
 
                     // Render chat input at bottom of conversation area
-                    self.chat_input.render(
+                    self.agent.chat_input.render(
                         frame,
                         conv_chunks[1],
                         focus_chat_input,
@@ -202,7 +205,7 @@ impl App {
                             .borders(ratatui::widgets::Borders::ALL);
                         block.inner(left_chunks[0])
                     };
-                    if let Some(session) = self.tab_manager.get_pty_session_mut(active_tab_id) {
+                    if let Some(session) = self.pty.tab_manager.get_pty_session_mut(active_tab_id) {
                         session.terminal_mut().set_inner_area(term_inner);
                     }
 
@@ -211,7 +214,7 @@ impl App {
                             .borders(ratatui::widgets::Borders::ALL);
                         block.inner(conv_chunks[0])
                     };
-                    self.conversation_viewer.set_inner_area(conv_inner);
+                    self.agent.conversation_viewer.set_inner_area(conv_inner);
 
                     // Set inner area for chat input mouse coordinate conversion
                     let chat_input_inner = {
@@ -219,17 +222,20 @@ impl App {
                             .borders(ratatui::widgets::Borders::ALL);
                         block.inner(conv_chunks[1])
                     };
-                    self.chat_input.set_inner_area(chat_input_inner);
+                    self.agent.chat_input.set_inner_area(chat_input_inner);
 
                     // Save conversation area for mouse hit-testing
-                    self.conversation_area = conv_chunks[0];
+                    self.ui.conversation_area = conv_chunks[0];
                     // Save chat input area for mouse hit-testing (paste routing and selection)
-                    self.chat_input_area = conv_chunks[1];
+                    self.ui.chat_input_area = conv_chunks[1];
                 } else {
                     // Clear conversation and chat input areas when not visible
-                    self.conversation_area = Rect::default();
-                    self.chat_input_area = Rect::default();
-                    if let Some(session) = self.tab_manager.get_pty_session(active_tab_id) {
+                    self.ui.conversation_area = Rect::default();
+                    self.ui.chat_input_area = Rect::default();
+                    // Save terminal area for mouse coordinate translation
+                    self.ui.terminal_area = main_chunks[0];
+                    
+                    if let Some(session) = self.pty.tab_manager.get_pty_session(active_tab_id) {
                         session.terminal().render(
                             frame,
                             main_chunks[0],
@@ -243,7 +249,7 @@ impl App {
                             .borders(ratatui::widgets::Borders::ALL);
                         block.inner(main_chunks[0])
                     };
-                    if let Some(session) = self.tab_manager.get_pty_session_mut(active_tab_id) {
+                    if let Some(session) = self.pty.tab_manager.get_pty_session_mut(active_tab_id) {
                         session.terminal_mut().set_inner_area(term_inner);
                     }
                 }
@@ -254,7 +260,7 @@ impl App {
                     focus_process_monitor,
                     &theme,
                 );
-                self.menu.render_with_streams(
+                self.ui.menu.render_with_streams(
                     frame,
                     right_chunks[1],
                     focus_menu,
@@ -274,7 +280,7 @@ impl App {
                         .borders(ratatui::widgets::Borders::ALL);
                     block.inner(right_chunks[1])
                 };
-                self.menu.set_inner_area(menu_inner);
+                self.ui.menu.set_inner_area(menu_inner);
                 
                 // Render overlays (in order of z-index)
                 
@@ -377,16 +383,16 @@ impl App {
                 }
                 
                 if show_confirm {
-                    self.confirm_dialog.render(frame, size, &theme);
+                    self.ui.confirm_dialog.render(frame, size, &theme);
                 }
                 
                 if show_palette {
-                    self.command_palette.render(frame, size, &theme);
+                    self.ui.command_palette.render(frame, size, &theme);
                 }
 
                 // P2-003: Thread picker overlay
                 if show_thread_picker {
-                    self.thread_picker.render(frame, size, &theme);
+                    self.agent.thread_picker.render(frame, size, &theme);
                 }
 
                 // P2-003: Thread rename dialog overlay
@@ -396,17 +402,17 @@ impl App {
 
                 // T2.4: Ask user dialog overlay
                 if show_ask_user {
-                    self.ask_user_dialog.render(frame, size, &theme);
+                    self.ui.ask_user_dialog.render(frame, size, &theme);
                 }
 
                 // TRC-020: Context menu overlay (highest z-index)
                 if show_context_menu {
-                    self.context_menu.render(frame, size, &theme);
+                    self.ui.context_menu.render(frame, size, &theme);
                 }
                 
                 // TRC-023: Notifications overlay (top-right, highest z-index)
                 if has_notifications {
-                    self.notification_manager.render(frame, size, &theme);
+                    self.ui.notification_manager.render(frame, size, &theme);
                 }
             })
             .map_err(|e| RidgeError::Terminal(e.to_string()))?;

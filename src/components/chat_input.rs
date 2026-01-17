@@ -570,8 +570,8 @@ impl ChatInput {
                     None
                 }
             }
-            MouseEventKind::ScrollUp => Some(Action::ChatInputScrollUp(3)),
-            MouseEventKind::ScrollDown => Some(Action::ChatInputScrollDown(3)),
+            // DIAGNOSTIC: Disable scroll handling to test if this is capturing events
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => None,
             _ => None,
         }
     }

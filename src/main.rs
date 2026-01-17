@@ -212,7 +212,7 @@ async fn main() -> Result<()> {
     
     tracing::info!("App initialized, entering main loop");
     
-    match app.run() {
+    match app.run().await {
         Ok(()) => {
             tracing::info!("App exited normally");
             Ok(())

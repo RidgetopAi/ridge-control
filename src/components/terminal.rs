@@ -4,7 +4,7 @@ use crossterm::event::{Event, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::{
     buffer::Buffer,
     layout::Rect,
-    style::Modifier,
+    style::{Modifier, Style},
     widgets::{Block, Borders, Widget},
     Frame,
 };
@@ -12,7 +12,7 @@ use ratatui::{
 use crate::action::Action;
 use crate::components::Component;
 use crate::config::Theme;
-use crate::pty::grid::Grid;
+use crate::pty::grid::{Grid, MouseMode};
 
 pub struct TerminalWidget {
     grid: Grid,
@@ -54,6 +54,16 @@ impl TerminalWidget {
 
     pub fn scroll_to_bottom(&mut self) {
         self.grid.scroll_to_bottom();
+    }
+    
+    /// Get the mouse tracking mode enabled by the nested application
+    pub fn mouse_mode(&self) -> MouseMode {
+        self.grid.mouse_mode()
+    }
+
+    /// Check if we're in alternate screen mode (running a TUI)
+    pub fn is_alternate_screen(&self) -> bool {
+        self.grid.is_alternate_screen()
     }
 
     /// Calculate view_offset - the same offset used by GridWidget::render()
@@ -256,15 +266,48 @@ struct GridWidget<'a> {
     theme: &'a Theme,
 }
 
+impl<'a> GridWidget<'a> {
+    /// Compute the effective style for a cell, factoring in selection and cursor
+    #[inline]
+    fn cell_style(
+        &self,
+        cell_style: Style,
+        x: usize,
+        grid_row: usize,
+        cursor_x: usize,
+        cursor_y: usize,
+        scroll_offset: usize,
+    ) -> Style {
+        // Check if this position is selected
+        if self.grid.is_position_selected(x, grid_row) {
+            return self.theme.selection_style().remove_modifier(Modifier::REVERSED);
+        }
+
+        // Check if this is the cursor position
+        let is_cursor = self.show_cursor
+            && self.grid.cursor_visible()
+            && scroll_offset == 0
+            && x == cursor_x
+            && grid_row == cursor_y;
+
+        if is_cursor {
+            cell_style
+                .bg(self.theme.terminal.cursor_color.to_color())
+                .fg(self.theme.colors.background.to_color())
+        } else {
+            cell_style
+        }
+    }
+}
+
 impl<'a> Widget for GridWidget<'a> {
     fn render(self, area: Rect, buf: &mut Buffer) {
         let (cursor_x, cursor_y) = self.grid.cursor();
         let scroll_offset = self.grid.scroll_offset();
         let area_height = area.height as usize;
+        let area_width = area.width as usize;
 
         // Calculate view offset to keep cursor visible when it's beyond the render area.
-        // This handles cases where grid rows exceed render area (e.g., after fullscreen
-        // programs exit and terminal content shifts).
         let view_offset = if scroll_offset == 0 && cursor_y >= area_height {
             cursor_y - area_height + 1
         } else {
@@ -272,48 +315,57 @@ impl<'a> Widget for GridWidget<'a> {
         };
 
         for y in 0..area_height {
-            // Adjust the grid row by view_offset to shift content up when cursor is below visible area
             let grid_row = y + view_offset;
             let line = match self.grid.get_visible_line(grid_row) {
                 Some(line) => line,
                 None => continue,
             };
 
-            for x in 0..area.width as usize {
-                if x >= line.len() {
-                    break;
-                }
+            let buf_y = area.y + y as u16;
+            let line_len = line.len().min(area_width);
+            
+            if line_len == 0 {
+                continue;
+            }
 
-                let buf_x = area.x + x as u16;
-                let buf_y = area.y + y as u16;
-                let cell = &line[x];
+            // Batch contiguous cells with same style into runs
+            let mut run_start = 0;
+            let mut run_chars = String::with_capacity(line_len);
+            let mut run_style = self.cell_style(
+                line[0].style,
+                0,
+                grid_row,
+                cursor_x,
+                cursor_y,
+                scroll_offset,
+            );
+            run_chars.push(line[0].c);
 
-                let mut style = cell.style;
+            for (x, cell) in line.iter().enumerate().take(line_len).skip(1) {
+                let style = self.cell_style(
+                    cell.style,
+                    x,
+                    grid_row,
+                    cursor_x,
+                    cursor_y,
+                    scroll_offset,
+                );
 
-                if self.grid.is_position_selected(x, grid_row) {
-                    style = self.theme.selection_style()
-                        .remove_modifier(Modifier::REVERSED);
-                }
-
-                // Cursor position check uses grid_row (adjusted for view_offset)
-                // Also respect cursor visibility state from escape sequences (CSI ?25l/h)
-                let is_cursor = self.show_cursor
-                    && self.grid.cursor_visible()
-                    && scroll_offset == 0
-                    && x == cursor_x
-                    && grid_row == cursor_y;
-
-                if is_cursor {
-                    style = style
-                        .bg(self.theme.terminal.cursor_color.to_color())
-                        .fg(self.theme.colors.background.to_color());
-                }
-
-                if let Some(buf_cell) = buf.cell_mut((buf_x, buf_y)) {
-                    buf_cell.set_char(cell.c);
-                    buf_cell.set_style(style);
+                if style == run_style {
+                    // Same style - extend the run
+                    run_chars.push(cell.c);
+                } else {
+                    // Different style - flush the current run and start new one
+                    buf.set_string(area.x + run_start as u16, buf_y, &run_chars, run_style);
+                    run_start = x;
+                    run_chars.clear();
+                    run_chars.push(cell.c);
+                    run_style = style;
                 }
             }
+
+            // Flush the final run
+            buf.set_string(area.x + run_start as u16, buf_y, &run_chars, run_style);
         }
     }
 }

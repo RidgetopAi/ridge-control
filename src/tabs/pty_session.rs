@@ -21,7 +21,7 @@ use tokio::sync::mpsc;
 use crate::components::terminal::TerminalWidget;
 use crate::error::Result;
 use crate::event::PtyEvent;
-use crate::pty::PtyHandle;
+use crate::pty::{MouseMode, PtyHandle};
 use crate::tabs::TabId;
 
 /// A PTY session tied to a specific tab
@@ -155,6 +155,16 @@ impl PtySession {
     /// Get mutable terminal widget reference
     pub fn terminal_mut(&mut self) -> &mut TerminalWidget {
         &mut self.terminal_widget
+    }
+    
+    /// Get the mouse tracking mode enabled by the nested application
+    pub fn mouse_mode(&self) -> MouseMode {
+        self.terminal_widget.mouse_mode()
+    }
+
+    /// Check if we're in alternate screen mode (running a TUI)
+    pub fn is_alternate_screen(&self) -> bool {
+        self.terminal_widget.is_alternate_screen()
     }
 }
 

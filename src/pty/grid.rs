@@ -127,6 +127,36 @@ impl RingBuffer {
     }
 }
 
+/// Saved main screen state for alternate screen mode
+struct SavedScreen {
+    cells: Vec<Vec<Cell>>,
+    cursor_x: usize,
+    cursor_y: usize,
+    cursor_visible: bool,
+}
+
+/// Mouse tracking modes enabled by the nested application
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MouseMode {
+    /// X10 mouse tracking (mode 9) - clicks only
+    pub x10: bool,
+    /// Normal tracking (mode 1000) - clicks + release
+    pub normal: bool,
+    /// Button event tracking (mode 1002) - adds drag
+    pub button_event: bool,
+    /// Any event tracking (mode 1003) - adds motion
+    pub any_event: bool,
+    /// SGR extended encoding (mode 1006) - modern format
+    pub sgr_ext: bool,
+}
+
+impl MouseMode {
+    /// Returns true if any mouse tracking mode is enabled
+    pub fn any_enabled(&self) -> bool {
+        self.x10 || self.normal || self.button_event || self.any_event
+    }
+}
+
 struct GridPerformer {
     cells: Vec<Vec<Cell>>,
     cursor_x: usize,
@@ -137,15 +167,69 @@ struct GridPerformer {
     scrollback: RingBuffer,
     scrollback_size: usize,
     cursor_visible: bool,
+    /// Whether we're currently in alternate screen mode
+    alternate_screen: bool,
+    /// Saved main screen when in alternate mode
+    saved_screen: Option<SavedScreen>,
+    /// Mouse tracking modes enabled by nested application
+    mouse_mode: MouseMode,
 }
 
 impl GridPerformer {
     fn scroll_up(&mut self) {
         if !self.cells.is_empty() {
             let top_line = self.cells.remove(0);
-            self.scrollback.push(top_line);
+            // Only push to scrollback when NOT in alternate screen mode
+            // Alternate screen content should not pollute main scrollback
+            if !self.alternate_screen {
+                self.scrollback.push(top_line);
+            }
         }
         self.cells.push(vec![Cell::empty(); self.cols]);
+    }
+
+    /// Enter alternate screen mode - save main screen and clear for TUI
+    fn enter_alternate_screen(&mut self) {
+        if self.alternate_screen {
+            return; // Already in alternate mode
+        }
+
+        // Save current main screen state
+        self.saved_screen = Some(SavedScreen {
+            cells: self.cells.clone(),
+            cursor_x: self.cursor_x,
+            cursor_y: self.cursor_y,
+            cursor_visible: self.cursor_visible,
+        });
+
+        // Clear the screen for the TUI application
+        self.clear_screen();
+        self.alternate_screen = true;
+    }
+
+    /// Exit alternate screen mode - restore main screen
+    fn exit_alternate_screen(&mut self) {
+        if !self.alternate_screen {
+            return; // Not in alternate mode
+        }
+
+        // Restore saved main screen if we have one
+        if let Some(saved) = self.saved_screen.take() {
+            self.cells = saved.cells;
+            self.cursor_x = saved.cursor_x;
+            self.cursor_y = saved.cursor_y;
+            self.cursor_visible = saved.cursor_visible;
+
+            // Ensure cells match current dimensions (in case of resize)
+            self.cells.resize(self.rows, vec![Cell::empty(); self.cols]);
+            for row in &mut self.cells {
+                row.resize(self.cols, Cell::empty());
+            }
+            self.cursor_x = self.cursor_x.min(self.cols.saturating_sub(1));
+            self.cursor_y = self.cursor_y.min(self.rows.saturating_sub(1));
+        }
+
+        self.alternate_screen = false;
     }
 
     fn newline(&mut self) {
@@ -293,6 +377,11 @@ impl Perform for GridPerformer {
     fn csi_dispatch(&mut self, params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
         let params: Vec<u16> = params.iter().map(|p| p[0]).collect();
         let is_private_mode = intermediates.contains(&b'?');
+
+        // Debug: log private mode sequences (DECSET/DECRST)
+        if is_private_mode && (action == 'h' || action == 'l') {
+            tracing::debug!("CSI private mode: action={}, params={:?}", action, params);
+        }
 
         match action {
             'H' | 'f' => {
@@ -519,16 +608,52 @@ impl Perform for GridPerformer {
             // DECSET - Set private mode
             'h' if is_private_mode => {
                 for &param in &params {
-                    if param == 25 {
-                        self.cursor_visible = true; // Show cursor
+                    match param {
+                        25 => self.cursor_visible = true, // Show cursor
+                        // Alternate screen modes - all treated similarly
+                        // 1049: Save cursor + switch to alternate + clear (most common, used by vim, less, etc)
+                        // 1047: Switch to alternate screen
+                        // 47: Older alternate screen mode
+                        47 | 1047 | 1049 => self.enter_alternate_screen(),
+                        // Mouse tracking modes
+                        9 => {
+                            tracing::debug!("DECSET: X10 mouse mode enabled");
+                            self.mouse_mode.x10 = true;
+                        }
+                        1000 => {
+                            tracing::debug!("DECSET: Normal mouse mode (1000) enabled");
+                            self.mouse_mode.normal = true;
+                        }
+                        1002 => {
+                            tracing::debug!("DECSET: Button event mouse mode (1002) enabled");
+                            self.mouse_mode.button_event = true;
+                        }
+                        1003 => {
+                            tracing::debug!("DECSET: Any event mouse mode (1003) enabled");
+                            self.mouse_mode.any_event = true;
+                        }
+                        1006 => {
+                            tracing::debug!("DECSET: SGR extended mouse mode (1006) enabled");
+                            self.mouse_mode.sgr_ext = true;
+                        }
+                        _ => {}
                     }
                 }
             }
             // DECRST - Reset private mode
             'l' if is_private_mode => {
                 for &param in &params {
-                    if param == 25 {
-                        self.cursor_visible = false; // Hide cursor
+                    match param {
+                        25 => self.cursor_visible = false, // Hide cursor
+                        // Exit alternate screen - restore main screen
+                        47 | 1047 | 1049 => self.exit_alternate_screen(),
+                        // Mouse tracking modes - disable
+                        9 => self.mouse_mode.x10 = false,
+                        1000 => self.mouse_mode.normal = false,
+                        1002 => self.mouse_mode.button_event = false,
+                        1003 => self.mouse_mode.any_event = false,
+                        1006 => self.mouse_mode.sgr_ext = false,
+                        _ => {}
                     }
                 }
             }
@@ -564,6 +689,9 @@ impl Grid {
                 scrollback: RingBuffer::new(scrollback_size),
                 scrollback_size,
                 cursor_visible: true,
+                alternate_screen: false,
+                saved_screen: None,
+                mouse_mode: MouseMode::default(),
             },
             parser: Parser::new(),
             scroll_offset: 0,
@@ -581,6 +709,16 @@ impl Grid {
         self.performer.cursor_x = self.performer.cursor_x.min(cols.saturating_sub(1));
         self.performer.cursor_y = self.performer.cursor_y.min(rows.saturating_sub(1));
         self.scroll_offset = 0;
+
+        // Also resize the saved screen if we're in alternate mode
+        if let Some(ref mut saved) = self.performer.saved_screen {
+            saved.cells.resize(rows, vec![Cell::empty(); cols]);
+            for row in &mut saved.cells {
+                row.resize(cols, Cell::empty());
+            }
+            saved.cursor_x = saved.cursor_x.min(cols.saturating_sub(1));
+            saved.cursor_y = saved.cursor_y.min(rows.saturating_sub(1));
+        }
     }
 
     pub fn process(&mut self, data: &[u8]) {
@@ -613,6 +751,16 @@ impl Grid {
 
     pub fn scroll_offset(&self) -> usize {
         self.scroll_offset
+    }
+
+    /// Get the current mouse tracking mode enabled by the nested application
+    pub fn mouse_mode(&self) -> MouseMode {
+        self.performer.mouse_mode
+    }
+
+    /// Check if we're currently in alternate screen mode (e.g., running a TUI like vim, less, CC)
+    pub fn is_alternate_screen(&self) -> bool {
+        self.performer.alternate_screen
     }
 
     pub fn max_scroll_offset(&self) -> usize {

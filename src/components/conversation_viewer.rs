@@ -536,8 +536,8 @@ impl ConversationViewer {
                     None
                 }
             }
-            MouseEventKind::ScrollUp => Some(Action::ConversationScrollUp(3)),
-            MouseEventKind::ScrollDown => Some(Action::ConversationScrollDown(3)),
+            // Let scroll fall through to PtyRaw handler in input.rs
+            MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => None,
             _ => None,
         }
     }

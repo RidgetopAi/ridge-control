@@ -4,6 +4,8 @@
 
 pub mod grid;
 
+pub use grid::MouseMode;
+
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, RawFd};
 use std::process::Child;
