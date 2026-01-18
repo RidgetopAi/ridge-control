@@ -46,6 +46,8 @@ pub struct UiState {
 
     // Activity Stream visibility (SIRK/Forge)
     pub activity_stream_visible: bool,
+    // SIRK Panel visibility (Forge control)
+    pub sirk_panel_visible: bool,
 }
 
 impl UiState {
@@ -73,6 +75,7 @@ impl UiState {
             pane_layout: PaneLayout::new(),
             drag_state: DragState::default(),
             activity_stream_visible: false,
+            sirk_panel_visible: false,
         }
     }
 

@@ -235,6 +235,40 @@ impl App {
                 }
             }
 
+            // SIRK Panel actions (Forge control)
+            Action::SirkPanelShow => {
+                self.ui.sirk_panel_visible = true;
+            }
+            Action::SirkPanelHide => {
+                self.ui.sirk_panel_visible = false;
+            }
+            Action::SirkPanelToggle => {
+                self.ui.sirk_panel_visible = !self.ui.sirk_panel_visible;
+            }
+            Action::SirkStart => {
+                // Validate config before starting
+                if let Some(ref panel) = self.sirk_panel {
+                    match panel.validate_config() {
+                        Ok(()) => {
+                            let _config = panel.build_config();
+                            // TODO: FORGE-027 will implement ForgeController.spawn(config)
+                            self.ui.notification_manager.info("Forge run would start here (FORGE-027)");
+                        }
+                        Err(e) => {
+                            self.ui.notification_manager.error(format!("Invalid config: {}", e));
+                        }
+                    }
+                }
+            }
+            Action::SirkStop => {
+                // TODO: FORGE-027 will implement ForgeController.stop()
+                self.ui.notification_manager.info("Forge stop would happen here (FORGE-027)");
+            }
+            Action::SirkResume => {
+                // TODO: FORGE-030 will implement resume flow
+                self.ui.notification_manager.info("Forge resume would happen here (FORGE-030)");
+            }
+
             _ => unreachable!("non-streams/process action passed to dispatch_streams_process: {:?}", action),
         }
         Ok(())

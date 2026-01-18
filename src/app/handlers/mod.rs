@@ -79,6 +79,8 @@ impl App {
             | LogViewerFilterToggleInvert | LogViewerFilterClear
             | ActivityStreamShow | ActivityStreamHide | ActivityStreamToggle
             | ActivityStreamClear | ActivityStreamToggleAutoScroll
+            | SirkPanelShow | SirkPanelHide | SirkPanelToggle
+            | SirkStart | SirkStop | SirkResume
                 => self.dispatch_streams_process(action),
 
             // 4. Chat, LLM, threads, tools, conversation

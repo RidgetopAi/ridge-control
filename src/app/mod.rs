@@ -102,6 +102,8 @@ pub struct App {
     lsp_manager: Arc<RwLock<LspManager>>,
     // SIRK/Forge: ActivityStream for spindles visualization
     activity_stream: Option<ActivityStream>,
+    // SIRK/Forge: SirkPanel for Forge control
+    sirk_panel: Option<crate::sirk::SirkPanel>,
 }
 
 impl App {
@@ -303,6 +305,7 @@ impl App {
             mandrel_client,
             lsp_manager,
             activity_stream: None,
+            sirk_panel: Some(crate::sirk::SirkPanel::new()),
         })
     }
 

@@ -134,6 +134,20 @@ pub enum Action {
     /// Toggle auto-scroll mode
     ActivityStreamToggleAutoScroll,
 
+    // SIRK Panel actions (Forge control)
+    /// Show SIRK panel
+    SirkPanelShow,
+    /// Hide SIRK panel
+    SirkPanelHide,
+    /// Toggle SIRK panel visibility
+    SirkPanelToggle,
+    /// Start a Forge run
+    SirkStart,
+    /// Stop the current Forge run
+    SirkStop,
+    /// Resume a paused Forge run
+    SirkResume,
+
     // Process Monitor actions
     ProcessRefresh,
     ProcessSelectNext,
