@@ -214,8 +214,13 @@ impl ForgeController {
             let mut lines = reader.lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
-                // Skip empty lines
-                if line.trim().is_empty() {
+                let trimmed = line.trim();
+
+                // Skip empty lines and npm startup output (not JSON events)
+                if trimmed.is_empty()
+                    || trimmed.starts_with('>')  // npm script output like "> forge@0.1.0 start"
+                    || trimmed.starts_with("npm ")  // npm messages
+                {
                     continue;
                 }
 
@@ -229,9 +234,9 @@ impl ForgeController {
                             let _ = ext_tx.send(event);
                         }
                     }
-                    Err(e) => {
-                        // Log parse errors to stderr (not critical)
-                        eprintln!("[forge-controller] Failed to parse event: {} - line: {}", e, line);
+                    Err(_e) => {
+                        // Non-JSON output - silently ignore (could be debug output)
+                        // Don't use eprintln! as it bypasses the TUI
                     }
                 }
             }
