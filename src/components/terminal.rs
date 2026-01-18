@@ -69,6 +69,11 @@ impl TerminalWidget {
     /// Calculate view_offset - the same offset used by GridWidget::render()
     /// This handles cases where cursor is below the visible area (e.g., Claude Code running)
     fn calculate_view_offset(&self) -> usize {
+        // In alternate screen mode, nested TUI manages its own cursor - no offset needed
+        if self.grid.is_alternate_screen() {
+            return 0;
+        }
+
         let inner = match self.inner_area {
             Some(area) => area,
             None => return 0,
@@ -76,7 +81,7 @@ impl TerminalWidget {
         let area_height = inner.height as usize;
         let scroll_offset = self.grid.scroll_offset();
         let (_, cursor_y) = self.grid.cursor();
-        
+
         if scroll_offset == 0 && cursor_y >= area_height {
             cursor_y - area_height + 1
         } else {
@@ -308,7 +313,10 @@ impl<'a> Widget for GridWidget<'a> {
         let area_width = area.width as usize;
 
         // Calculate view offset to keep cursor visible when it's beyond the render area.
-        let view_offset = if scroll_offset == 0 && cursor_y >= area_height {
+        // In alternate screen mode, the nested TUI manages its own cursor - don't interfere.
+        let view_offset = if self.grid.is_alternate_screen() {
+            0
+        } else if scroll_offset == 0 && cursor_y >= area_height {
             cursor_y - area_height + 1
         } else {
             0
