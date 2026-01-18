@@ -80,6 +80,18 @@ impl ActivityStream {
         self.scroll_offset = 0;
     }
 
+    /// Push a text message to the activity stream (used for stderr output)
+    pub fn push_text(&mut self, content: String, timestamp: String) {
+        use crate::spindles::TextActivity;
+        let activity = ActivityMessage::Text(TextActivity {
+            content,
+            timestamp,
+            session: None,
+        });
+        let mut store = self.store.lock().unwrap();
+        store.push(activity);
+    }
+
     pub fn update_header(&mut self, run_name: Option<String>, instance: Option<(u32, u32)>) {
         self.header_run_name = run_name;
         self.header_instance = instance;

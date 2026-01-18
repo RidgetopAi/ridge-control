@@ -142,6 +142,12 @@ impl App {
                         e.run_name, e.last_instance_completed, e.total_instances
                     ));
                 }
+                ForgeEvent::StderrLine(e) => {
+                    // Push stderr output to activity stream for display
+                    if let Some(ref mut activity_stream) = self.activity_stream {
+                        activity_stream.push_text(e.line, e.timestamp);
+                    }
+                }
             }
         }
         self.mark_dirty();

@@ -56,6 +56,25 @@ pub enum ForgeEvent {
     Error(ErrorEvent),
     /// Resume prompt from Forge when resuming an interrupted run
     ResumePrompt(ResumePromptEvent),
+    /// Stderr output line from the Forge subprocess (not parsed as JSON)
+    StderrLine(StderrLineEvent),
+}
+
+#[derive(Debug, Clone)]
+pub struct StderrLineEvent {
+    pub line: String,
+    pub timestamp: String,
+}
+
+// Manual Deserialize impl for StderrLine since it's not sent as JSON from Forge
+impl<'de> serde::Deserialize<'de> for StderrLineEvent {
+    fn deserialize<D>(_deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        // This variant is created internally, not deserialized from JSON
+        Err(serde::de::Error::custom("StderrLineEvent is not deserializable from JSON"))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

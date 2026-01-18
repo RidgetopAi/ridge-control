@@ -14,7 +14,7 @@ use tokio::time::timeout;
 
 use tokio::process::ChildStdin;
 
-use super::types::{ForgeConfig, ForgeEvent, ForgeResumeResponse};
+use super::types::{ForgeConfig, ForgeEvent, ForgeResumeResponse, StderrLineEvent};
 
 /// Default timeout for graceful shutdown (seconds)
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
@@ -240,15 +240,28 @@ impl ForgeController {
             *state.lock().await = ForgeConnectionState::Disconnected;
         });
 
-        // Spawn stderr reader task (for logging)
+        // Spawn stderr reader task - sends stderr lines as events
         let last_error_clone = last_error.clone();
+        let stderr_tx = tx.clone();
+        let stderr_external_tx = self.event_tx.clone();
         tokio::spawn(async move {
             let reader = BufReader::new(stderr);
             let mut lines = reader.lines();
 
             while let Ok(Some(line)) = lines.next_line().await {
                 if !line.trim().is_empty() {
-                    eprintln!("[forge-stderr] {}", line);
+                    // Create timestamp for the stderr line
+                    let timestamp = chrono::Utc::now().to_rfc3339();
+                    let event = ForgeEvent::StderrLine(StderrLineEvent {
+                        line: line.clone(),
+                        timestamp,
+                    });
+                    // Send to internal channel
+                    let _ = stderr_tx.send(event.clone());
+                    // Send to external channel if configured
+                    if let Some(ref ext_tx) = stderr_external_tx {
+                        let _ = ext_tx.send(event);
+                    }
                     // Store last error line
                     *last_error_clone.lock().await = Some(line);
                 }

@@ -406,15 +406,15 @@ impl SirkPanel {
         match key.code {
             KeyCode::Enter => {
                 self.confirm_edit();
-                None
+                Some(Action::Noop)
             }
             KeyCode::Esc => {
                 self.cancel_edit();
-                None
+                Some(Action::Noop)
             }
             KeyCode::Backspace => {
                 buffer.pop();
-                None
+                Some(Action::Noop)
             }
             KeyCode::Char(c) => {
                 if *field == SirkField::InstanceCount {
@@ -424,9 +424,10 @@ impl SirkPanel {
                 } else {
                     buffer.push(c);
                 }
-                None
+                Some(Action::Noop)
             }
-            _ => None,
+            // Consume all other keys in editing mode to prevent fall-through
+            _ => Some(Action::Noop),
         }
     }
 

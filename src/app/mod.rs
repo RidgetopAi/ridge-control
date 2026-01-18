@@ -34,6 +34,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::action::{Action, ContextMenuTarget};
 use crate::cli::Cli;
 use crate::components::activity_stream::ActivityStream;
+use crate::spindles::new_shared_store;
 use crate::sirk::{ForgeController, ForgeEvent};
 use crate::components::config_panel::ConfigPanel;
 use crate::components::settings_editor::SettingsEditor;
@@ -317,7 +318,7 @@ impl App {
             show_settings_editor: false,
             mandrel_client,
             lsp_manager,
-            activity_stream: None,
+            activity_stream: Some(ActivityStream::new(new_shared_store(1000))),
             sirk_panel: Some(crate::sirk::SirkPanel::new()),
             forge_controller: ForgeController::new(),
             forge_event_rx: None,

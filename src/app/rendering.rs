@@ -40,6 +40,8 @@ impl App {
         let show_log_viewer = self.show_log_viewer;
         let show_config_panel = self.show_config_panel;
         let show_settings_editor = self.show_settings_editor;
+        let show_sirk_panel = self.ui.sirk_panel_visible;
+        let show_activity_stream = self.ui.activity_stream_visible;
         let selected_stream_idx = self.selected_stream_index;
         // Clone theme once - it's small (just color values)
         let theme = self.config_manager.theme().clone();
@@ -381,7 +383,51 @@ impl App {
                         &theme,
                     );
                 }
-                
+
+                // SIRK Panel overlay (Forge control) - centered modal dialog
+                if show_sirk_panel {
+                    if let Some(ref sirk_panel) = self.sirk_panel {
+                        // Calculate centered dialog size (50% width, fixed height for form)
+                        let dialog_width = (size.width * 50 / 100).clamp(45, 70);
+                        let dialog_height = 14u16; // Fixed height for form fields
+                        let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                        let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                        let sirk_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                        // Clear the area behind for readability
+                        frame.render_widget(ratatui::widgets::Clear, sirk_area);
+
+                        sirk_panel.render(
+                            frame,
+                            sirk_area,
+                            true, // Always focused when visible
+                            &theme,
+                        );
+                    }
+                }
+
+                // Activity Stream overlay (Forge real-time activity) - right side panel
+                if show_activity_stream {
+                    if let Some(ref activity_stream) = self.activity_stream {
+                        // Calculate right-side panel (40% width, full height minus status bar)
+                        let panel_width = (size.width * 40 / 100).clamp(40, 80);
+                        let panel_height = size.height.saturating_sub(2); // Leave room for status bar
+                        let panel_x = size.width.saturating_sub(panel_width);
+                        let panel_y = 1u16; // Below status bar
+                        let activity_area = Rect::new(panel_x, panel_y, panel_width, panel_height);
+
+                        // Clear the area behind for readability
+                        frame.render_widget(ratatui::widgets::Clear, activity_area);
+
+                        activity_stream.render(
+                            frame,
+                            activity_area,
+                            true, // Always focused when visible
+                            &theme,
+                        );
+                    }
+                }
+
                 if show_confirm {
                     self.ui.confirm_dialog.render(frame, size, &theme);
                 }

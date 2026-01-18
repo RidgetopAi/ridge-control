@@ -58,18 +58,46 @@ impl App {
         #[cfg(debug_assertions)]
         tracing::debug!("Key event: {:?}, mode: {:?}, focus: {:?}", key, self.ui.input_mode, self.ui.focus.current());
 
+        // Modal dialogs take highest priority (they change input mode)
         // T2.4: Ask user dialog takes priority when visible
         if self.ui.ask_user_dialog.is_visible() {
             return self.ui.ask_user_dialog.handle_event(&CrosstermEvent::Key(key));
         }
 
+        // Command palette and confirm dialog take priority over overlay panels
         match &self.ui.input_mode {
             InputMode::Confirm { .. } => {
-                self.ui.confirm_dialog.handle_event(&CrosstermEvent::Key(key))
+                return self.ui.confirm_dialog.handle_event(&CrosstermEvent::Key(key));
             }
             InputMode::CommandPalette => {
-                self.ui.command_palette.handle_event(&CrosstermEvent::Key(key))
+                return self.ui.command_palette.handle_event(&CrosstermEvent::Key(key));
             }
+            _ => {}
+        }
+
+        // SIRK Panel handles events when visible, but only if it recognizes the key
+        // (fall through for unhandled keys like Ctrl+C)
+        if self.ui.sirk_panel_visible {
+            if let Some(ref mut sirk_panel) = self.sirk_panel {
+                if let Some(action) = sirk_panel.handle_event(&CrosstermEvent::Key(key)) {
+                    return Some(action);
+                }
+                // Fall through for unhandled keys
+            }
+        }
+
+        // Activity Stream handles events when visible, but only if it recognizes the key
+        // (fall through for unhandled keys like Ctrl+C)
+        if self.ui.activity_stream_visible {
+            if let Some(ref mut activity_stream) = self.activity_stream {
+                if let Some(action) = activity_stream.handle_event(&CrosstermEvent::Key(key)) {
+                    return Some(action);
+                }
+                // Fall through for unhandled keys
+            }
+        }
+
+        match &self.ui.input_mode {
             InputMode::PtyRaw => {
                 // First check configurable keybindings
                 if let Some(action) = self.config_manager.keybindings().get_action(&self.ui.input_mode, &key) {
@@ -283,6 +311,10 @@ impl App {
                     self.ui.input_mode = InputMode::Normal;
                 }
                 None
+            }
+            // These are handled earlier in the function, but must be listed for exhaustiveness
+            InputMode::CommandPalette | InputMode::Confirm { .. } => {
+                unreachable!("CommandPalette and Confirm modes are handled earlier")
             }
         }
     }
