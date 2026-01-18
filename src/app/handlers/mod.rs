@@ -81,6 +81,7 @@ impl App {
             | ActivityStreamClear | ActivityStreamToggleAutoScroll
             | SirkPanelShow | SirkPanelHide | SirkPanelToggle
             | SirkStart | SirkStop | SirkResume
+            | SirkResumeConfirm | SirkResumeAbort
                 => self.dispatch_streams_process(action),
 
             // 4. Chat, LLM, threads, tools, conversation

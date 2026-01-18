@@ -113,6 +113,10 @@ pub struct App {
     forge_spawn_pending: Option<crate::sirk::ForgeConfig>,
     // SIRK/Forge: Pending stop request
     forge_stop_pending: bool,
+    // SIRK/Forge: Pending resume prompt from Forge (awaiting user decision)
+    forge_resume_pending: Option<crate::sirk::ResumePromptEvent>,
+    // SIRK/Forge: Pending resume response (true=resume, false=abort)
+    forge_resume_response_pending: Option<bool>,
 }
 
 impl App {
@@ -319,6 +323,8 @@ impl App {
             forge_event_rx: None,
             forge_spawn_pending: None,
             forge_stop_pending: false,
+            forge_resume_pending: None,
+            forge_resume_response_pending: None,
         })
     }
 

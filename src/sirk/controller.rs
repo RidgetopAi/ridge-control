@@ -12,7 +12,9 @@ use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, Mutex};
 use tokio::time::timeout;
 
-use super::types::{ForgeConfig, ForgeEvent};
+use tokio::process::ChildStdin;
+
+use super::types::{ForgeConfig, ForgeEvent, ForgeResumeResponse};
 
 /// Default timeout for graceful shutdown (seconds)
 const GRACEFUL_SHUTDOWN_TIMEOUT_SECS: u64 = 5;
@@ -47,6 +49,8 @@ pub struct ForgeController {
     last_error: Arc<Mutex<Option<String>>>,
     /// Current run configuration
     config: Option<ForgeConfig>,
+    /// Stdin handle for sending resume responses
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
 }
 
 impl ForgeController {
@@ -58,6 +62,7 @@ impl ForgeController {
             event_tx: None,
             last_error: Arc::new(Mutex::new(None)),
             config: None,
+            stdin: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -69,6 +74,7 @@ impl ForgeController {
             event_tx: Some(event_tx),
             last_error: Arc::new(Mutex::new(None)),
             config: None,
+            stdin: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -93,6 +99,35 @@ impl ForgeController {
     /// Get current configuration
     pub fn config(&self) -> Option<&ForgeConfig> {
         self.config.as_ref()
+    }
+
+    /// Send a resume response to Forge (used after receiving ResumePrompt event)
+    ///
+    /// The response tells Forge whether to continue the run or abort.
+    pub async fn send_resume_response(
+        &self,
+        response: ForgeResumeResponse,
+    ) -> Result<(), ForgeControllerError> {
+        let mut stdin_guard = self.stdin.lock().await;
+        if let Some(ref mut stdin) = *stdin_guard {
+            let json = serde_json::to_string(&response)
+                .map_err(|e| ForgeControllerError::ConfigSerializationFailed(e.to_string()))?;
+            stdin
+                .write_all(json.as_bytes())
+                .await
+                .map_err(|e| ForgeControllerError::StdinWriteFailed(e.to_string()))?;
+            stdin
+                .write_all(b"\n")
+                .await
+                .map_err(|e| ForgeControllerError::StdinWriteFailed(e.to_string()))?;
+            stdin
+                .flush()
+                .await
+                .map_err(|e| ForgeControllerError::StdinWriteFailed(e.to_string()))?;
+            Ok(())
+        } else {
+            Err(ForgeControllerError::StdinUnavailable)
+        }
     }
 
     /// Spawn the Forge subprocess with the given configuration
@@ -130,14 +165,22 @@ impl ForgeController {
             .spawn()
             .map_err(|e| ForgeControllerError::SpawnFailed(e.to_string()))?;
 
-        // Write config to stdin
+        // Write config to stdin (with newline to signal end of config JSON)
         if let Some(mut stdin) = child.stdin.take() {
             stdin
                 .write_all(config_json.as_bytes())
                 .await
                 .map_err(|e| ForgeControllerError::StdinWriteFailed(e.to_string()))?;
-            // Close stdin to signal end of config
-            drop(stdin);
+            stdin
+                .write_all(b"\n")
+                .await
+                .map_err(|e| ForgeControllerError::StdinWriteFailed(e.to_string()))?;
+            stdin
+                .flush()
+                .await
+                .map_err(|e| ForgeControllerError::StdinWriteFailed(e.to_string()))?;
+            // Keep stdin open for resume responses
+            *self.stdin.lock().await = Some(stdin);
         }
 
         // Create event channel
@@ -282,6 +325,7 @@ impl ForgeController {
         }
 
         self.config = None;
+        *self.stdin.lock().await = None;
         Ok(())
     }
 
@@ -296,6 +340,7 @@ impl ForgeController {
 
         *self.state.lock().await = ForgeConnectionState::Disconnected;
         self.config = None;
+        *self.stdin.lock().await = None;
         Ok(())
     }
 }
@@ -326,6 +371,9 @@ pub enum ForgeControllerError {
 
     #[error("Stderr pipe unavailable")]
     StderrUnavailable,
+
+    #[error("Stdin pipe unavailable for resume response")]
+    StdinUnavailable,
 
     #[error("Failed to wait for process: {0}")]
     WaitFailed(String),

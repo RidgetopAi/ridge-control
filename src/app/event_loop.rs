@@ -133,6 +133,15 @@ impl App {
                         self.ui.notification_manager.warning(format!("Forge warning: {}", e.message));
                     }
                 }
+                ForgeEvent::ResumePrompt(e) => {
+                    // Store the pending resume prompt for user decision
+                    self.forge_resume_pending = Some(e.clone());
+                    // Show notification to user
+                    self.ui.notification_manager.info(format!(
+                        "Resume available: {} ({}/{} completed) - Press 'r' to resume or 'a' to abort",
+                        e.run_name, e.last_instance_completed, e.total_instances
+                    ));
+                }
             }
         }
         self.mark_dirty();
@@ -169,6 +178,42 @@ impl App {
                     panel.run_paused();
                 }
                 self.ui.notification_manager.info("Forge run stopped");
+            }
+            self.mark_dirty();
+        }
+    }
+
+    /// Process pending Forge resume response (async)
+    async fn process_forge_resume_response(&mut self) {
+        if let Some(should_resume) = self.forge_resume_response_pending.take() {
+            // Clear the pending prompt since we're responding
+            self.forge_resume_pending = None;
+
+            let response = if should_resume {
+                crate::sirk::ForgeResumeResponse::resume()
+            } else {
+                crate::sirk::ForgeResumeResponse::abort()
+            };
+
+            match self.forge_controller.send_resume_response(response).await {
+                Ok(()) => {
+                    if should_resume {
+                        self.ui.notification_manager.success("Forge run resumed");
+                    } else {
+                        self.ui.notification_manager.info("Forge run aborted");
+                        // Stop the subprocess since user aborted
+                        if let Err(e) = self.forge_controller.stop().await {
+                            self.ui.notification_manager.error(format!("Failed to stop Forge: {}", e));
+                        }
+                        self.forge_event_rx = None;
+                        if let Some(ref mut panel) = self.sirk_panel {
+                            panel.run_paused();
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.ui.notification_manager.error(format!("Failed to send resume response: {}", e));
+                }
             }
             self.mark_dirty();
         }
@@ -326,9 +371,10 @@ impl App {
                 tool_forwarder_handles.push(handle);
             }
 
-            // Process pending Forge spawn/stop requests
+            // Process pending Forge spawn/stop/resume requests
             self.process_forge_spawn().await;
             self.process_forge_stop().await;
+            self.process_forge_resume_response().await;
 
             tokio::select! {
                 biased;  // Prioritize in order listed

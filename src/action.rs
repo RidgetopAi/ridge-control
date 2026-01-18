@@ -145,8 +145,12 @@ pub enum Action {
     SirkStart,
     /// Stop the current Forge run
     SirkStop,
-    /// Resume a paused Forge run
+    /// Resume a paused Forge run (with resume=true flag)
     SirkResume,
+    /// Confirm resume when prompted by Forge (sends resume response)
+    SirkResumeConfirm,
+    /// Abort resume when prompted by Forge (sends abort response)
+    SirkResumeAbort,
 
     // Process Monitor actions
     ProcessRefresh,

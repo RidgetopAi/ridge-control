@@ -107,6 +107,8 @@ impl CommandRegistry {
             Command::new("sirk_start", "Start Forge Run", "Start a Forge run with current config", Action::SirkStart),
             Command::new("sirk_stop", "Stop Forge Run", "Stop the running Forge subprocess", Action::SirkStop),
             Command::new("sirk_resume", "Resume Forge Run", "Resume a paused Forge run", Action::SirkResume),
+            Command::new("sirk_resume_confirm", "Confirm Resume", "Confirm Forge resume prompt (r)", Action::SirkResumeConfirm),
+            Command::new("sirk_resume_abort", "Abort Resume", "Abort Forge resume prompt (a)", Action::SirkResumeAbort),
             Command::new("sirk_panel_toggle", "Toggle SIRK Panel", "Show/hide the Forge control panel", Action::SirkPanelToggle),
             Command::new("sirk_panel_show", "Show SIRK Panel", "Show the Forge control panel", Action::SirkPanelShow),
             Command::new("sirk_panel_hide", "Hide SIRK Panel", "Hide the Forge control panel", Action::SirkPanelHide),

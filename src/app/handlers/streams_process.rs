@@ -267,8 +267,38 @@ impl App {
                 self.ui.notification_manager.info("Stopping Forge run...");
             }
             Action::SirkResume => {
-                // TODO: FORGE-030 will implement resume flow
-                self.ui.notification_manager.info("Forge resume would happen here (FORGE-030)");
+                // FORGE-030: Start a new run with resume=true to trigger state recovery
+                if let Some(ref panel) = self.sirk_panel {
+                    match panel.validate_config() {
+                        Ok(()) => {
+                            let mut config = panel.build_config();
+                            config.resume = true;
+                            self.forge_spawn_pending = Some(config);
+                            self.ui.notification_manager.info("Starting Forge run with resume...");
+                        }
+                        Err(e) => {
+                            self.ui.notification_manager.error(format!("Invalid config: {}", e));
+                        }
+                    }
+                }
+            }
+            Action::SirkResumeConfirm => {
+                // User confirmed resume - send response to Forge
+                if self.forge_resume_pending.is_some() {
+                    self.forge_resume_response_pending = Some(true);
+                    self.ui.notification_manager.info("Resuming Forge run...");
+                } else {
+                    self.ui.notification_manager.warning("No pending resume prompt");
+                }
+            }
+            Action::SirkResumeAbort => {
+                // User aborted resume - send response to Forge
+                if self.forge_resume_pending.is_some() {
+                    self.forge_resume_response_pending = Some(false);
+                    self.ui.notification_manager.info("Aborting Forge run...");
+                } else {
+                    self.ui.notification_manager.warning("No pending resume prompt");
+                }
             }
 
             _ => unreachable!("non-streams/process action passed to dispatch_streams_process: {:?}", action),
