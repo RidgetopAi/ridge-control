@@ -365,7 +365,16 @@ impl Default for KeybindingsConfig {
             "C-0".to_string(),
             ActionBinding { action: "pane_reset_layout".to_string(), args: vec![] },
         );
-        
+        // SIRK Panel and Activity Stream shortcuts
+        normal.bindings.insert(
+            "A-s".to_string(),
+            ActionBinding { action: "sirk_panel_toggle".to_string(), args: vec![] },
+        );
+        normal.bindings.insert(
+            "A-a".to_string(),
+            ActionBinding { action: "activity_stream_toggle".to_string(), args: vec![] },
+        );
+
         let mut pty_raw = ModeBindings::default();
         pty_raw.bindings.insert(
             "C-esc".to_string(),
@@ -387,6 +396,15 @@ impl Default for KeybindingsConfig {
         pty_raw.bindings.insert(
             "A-u".to_string(),
             ActionBinding { action: "scroll_page_up".to_string(), args: vec![] },
+        );
+        // SIRK Panel and Activity Stream shortcuts (also in PtyRaw mode)
+        pty_raw.bindings.insert(
+            "A-s".to_string(),
+            ActionBinding { action: "sirk_panel_toggle".to_string(), args: vec![] },
+        );
+        pty_raw.bindings.insert(
+            "A-a".to_string(),
+            ActionBinding { action: "activity_stream_toggle".to_string(), args: vec![] },
         );
 
         let mut command_palette = ModeBindings::default();
@@ -518,6 +536,13 @@ impl KeybindingsConfig {
             "pane_resize_left_grow" => Some(Action::PaneResizeLeftGrow),
             "pane_resize_left_shrink" => Some(Action::PaneResizeLeftShrink),
             "pane_reset_layout" => Some(Action::PaneResetLayout),
+            // SIRK Panel and Activity Stream actions
+            "sirk_panel_toggle" => Some(Action::SirkPanelToggle),
+            "sirk_panel_show" => Some(Action::SirkPanelShow),
+            "sirk_panel_hide" => Some(Action::SirkPanelHide),
+            "activity_stream_toggle" => Some(Action::ActivityStreamToggle),
+            "activity_stream_show" => Some(Action::ActivityStreamShow),
+            "activity_stream_hide" => Some(Action::ActivityStreamHide),
             _ => None,
         }
     }

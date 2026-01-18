@@ -384,29 +384,8 @@ impl App {
                     );
                 }
 
-                // SIRK Panel overlay (Forge control) - centered modal dialog
-                if show_sirk_panel {
-                    if let Some(ref sirk_panel) = self.sirk_panel {
-                        // Calculate centered dialog size (50% width, fixed height for form)
-                        let dialog_width = (size.width * 50 / 100).clamp(45, 70);
-                        let dialog_height = 14u16; // Fixed height for form fields
-                        let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
-                        let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
-                        let sirk_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
-
-                        // Clear the area behind for readability
-                        frame.render_widget(ratatui::widgets::Clear, sirk_area);
-
-                        sirk_panel.render(
-                            frame,
-                            sirk_area,
-                            true, // Always focused when visible
-                            &theme,
-                        );
-                    }
-                }
-
                 // Activity Stream overlay (Forge real-time activity) - right side panel
+                // Rendered BEFORE SIRK panel so SIRK is always on top
                 if show_activity_stream {
                     if let Some(ref activity_stream) = self.activity_stream {
                         // Calculate right-side panel (40% width, full height minus status bar)
@@ -422,6 +401,29 @@ impl App {
                         activity_stream.render(
                             frame,
                             activity_area,
+                            true, // Always focused when visible
+                            &theme,
+                        );
+                    }
+                }
+
+                // SIRK Panel overlay (Forge control) - centered modal dialog
+                // Rendered AFTER Activity Stream so it's always on top
+                if show_sirk_panel {
+                    if let Some(ref sirk_panel) = self.sirk_panel {
+                        // Calculate centered dialog size (50% width, fixed height for form)
+                        let dialog_width = (size.width * 50 / 100).clamp(45, 70);
+                        let dialog_height = 14u16; // Fixed height for form fields
+                        let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
+                        let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;
+                        let sirk_area = Rect::new(dialog_x, dialog_y, dialog_width, dialog_height);
+
+                        // Clear the area behind for readability
+                        frame.render_widget(ratatui::widgets::Clear, sirk_area);
+
+                        sirk_panel.render(
+                            frame,
+                            sirk_area,
                             true, // Always focused when visible
                             &theme,
                         );

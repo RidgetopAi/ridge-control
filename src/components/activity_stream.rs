@@ -163,7 +163,7 @@ impl ActivityStream {
 impl Component for ActivityStream {
     fn handle_event(&mut self, event: &Event) -> Option<Action> {
         match event {
-            Event::Key(KeyEvent { code, .. }) => match code {
+            Event::Key(KeyEvent { code, modifiers, .. }) => match code {
                 KeyCode::Up => {
                     self.scroll_up(1);
                     Some(Action::Noop)
@@ -189,7 +189,7 @@ impl Component for ActivityStream {
                     self.scroll_to_bottom();
                     Some(Action::Noop)
                 }
-                KeyCode::Char('a') => {
+                KeyCode::Char('a') if modifiers.is_empty() => {
                     self.toggle_auto_scroll();
                     Some(Action::Noop)
                 }
