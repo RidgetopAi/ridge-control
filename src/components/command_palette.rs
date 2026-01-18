@@ -103,6 +103,18 @@ impl CommandRegistry {
             Command::new("tab_3", "Tab 3", "Switch to tab 3 (F3)", Action::TabSelect(2)),
             Command::new("tab_4", "Tab 4", "Switch to tab 4 (F4)", Action::TabSelect(3)),
             Command::new("tab_5", "Tab 5", "Switch to tab 5 (F5)", Action::TabSelect(4)),
+            // SIRK/Forge commands (Phase 3 - Forge integration)
+            Command::new("sirk_start", "Start Forge Run", "Start a Forge run with current config", Action::SirkStart),
+            Command::new("sirk_stop", "Stop Forge Run", "Stop the running Forge subprocess", Action::SirkStop),
+            Command::new("sirk_resume", "Resume Forge Run", "Resume a paused Forge run", Action::SirkResume),
+            Command::new("sirk_panel_toggle", "Toggle SIRK Panel", "Show/hide the Forge control panel", Action::SirkPanelToggle),
+            Command::new("sirk_panel_show", "Show SIRK Panel", "Show the Forge control panel", Action::SirkPanelShow),
+            Command::new("sirk_panel_hide", "Hide SIRK Panel", "Hide the Forge control panel", Action::SirkPanelHide),
+            Command::new("activity_stream_toggle", "Toggle Activity Stream", "Show/hide the Forge activity stream", Action::ActivityStreamToggle),
+            Command::new("activity_stream_show", "Show Activity Stream", "Show the Forge activity stream", Action::ActivityStreamShow),
+            Command::new("activity_stream_hide", "Hide Activity Stream", "Hide the Forge activity stream", Action::ActivityStreamHide),
+            Command::new("activity_stream_clear", "Clear Activity Stream", "Clear all activities from the stream", Action::ActivityStreamClear),
+            Command::new("activity_stream_scroll_toggle", "Toggle Activity Auto-scroll", "Toggle auto-scroll in activity stream", Action::ActivityStreamToggleAutoScroll),
         ]
     }
 
