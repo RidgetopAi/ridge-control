@@ -13,6 +13,7 @@ use crate::error::Result;
 use crate::event::PtyEvent;
 use crate::input::mode::InputMode;
 use crate::llm::{ToolError, ToolResult, ToolResultContent};
+use crate::sirk::ForgeEvent;
 use crate::tabs::TabId;
 
 impl App {
@@ -85,6 +86,92 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    /// Handle a ForgeEvent from the Forge subprocess
+    fn handle_forge_event(&mut self, event: ForgeEvent) {
+        if let Some(ref mut panel) = self.sirk_panel {
+            match event {
+                ForgeEvent::RunStarted(e) => {
+                    panel.run_started(e.total_instances);
+                    self.ui.notification_manager.info(format!(
+                        "Forge run '{}' started ({} instances)",
+                        e.run_name, e.total_instances
+                    ));
+                }
+                ForgeEvent::InstanceStarted(e) => {
+                    panel.instance_started(e.instance_number);
+                }
+                ForgeEvent::InstanceCompleted(e) => {
+                    panel.instance_completed(e.success);
+                    if !e.success {
+                        self.ui.notification_manager.warning(format!(
+                            "Instance {} completed with failure",
+                            e.instance_number
+                        ));
+                    }
+                }
+                ForgeEvent::InstanceFailed(e) => {
+                    panel.instance_completed(false);
+                    self.ui.notification_manager.error(format!(
+                        "Instance {} failed: {}",
+                        e.instance_number, e.error
+                    ));
+                }
+                ForgeEvent::RunCompleted(e) => {
+                    panel.run_completed();
+                    self.ui.notification_manager.success(format!(
+                        "Forge run '{}' completed: {} succeeded, {} failed",
+                        e.run_name, e.success_count, e.fail_count
+                    ));
+                }
+                ForgeEvent::Error(e) => {
+                    if e.fatal {
+                        panel.run_failed(e.message.clone());
+                        self.ui.notification_manager.error(format!("Forge fatal error: {}", e.message));
+                    } else {
+                        self.ui.notification_manager.warning(format!("Forge warning: {}", e.message));
+                    }
+                }
+            }
+        }
+        self.mark_dirty();
+    }
+
+    /// Process pending Forge spawn request (async)
+    async fn process_forge_spawn(&mut self) {
+        if let Some(config) = self.forge_spawn_pending.take() {
+            match self.forge_controller.spawn(config).await {
+                Ok(rx) => {
+                    self.forge_event_rx = Some(rx);
+                    // Panel state is updated via events from Forge
+                }
+                Err(e) => {
+                    self.ui.notification_manager.error(format!("Failed to start Forge: {}", e));
+                    if let Some(ref mut panel) = self.sirk_panel {
+                        panel.run_failed(e.to_string());
+                    }
+                }
+            }
+            self.mark_dirty();
+        }
+    }
+
+    /// Process pending Forge stop request (async)
+    async fn process_forge_stop(&mut self) {
+        if self.forge_stop_pending {
+            self.forge_stop_pending = false;
+            if let Err(e) = self.forge_controller.stop().await {
+                self.ui.notification_manager.error(format!("Failed to stop Forge: {}", e));
+            } else {
+                self.forge_event_rx = None;
+                if let Some(ref mut panel) = self.sirk_panel {
+                    panel.run_paused();
+                }
+                self.ui.notification_manager.info("Forge run stopped");
+            }
+            self.mark_dirty();
+        }
     }
 
     /// Handle config change event
@@ -239,6 +326,10 @@ impl App {
                 tool_forwarder_handles.push(handle);
             }
 
+            // Process pending Forge spawn/stop requests
+            self.process_forge_spawn().await;
+            self.process_forge_stop().await;
+
             tokio::select! {
                 biased;  // Prioritize in order listed
 
@@ -343,7 +434,28 @@ impl App {
                     self.handle_config_event(config_event)?;
                 }
 
-                // 8. Tick timer
+                // 8. Forge events (SIRK subprocess)
+                Some(forge_event) = async {
+                    if let Some(ref mut rx) = self.forge_event_rx {
+                        rx.recv().await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    // Collect all buffered events first
+                    let mut events = vec![forge_event];
+                    if let Some(ref mut rx) = self.forge_event_rx {
+                        while let Ok(ev) = rx.try_recv() {
+                            events.push(ev);
+                        }
+                    }
+                    // Then process them
+                    for ev in events {
+                        self.handle_forge_event(ev);
+                    }
+                }
+
+                // 9. Tick timer
                 _ = tokio::time::sleep(tick_duration) => {
                     self.dispatch(Action::Tick)?;
                     self.last_tick = Instant::now();

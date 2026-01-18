@@ -34,6 +34,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::action::{Action, ContextMenuTarget};
 use crate::cli::Cli;
 use crate::components::activity_stream::ActivityStream;
+use crate::sirk::{ForgeController, ForgeEvent};
 use crate::components::config_panel::ConfigPanel;
 use crate::components::settings_editor::SettingsEditor;
 use crate::components::context_menu::ContextMenuItem;
@@ -104,6 +105,14 @@ pub struct App {
     activity_stream: Option<ActivityStream>,
     // SIRK/Forge: SirkPanel for Forge control
     sirk_panel: Option<crate::sirk::SirkPanel>,
+    // SIRK/Forge: ForgeController for subprocess management
+    forge_controller: ForgeController,
+    // SIRK/Forge: Event receiver for ForgeEvents from subprocess
+    forge_event_rx: Option<mpsc::UnboundedReceiver<ForgeEvent>>,
+    // SIRK/Forge: Pending spawn request (set by sync handler, processed by async event loop)
+    forge_spawn_pending: Option<crate::sirk::ForgeConfig>,
+    // SIRK/Forge: Pending stop request
+    forge_stop_pending: bool,
 }
 
 impl App {
@@ -306,6 +315,10 @@ impl App {
             lsp_manager,
             activity_stream: None,
             sirk_panel: Some(crate::sirk::SirkPanel::new()),
+            forge_controller: ForgeController::new(),
+            forge_event_rx: None,
+            forge_spawn_pending: None,
+            forge_stop_pending: false,
         })
     }
 

@@ -250,9 +250,10 @@ impl App {
                 if let Some(ref panel) = self.sirk_panel {
                     match panel.validate_config() {
                         Ok(()) => {
-                            let _config = panel.build_config();
-                            // TODO: FORGE-027 will implement ForgeController.spawn(config)
-                            self.ui.notification_manager.info("Forge run would start here (FORGE-027)");
+                            let config = panel.build_config();
+                            // Set pending spawn request - processed in async event loop
+                            self.forge_spawn_pending = Some(config);
+                            self.ui.notification_manager.info("Starting Forge run...");
                         }
                         Err(e) => {
                             self.ui.notification_manager.error(format!("Invalid config: {}", e));
@@ -261,8 +262,9 @@ impl App {
                 }
             }
             Action::SirkStop => {
-                // TODO: FORGE-027 will implement ForgeController.stop()
-                self.ui.notification_manager.info("Forge stop would happen here (FORGE-027)");
+                // Set pending stop request - processed in async event loop
+                self.forge_stop_pending = true;
+                self.ui.notification_manager.info("Stopping Forge run...");
             }
             Action::SirkResume => {
                 // TODO: FORGE-030 will implement resume flow
