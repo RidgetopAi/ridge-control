@@ -77,6 +77,8 @@ impl App {
             | LogViewerFilterApply | LogViewerFilterPattern(_)
             | LogViewerFilterToggleCase | LogViewerFilterToggleRegex
             | LogViewerFilterToggleInvert | LogViewerFilterClear
+            | ActivityStreamShow | ActivityStreamHide | ActivityStreamToggle
+            | ActivityStreamClear | ActivityStreamToggleAutoScroll
                 => self.dispatch_streams_process(action),
 
             // 4. Chat, LLM, threads, tools, conversation

@@ -10,6 +10,8 @@ mod input;
 mod llm;
 mod lsp;
 mod pty;
+mod sirk;
+mod spindles;
 mod streams;
 mod tabs;
 mod util;

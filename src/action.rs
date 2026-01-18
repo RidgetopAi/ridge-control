@@ -122,6 +122,18 @@ pub enum Action {
     StreamViewerScrollToTop,
     StreamViewerScrollToBottom,
 
+    // Activity Stream actions (SIRK/Forge)
+    /// Show activity stream panel
+    ActivityStreamShow,
+    /// Hide activity stream panel
+    ActivityStreamHide,
+    /// Toggle activity stream visibility
+    ActivityStreamToggle,
+    /// Clear all activities from the stream
+    ActivityStreamClear,
+    /// Toggle auto-scroll mode
+    ActivityStreamToggleAutoScroll,
+
     // Process Monitor actions
     ProcessRefresh,
     ProcessSelectNext,

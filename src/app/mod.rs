@@ -33,6 +33,7 @@ use tokio::sync::{mpsc, RwLock};
 
 use crate::action::{Action, ContextMenuTarget};
 use crate::cli::Cli;
+use crate::components::activity_stream::ActivityStream;
 use crate::components::config_panel::ConfigPanel;
 use crate::components::settings_editor::SettingsEditor;
 use crate::components::context_menu::ContextMenuItem;
@@ -99,6 +100,8 @@ pub struct App {
     mandrel_client: Arc<RwLock<MandrelClient>>,
     // P3-T3.1: LspManager for semantic code navigation (shared service)
     lsp_manager: Arc<RwLock<LspManager>>,
+    // SIRK/Forge: ActivityStream for spindles visualization
+    activity_stream: Option<ActivityStream>,
 }
 
 impl App {
@@ -299,6 +302,7 @@ impl App {
             show_settings_editor: false,
             mandrel_client,
             lsp_manager,
+            activity_stream: None,
         })
     }
 

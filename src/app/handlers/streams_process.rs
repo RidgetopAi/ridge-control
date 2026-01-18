@@ -214,6 +214,27 @@ impl App {
                 // TODO: Implement filter in LogViewer
             }
 
+            // Activity Stream actions (SIRK/Forge)
+            Action::ActivityStreamShow => {
+                self.ui.activity_stream_visible = true;
+            }
+            Action::ActivityStreamHide => {
+                self.ui.activity_stream_visible = false;
+            }
+            Action::ActivityStreamToggle => {
+                self.ui.activity_stream_visible = !self.ui.activity_stream_visible;
+            }
+            Action::ActivityStreamClear => {
+                if let Some(ref mut stream) = self.activity_stream {
+                    stream.clear();
+                }
+            }
+            Action::ActivityStreamToggleAutoScroll => {
+                if let Some(ref mut stream) = self.activity_stream {
+                    stream.toggle_auto_scroll();
+                }
+            }
+
             _ => unreachable!("non-streams/process action passed to dispatch_streams_process: {:?}", action),
         }
         Ok(())

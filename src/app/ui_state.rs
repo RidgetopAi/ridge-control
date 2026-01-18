@@ -43,6 +43,9 @@ pub struct UiState {
     pub content_area: Rect,
     pub pane_layout: PaneLayout,
     pub drag_state: DragState,
+
+    // Activity Stream visibility (SIRK/Forge)
+    pub activity_stream_visible: bool,
 }
 
 impl UiState {
@@ -69,6 +72,7 @@ impl UiState {
             content_area: Rect::default(),
             pane_layout: PaneLayout::new(),
             drag_state: DragState::default(),
+            activity_stream_visible: false,
         }
     }
 
