@@ -189,6 +189,16 @@ impl App {
         }
     }
 
+    /// Process pending Forge reset request (async)
+    async fn process_forge_reset(&mut self) {
+        if self.forge_reset_pending {
+            self.forge_reset_pending = false;
+            self.forge_controller.reset().await;
+            self.forge_event_rx = None;
+            self.mark_dirty();
+        }
+    }
+
     /// Process pending Forge resume response (async)
     async fn process_forge_resume_response(&mut self) {
         if let Some(should_resume) = self.forge_resume_response_pending.take() {
@@ -377,9 +387,10 @@ impl App {
                 tool_forwarder_handles.push(handle);
             }
 
-            // Process pending Forge spawn/stop/resume requests
+            // Process pending Forge spawn/stop/reset/resume requests
             self.process_forge_spawn().await;
             self.process_forge_stop().await;
+            self.process_forge_reset().await;
             self.process_forge_resume_response().await;
 
             tokio::select! {

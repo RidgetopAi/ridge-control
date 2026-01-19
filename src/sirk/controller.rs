@@ -96,6 +96,15 @@ impl ForgeController {
         self.last_error.lock().await.clone()
     }
 
+    /// Reset the controller to initial state (for starting a fresh run)
+    pub async fn reset(&mut self) {
+        *self.state.lock().await = ForgeConnectionState::Disconnected;
+        *self.last_error.lock().await = None;
+        self.config = None;
+        self.child = None;
+        *self.stdin.lock().await = None;
+    }
+
     /// Get current configuration
     pub fn config(&self) -> Option<&ForgeConfig> {
         self.config.as_ref()

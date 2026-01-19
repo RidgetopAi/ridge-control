@@ -301,11 +301,13 @@ impl App {
                 }
             }
             Action::SirkReset => {
-                // Reset SIRK panel to idle state - handled by panel.update()
+                // Reset SIRK panel and controller to idle state
                 if let Some(ref mut panel) = self.sirk_panel {
                     panel.reset();
-                    self.ui.notification_manager.info("SIRK panel reset");
                 }
+                // Set pending reset for controller (processed async in event loop)
+                self.forge_reset_pending = true;
+                self.ui.notification_manager.info("SIRK panel reset");
             }
 
             _ => unreachable!("non-streams/process action passed to dispatch_streams_process: {:?}", action),
