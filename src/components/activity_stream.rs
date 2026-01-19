@@ -97,7 +97,11 @@ impl ActivityStream {
         self.header_instance = instance;
     }
 
-    fn render_activity<'a>(activity: &'a ActivityMessage, theme: &'a Theme) -> Vec<Line<'a>> {
+    fn render_activity<'a>(
+        activity: &'a ActivityMessage,
+        theme: &'a Theme,
+        tool_name_lookup: Option<&str>,
+    ) -> Vec<Line<'a>> {
         let icon = activity.icon();
         let timestamp = activity.timestamp();
         let time_short = if timestamp.len() > 10 {
@@ -124,8 +128,6 @@ impl ActivityStream {
                     Span::styled(format!("[{}] ", time_short), time_style),
                     Span::raw(format!("{} ", icon)),
                     Span::styled(tc.tool_name.clone(), Style::default().fg(theme.colors.accent.to_color()).add_modifier(Modifier::BOLD)),
-                    Span::raw(" "),
-                    Span::styled(tc.tool_id.clone(), Style::default().fg(theme.colors.muted.to_color())),
                 ])]
             }
             ActivityMessage::ToolResult(tr) => {
@@ -135,10 +137,24 @@ impl ActivityStream {
                     Style::default().fg(theme.colors.success.to_color())
                 };
                 let status = if tr.is_error { "failed" } else { "succeeded" };
+                // Use looked-up tool name if available, otherwise show truncated ID
+                let display_name = tool_name_lookup
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| {
+                        // Show last 8 chars of tool_id as fallback
+                        let id = &tr.tool_id;
+                        if id.len() > 12 {
+                            format!("...{}", &id[id.len()-8..])
+                        } else {
+                            id.clone()
+                        }
+                    });
                 vec![Line::from(vec![
                     Span::styled(format!("[{}] ", time_short), time_style),
                     Span::raw(format!("{} ", icon)),
-                    Span::styled(format!("{} {}", &tr.tool_id, status), result_style),
+                    Span::styled(display_name, Style::default().fg(theme.colors.accent.to_color()).add_modifier(Modifier::BOLD)),
+                    Span::raw(" "),
+                    Span::styled(status.to_string(), result_style),
                 ])]
             }
             ActivityMessage::Text(t) => {
@@ -225,7 +241,40 @@ impl Component for ActivityStream {
             Style::default().fg(theme.focus.unfocused_border.to_color())
         };
 
-        let header_text = match (&self.header_run_name, self.header_instance) {
+        // Collect all data from store under lock, then release
+        let (instance_info, activities_with_names): (Option<(u32, u32)>, Vec<(ActivityMessage, Option<String>)>) = {
+            let store = self.store.lock().unwrap();
+
+            // Get current instance info from store (updated from incoming activities)
+            let instance_info = store.current_instance();
+
+            let activities = store.get_visible(self.scroll_offset, area.height.saturating_sub(2) as usize);
+
+            // Clone activities and look up tool names while we have the lock
+            let activities_with_names: Vec<(ActivityMessage, Option<String>)> = activities
+                .into_iter()
+                .map(|activity| {
+                    let tool_name = if let ActivityMessage::ToolResult(tr) = activity {
+                        store.get_tool_name(&tr.tool_id).map(|s| s.to_string())
+                    } else {
+                        None
+                    };
+                    (activity.clone(), tool_name)
+                })
+                .collect();
+
+            (instance_info, activities_with_names)
+        }; // store lock released here
+
+        // Now render without holding the lock
+        let lines: Vec<Line> = activities_with_names
+            .iter()
+            .flat_map(|(activity, tool_name)| {
+                Self::render_activity(activity, theme, tool_name.as_deref())
+            })
+            .collect();
+
+        let header_text = match (&self.header_run_name, self.header_instance.or(instance_info)) {
             (Some(name), Some((current, total))) => {
                 format!(" Activity Stream - {} | Instance {}/{} ", name, current, total)
             }
@@ -235,9 +284,15 @@ impl Component for ActivityStream {
 
         let auto_scroll_indicator = if self.auto_scroll { "▼" } else { "○" };
 
+        // Build bottom title with run indicator
+        let bottom_title = match instance_info {
+            Some((current, total)) => format!(" Run: {}/{} │ {} Auto-scroll ", current, total, auto_scroll_indicator),
+            None => format!(" {} Auto-scroll ", auto_scroll_indicator),
+        };
+
         let block = Block::default()
             .title(header_text)
-            .title_bottom(format!(" {} Auto-scroll ", auto_scroll_indicator))
+            .title_bottom(bottom_title)
             .borders(Borders::ALL)
             .border_style(border_style);
 
@@ -246,14 +301,6 @@ impl Component for ActivityStream {
 
         if inner.height == 0 {
             return;
-        }
-
-        let store = self.store.lock().unwrap();
-        let activities = store.get_visible(self.scroll_offset, inner.height as usize);
-
-        let mut lines: Vec<Line> = Vec::new();
-        for activity in activities {
-            lines.extend(Self::render_activity(activity, theme));
         }
 
         let paragraph = Paragraph::new(lines).wrap(Wrap { trim: false });

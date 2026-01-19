@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
 use super::types::ActivityMessage;
@@ -7,6 +7,10 @@ pub struct ActivityStore {
     activities: VecDeque<ActivityMessage>,
     capacity: usize,
     run_filter: Option<String>,
+    /// Maps tool_id -> tool_name for looking up names in ToolResults
+    tool_names: HashMap<String, String>,
+    /// Current run instance info (instance_number, total_instances)
+    current_instance: Option<(u32, u32)>,
 }
 
 impl ActivityStore {
@@ -15,6 +19,8 @@ impl ActivityStore {
             activities: VecDeque::with_capacity(capacity),
             capacity,
             run_filter: None,
+            tool_names: HashMap::new(),
+            current_instance: None,
         }
     }
 
@@ -23,10 +29,30 @@ impl ActivityStore {
     }
 
     pub fn push(&mut self, activity: ActivityMessage) {
+        // Track tool_id -> tool_name mapping from ToolCalls
+        if let ActivityMessage::ToolCall(tc) = &activity {
+            self.tool_names.insert(tc.tool_id.clone(), tc.tool_name.clone());
+        }
+
+        // Update current instance info from session
+        if let Some(session) = activity.session() {
+            self.current_instance = Some((session.instance_number, session.total_instances));
+        }
+
         if self.activities.len() >= self.capacity {
             self.activities.pop_front();
         }
         self.activities.push_back(activity);
+    }
+
+    /// Look up tool name by tool_id (for ToolResults)
+    pub fn get_tool_name(&self, tool_id: &str) -> Option<&str> {
+        self.tool_names.get(tool_id).map(|s| s.as_str())
+    }
+
+    /// Get current run instance info
+    pub fn current_instance(&self) -> Option<(u32, u32)> {
+        self.current_instance
     }
 
     pub fn get_visible(&self, offset: usize, count: usize) -> Vec<&ActivityMessage> {
@@ -65,6 +91,8 @@ impl ActivityStore {
 
     pub fn clear(&mut self) {
         self.activities.clear();
+        self.tool_names.clear();
+        self.current_instance = None;
     }
 
     pub fn set_run_filter(&mut self, run_name: Option<String>) {
