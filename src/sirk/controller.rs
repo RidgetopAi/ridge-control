@@ -164,13 +164,30 @@ impl ForgeController {
             .map_err(|e| ForgeControllerError::ConfigSerializationFailed(e.to_string()))?;
 
         // Spawn forge using npm start
-        let mut child = Command::new("npm")
-            .arg("start")
+        // Create as process group leader so we can kill all children on stop
+        let mut cmd = Command::new("npm");
+        cmd.arg("start")
             .current_dir(&forge_path)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+
+        // Set up process group on Unix
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // SAFETY: setpgid is async-signal-safe
+            unsafe {
+                cmd.pre_exec(|| {
+                    // Create new process group with this process as leader
+                    libc::setpgid(0, 0);
+                    Ok(())
+                });
+            }
+        }
+
+        let mut child = cmd
             .spawn()
             .map_err(|e| ForgeControllerError::SpawnFailed(e.to_string()))?;
 
@@ -303,12 +320,14 @@ impl ForgeController {
         let pid = child.id();
 
         if let Some(pid) = pid {
-            // Send SIGTERM for graceful shutdown
+            // Send SIGTERM to entire process group for graceful shutdown
+            // Using negative PID kills all processes in the group
             #[cfg(unix)]
             {
                 use libc::{kill, SIGTERM};
                 unsafe {
-                    kill(pid as i32, SIGTERM);
+                    // Negative PID = kill process group
+                    kill(-(pid as i32), SIGTERM);
                 }
             }
 
@@ -332,12 +351,13 @@ impl ForgeController {
                     return Err(ForgeControllerError::WaitFailed(e.to_string()));
                 }
                 Err(_) => {
-                    // Timeout - send SIGKILL
+                    // Timeout - send SIGKILL to entire process group
                     #[cfg(unix)]
                     {
                         use libc::{kill, SIGKILL};
                         unsafe {
-                            kill(pid as i32, SIGKILL);
+                            // Negative PID = kill process group
+                            kill(-(pid as i32), SIGKILL);
                         }
                     }
 
@@ -358,11 +378,18 @@ impl ForgeController {
 
     /// Kill the Forge subprocess immediately (SIGKILL)
     pub async fn kill(&mut self) -> Result<(), ForgeControllerError> {
-        if let Some(mut child) = self.child.take() {
-            child
-                .kill()
-                .await
-                .map_err(|e| ForgeControllerError::KillFailed(e.to_string()))?;
+        if let Some(child) = self.child.take() {
+            // Kill entire process group
+            if let Some(pid) = child.id() {
+                #[cfg(unix)]
+                {
+                    use libc::{kill, SIGKILL};
+                    unsafe {
+                        // Negative PID = kill process group
+                        kill(-(pid as i32), SIGKILL);
+                    }
+                }
+            }
         }
 
         *self.state.lock().await = ForgeConnectionState::Disconnected;
