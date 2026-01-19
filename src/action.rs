@@ -151,6 +151,8 @@ pub enum Action {
     SirkResumeConfirm,
     /// Abort resume when prompted by Forge (sends abort response)
     SirkResumeAbort,
+    /// Reset SIRK panel to idle state for a new run
+    SirkReset,
 
     // Process Monitor actions
     ProcessRefresh,

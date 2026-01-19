@@ -300,6 +300,13 @@ impl App {
                     self.ui.notification_manager.warning("No pending resume prompt");
                 }
             }
+            Action::SirkReset => {
+                // Reset SIRK panel to idle state - handled by panel.update()
+                if let Some(ref mut panel) = self.sirk_panel {
+                    panel.reset();
+                    self.ui.notification_manager.info("SIRK panel reset");
+                }
+            }
 
             _ => unreachable!("non-streams/process action passed to dispatch_streams_process: {:?}", action),
         }

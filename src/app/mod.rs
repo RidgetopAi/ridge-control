@@ -34,7 +34,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::action::{Action, ContextMenuTarget};
 use crate::cli::Cli;
 use crate::components::activity_stream::ActivityStream;
-use crate::spindles::new_shared_store;
+use crate::spindles::{new_shared_store, SharedActivityStore, SpindlesStream};
 use crate::sirk::{ForgeController, ForgeEvent};
 use crate::components::config_panel::ConfigPanel;
 use crate::components::settings_editor::SettingsEditor;
@@ -102,8 +102,12 @@ pub struct App {
     mandrel_client: Arc<RwLock<MandrelClient>>,
     // P3-T3.1: LspManager for semantic code navigation (shared service)
     lsp_manager: Arc<RwLock<LspManager>>,
+    // SIRK/Forge: Shared activity store for spindles
+    activity_store: SharedActivityStore,
     // SIRK/Forge: ActivityStream for spindles visualization
     activity_stream: Option<ActivityStream>,
+    // SIRK/Forge: SpindlesStream for WebSocket connection to spindles-proxy
+    spindles_stream: SpindlesStream,
     // SIRK/Forge: SirkPanel for Forge control
     sirk_panel: Option<crate::sirk::SirkPanel>,
     // SIRK/Forge: ForgeController for subprocess management
@@ -188,6 +192,12 @@ impl App {
         } else {
             tracing::info!("LSP integration disabled");
         }
+
+        // SIRK/Forge: Initialize spindles streaming for activity visualization
+        let activity_store = new_shared_store(1000);
+        let mut spindles_stream = SpindlesStream::new(activity_store.clone());
+        spindles_stream.connect();
+        tracing::info!("Spindles stream connecting to ws://localhost:8083/spindles");
 
         // Set up config watcher if enabled
         let config_watcher = if config_manager.app_config().general.watch_config {
@@ -318,7 +328,9 @@ impl App {
             show_settings_editor: false,
             mandrel_client,
             lsp_manager,
-            activity_stream: Some(ActivityStream::new(new_shared_store(1000))),
+            activity_store: activity_store.clone(),
+            activity_stream: Some(ActivityStream::new(activity_store.clone())),
+            spindles_stream,
             sirk_panel: Some(crate::sirk::SirkPanel::new()),
             forge_controller: ForgeController::new(),
             forge_event_rx: None,

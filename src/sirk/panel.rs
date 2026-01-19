@@ -115,16 +115,18 @@ pub enum SirkButton {
     Start,
     Stop,
     Resume,
+    Reset,
 }
 
 impl SirkButton {
-    pub const ALL: &'static [SirkButton] = &[SirkButton::Start, SirkButton::Stop, SirkButton::Resume];
+    pub const ALL: &'static [SirkButton] = &[SirkButton::Start, SirkButton::Stop, SirkButton::Resume, SirkButton::Reset];
 
     pub fn label(&self) -> &'static str {
         match self {
             SirkButton::Start => "[Start]",
             SirkButton::Stop => "[Stop]",
             SirkButton::Resume => "[Resume]",
+            SirkButton::Reset => "[Reset]",
         }
     }
 
@@ -135,6 +137,8 @@ impl SirkButton {
             (SirkButton::Start, RunStatus::Failed) => true,
             (SirkButton::Stop, RunStatus::Running) => true,
             (SirkButton::Resume, RunStatus::Paused) => true,
+            (SirkButton::Reset, RunStatus::Completed) => true,
+            (SirkButton::Reset, RunStatus::Failed) => true,
             _ => false,
         }
     }
@@ -270,6 +274,18 @@ impl SirkPanel {
         self.status = RunStatus::Paused;
     }
 
+    /// Reset the panel to idle state for a new run
+    pub fn reset(&mut self) {
+        self.status = RunStatus::Idle;
+        self.current_instance = 0;
+        self.total_instances = 0;
+        self.success_count = 0;
+        self.fail_count = 0;
+        self.run_start = None;
+        self.instance_start = None;
+        self.last_error = None;
+    }
+
     pub fn build_config(&self) -> ForgeConfig {
         ForgeConfig {
             run_name: self.run_name.clone(),
@@ -385,6 +401,7 @@ impl SirkPanel {
                             SirkButton::Start => Some(Action::SirkStart),
                             SirkButton::Stop => Some(Action::SirkStop),
                             SirkButton::Resume => Some(Action::SirkResume),
+                            SirkButton::Reset => Some(Action::SirkReset),
                         }
                     } else {
                         None
@@ -575,7 +592,11 @@ impl Component for SirkPanel {
         }
     }
 
-    fn update(&mut self, _action: &Action) {}
+    fn update(&mut self, action: &Action) {
+        if matches!(action, Action::SirkReset) {
+            self.reset();
+        }
+    }
 
     fn render(&self, f: &mut Frame, area: Rect, _focused: bool, theme: &Theme) {
         // Note: panel_area would need Cell/RefCell if mouse tracking needed during render
@@ -637,6 +658,8 @@ impl Component for SirkPanel {
             self.render_button(SirkButton::Stop, theme),
             Span::raw("  "),
             self.render_button(SirkButton::Resume, theme),
+            Span::raw("  "),
+            self.render_button(SirkButton::Reset, theme),
         ]);
         f.render_widget(Paragraph::new(buttons_line), chunks[7]);
 
