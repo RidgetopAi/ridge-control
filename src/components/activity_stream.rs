@@ -1,7 +1,7 @@
 use crossterm::event::{Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::{
-    layout::{Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::Rect,
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
     Frame,
@@ -10,7 +10,7 @@ use ratatui::{
 use crate::action::Action;
 use crate::components::Component;
 use crate::config::Theme;
-use crate::spindles::{ActivityMessage, SharedActivityStore};
+use crate::spindles::{ActivityMessage, SharedActivityStore, ToolCallInfo};
 
 pub struct ActivityStream {
     store: SharedActivityStore,
@@ -97,10 +97,185 @@ impl ActivityStream {
         self.header_instance = instance;
     }
 
+    /// Extract display-relevant detail from tool input based on tool type
+    fn extract_tool_detail(tool_name: &str, input: &serde_json::Value) -> Option<String> {
+        match tool_name {
+            // Edit operations - show path and diff stats
+            "Edit" | "edit_file" | "file_edit" => {
+                let mut parts = Vec::new();
+                if let Some(path) = input.get("file_path").or_else(|| input.get("path")) {
+                    if let Some(s) = path.as_str() {
+                        parts.push(Self::truncate_path(s, 40));
+                    }
+                }
+                // Compute line diff from old_string/new_string
+                if let (Some(old), Some(new)) = (input.get("old_string"), input.get("new_string")) {
+                    if let (Some(old_s), Some(new_s)) = (old.as_str(), new.as_str()) {
+                        let old_lines = old_s.lines().count();
+                        let new_lines = new_s.lines().count();
+                        let added = new_lines.saturating_sub(old_lines);
+                        let removed = old_lines.saturating_sub(new_lines);
+                        if added > 0 || removed > 0 {
+                            parts.push(format!("[+{} -{}]", added, removed));
+                        } else {
+                            parts.push(format!("[~{} lines]", old_lines.max(1)));
+                        }
+                    }
+                }
+                if parts.is_empty() { None } else { Some(parts.join(" ")) }
+            }
+            // Write operations - show path and line count
+            "Write" | "file_write" => {
+                let mut parts = Vec::new();
+                if let Some(path) = input.get("file_path").or_else(|| input.get("path")) {
+                    if let Some(s) = path.as_str() {
+                        parts.push(Self::truncate_path(s, 40));
+                    }
+                }
+                if let Some(content) = input.get("content") {
+                    if let Some(s) = content.as_str() {
+                        let lines = s.lines().count();
+                        parts.push(format!("[{} lines]", lines));
+                    }
+                }
+                if parts.is_empty() { None } else { Some(parts.join(" ")) }
+            }
+            // Read operations - show path
+            "Read" | "file_read" => {
+                if let Some(path) = input.get("file_path").or_else(|| input.get("path")) {
+                    if let Some(s) = path.as_str() {
+                        return Some(Self::truncate_path(s, 50));
+                    }
+                }
+                None
+            }
+            // Glob - show pattern
+            "Glob" | "glob" | "NotebookEdit" => {
+                if let Some(path) = input.get("file_path").or_else(|| input.get("path")) {
+                    if let Some(s) = path.as_str() {
+                        return Some(Self::truncate_path(s, 50));
+                    }
+                }
+                if let Some(pattern) = input.get("pattern") {
+                    if let Some(s) = pattern.as_str() {
+                        return Some(format!("\"{}\"", Self::truncate_str(s, 40)));
+                    }
+                }
+                None
+            }
+            // Bash - show command
+            "Bash" | "bash" => {
+                if let Some(cmd) = input.get("command") {
+                    if let Some(s) = cmd.as_str() {
+                        // Show first line of command, truncated
+                        let first_line = s.lines().next().unwrap_or(s);
+                        return Some(Self::truncate_str(first_line, 60));
+                    }
+                }
+                None
+            }
+            // Grep - show pattern and optional path
+            "Grep" | "grep" => {
+                let mut parts = Vec::new();
+                if let Some(pattern) = input.get("pattern") {
+                    if let Some(s) = pattern.as_str() {
+                        parts.push(format!("/{}/ ", Self::truncate_str(s, 30)));
+                    }
+                }
+                if let Some(path) = input.get("path") {
+                    if let Some(s) = path.as_str() {
+                        parts.push(Self::truncate_path(s, 30));
+                    }
+                }
+                if parts.is_empty() { None } else { Some(parts.join("")) }
+            }
+            // Task - show description
+            "Task" => {
+                if let Some(desc) = input.get("description") {
+                    if let Some(s) = desc.as_str() {
+                        return Some(Self::truncate_str(s, 50));
+                    }
+                }
+                None
+            }
+            // WebFetch/WebSearch - show URL or query
+            "WebFetch" | "WebSearch" => {
+                if let Some(url) = input.get("url") {
+                    if let Some(s) = url.as_str() {
+                        return Some(Self::truncate_str(s, 50));
+                    }
+                }
+                if let Some(query) = input.get("query") {
+                    if let Some(s) = query.as_str() {
+                        return Some(format!("\"{}\"", Self::truncate_str(s, 45)));
+                    }
+                }
+                None
+            }
+            // Mandrel MCP tools - extract meaningful params
+            name if name.starts_with("mcp__") || name.contains("context_")
+                || name.contains("project_") || name.contains("task_")
+                || name.contains("decision_") => {
+                // Try common parameter names
+                if let Some(content) = input.get("content") {
+                    if let Some(s) = content.as_str() {
+                        return Some(Self::truncate_str(s, 40));
+                    }
+                }
+                if let Some(query) = input.get("query") {
+                    if let Some(s) = query.as_str() {
+                        return Some(format!("\"{}\"", Self::truncate_str(s, 35)));
+                    }
+                }
+                if let Some(project) = input.get("project") {
+                    if let Some(s) = project.as_str() {
+                        return Some(format!("→ {}", s));
+                    }
+                }
+                if let Some(title) = input.get("title") {
+                    if let Some(s) = title.as_str() {
+                        return Some(Self::truncate_str(s, 40));
+                    }
+                }
+                if let Some(name_val) = input.get("name") {
+                    if let Some(s) = name_val.as_str() {
+                        return Some(s.to_string());
+                    }
+                }
+                None
+            }
+            _ => None,
+        }
+    }
+
+    /// Truncate a file path, preferring to show the end (filename and parent)
+    fn truncate_path(path: &str, max_len: usize) -> String {
+        if path.len() <= max_len {
+            return path.to_string();
+        }
+        // Show .../<parent>/<file>
+        let parts: Vec<&str> = path.rsplit('/').take(2).collect();
+        let suffix = parts.into_iter().rev().collect::<Vec<_>>().join("/");
+        if suffix.len() + 4 <= max_len {
+            format!(".../{}", suffix)
+        } else {
+            format!("...{}", &path[path.len().saturating_sub(max_len - 3)..])
+        }
+    }
+
+    /// Truncate a string with ellipsis
+    fn truncate_str(s: &str, max_len: usize) -> String {
+        if s.len() <= max_len {
+            s.to_string()
+        } else {
+            format!("{}...", &s[..max_len.saturating_sub(3)])
+        }
+    }
+
     fn render_activity<'a>(
         activity: &'a ActivityMessage,
         theme: &'a Theme,
-        tool_name_lookup: Option<&str>,
+        tool_info_lookup: Option<&ToolCallInfo>,
     ) -> Vec<Line<'a>> {
         let icon = activity.icon();
         let timestamp = activity.timestamp();
@@ -117,18 +292,34 @@ impl ActivityStream {
                 let content_style = Style::default()
                     .fg(theme.colors.muted.to_color())
                     .add_modifier(Modifier::ITALIC);
+                // Truncate thinking to first line, max 80 chars
+                let first_line = a.content.lines().next().unwrap_or(&a.content);
+                let truncated = Self::truncate_str(first_line.trim(), 80);
                 vec![Line::from(vec![
                     Span::styled(format!("[{}] ", time_short), time_style),
                     Span::raw(format!("{} ", icon)),
-                    Span::styled(a.content.clone(), content_style),
+                    Span::styled(truncated, content_style),
                 ])]
             }
             ActivityMessage::ToolCall(tc) => {
-                vec![Line::from(vec![
+                let tool_style = Style::default().fg(theme.colors.accent.to_color()).add_modifier(Modifier::BOLD);
+                let detail_style = Style::default().fg(theme.colors.muted.to_color());
+
+                // Extract relevant info from tool input
+                let detail = Self::extract_tool_detail(&tc.tool_name, &tc.input);
+
+                let mut spans = vec![
                     Span::styled(format!("[{}] ", time_short), time_style),
                     Span::raw(format!("{} ", icon)),
-                    Span::styled(tc.tool_name.clone(), Style::default().fg(theme.colors.accent.to_color()).add_modifier(Modifier::BOLD)),
-                ])]
+                    Span::styled(tc.tool_name.clone(), tool_style),
+                ];
+
+                if let Some(detail_text) = detail {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(detail_text, detail_style));
+                }
+
+                vec![Line::from(spans)]
             }
             ActivityMessage::ToolResult(tr) => {
                 let result_style = if tr.is_error {
@@ -136,26 +327,42 @@ impl ActivityStream {
                 } else {
                     Style::default().fg(theme.colors.success.to_color())
                 };
+                let tool_style = Style::default().fg(theme.colors.accent.to_color()).add_modifier(Modifier::BOLD);
+                let detail_style = Style::default().fg(theme.colors.muted.to_color());
                 let status = if tr.is_error { "failed" } else { "succeeded" };
-                // Use looked-up tool name if available, otherwise show truncated ID
-                let display_name = tool_name_lookup
-                    .map(|s| s.to_string())
+
+                // Use looked-up tool info if available
+                let (display_name, detail) = tool_info_lookup
+                    .map(|info| {
+                        let detail = Self::extract_tool_detail(&info.tool_name, &info.input);
+                        (info.tool_name.clone(), detail)
+                    })
                     .unwrap_or_else(|| {
-                        // Show last 8 chars of tool_id as fallback
+                        // Fallback: show truncated tool_id
                         let id = &tr.tool_id;
-                        if id.len() > 12 {
+                        let name = if id.len() > 12 {
                             format!("...{}", &id[id.len()-8..])
                         } else {
                             id.clone()
-                        }
+                        };
+                        (name, None)
                     });
-                vec![Line::from(vec![
+
+                let mut spans = vec![
                     Span::styled(format!("[{}] ", time_short), time_style),
                     Span::raw(format!("{} ", icon)),
-                    Span::styled(display_name, Style::default().fg(theme.colors.accent.to_color()).add_modifier(Modifier::BOLD)),
-                    Span::raw(" "),
-                    Span::styled(status.to_string(), result_style),
-                ])]
+                    Span::styled(display_name, tool_style),
+                ];
+
+                if let Some(detail_text) = detail {
+                    spans.push(Span::raw(" "));
+                    spans.push(Span::styled(detail_text, detail_style));
+                }
+
+                spans.push(Span::raw(" "));
+                spans.push(Span::styled(status.to_string(), result_style));
+
+                vec![Line::from(spans)]
             }
             ActivityMessage::Text(t) => {
                 vec![Line::from(vec![
@@ -242,7 +449,7 @@ impl Component for ActivityStream {
         };
 
         // Collect all data from store under lock, then release
-        let (instance_info, activities_with_names): (Option<(u32, u32)>, Vec<(ActivityMessage, Option<String>)>) = {
+        let (instance_info, activities_with_info): (Option<(u32, u32)>, Vec<(ActivityMessage, Option<ToolCallInfo>)>) = {
             let store = self.store.lock().unwrap();
 
             // Get current instance info from store (updated from incoming activities)
@@ -250,27 +457,27 @@ impl Component for ActivityStream {
 
             let activities = store.get_visible(self.scroll_offset, area.height.saturating_sub(2) as usize);
 
-            // Clone activities and look up tool names while we have the lock
-            let activities_with_names: Vec<(ActivityMessage, Option<String>)> = activities
+            // Clone activities and look up tool info while we have the lock
+            let activities_with_info: Vec<(ActivityMessage, Option<ToolCallInfo>)> = activities
                 .into_iter()
                 .map(|activity| {
-                    let tool_name = if let ActivityMessage::ToolResult(tr) = activity {
-                        store.get_tool_name(&tr.tool_id).map(|s| s.to_string())
+                    let tool_info = if let ActivityMessage::ToolResult(tr) = activity {
+                        store.get_tool_info(&tr.tool_id).cloned()
                     } else {
                         None
                     };
-                    (activity.clone(), tool_name)
+                    (activity.clone(), tool_info)
                 })
                 .collect();
 
-            (instance_info, activities_with_names)
+            (instance_info, activities_with_info)
         }; // store lock released here
 
         // Now render without holding the lock
-        let lines: Vec<Line> = activities_with_names
+        let lines: Vec<Line> = activities_with_info
             .iter()
-            .flat_map(|(activity, tool_name)| {
-                Self::render_activity(activity, theme, tool_name.as_deref())
+            .flat_map(|(activity, tool_info)| {
+                Self::render_activity(activity, theme, tool_info.as_ref())
             })
             .collect();
 

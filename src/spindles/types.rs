@@ -106,9 +106,17 @@ impl ActivityMessage {
             ActivityMessage::Thinking(_) => "💭",
             ActivityMessage::ToolCall(tc) => match tc.tool_name.as_str() {
                 "Read" | "file_read" => "📖",
-                "edit_file" | "file_edit" => "✏️",
-                "Bash" | "bash" => "🔧",
+                "Edit" | "edit_file" | "file_edit" => "✏️",
+                "Write" | "file_write" => "📝",
+                "Bash" | "bash" => "⚡",
                 "Grep" | "grep" => "🔍",
+                "Glob" | "glob" => "📂",
+                "Task" => "🤖",
+                "WebFetch" | "WebSearch" => "🌐",
+                // Mandrel MCP tools
+                name if name.starts_with("mcp__") || name.starts_with("context_")
+                    || name.starts_with("project_") || name.starts_with("task_")
+                    || name.starts_with("decision_") || name.starts_with("mandrel_") => "🔮",
                 _ => "🛠️",
             },
             ActivityMessage::ToolResult(tr) => {
