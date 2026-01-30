@@ -1,14 +1,22 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+use serde_json::Value;
 use super::types::ActivityMessage;
+
+/// Cached info from a ToolCall for later lookup when ToolResult arrives
+#[derive(Clone)]
+pub struct ToolCallInfo {
+    pub tool_name: String,
+    pub input: Value,
+}
 
 pub struct ActivityStore {
     activities: VecDeque<ActivityMessage>,
     capacity: usize,
     run_filter: Option<String>,
-    /// Maps tool_id -> tool_name for looking up names in ToolResults
-    tool_names: HashMap<String, String>,
+    /// Maps tool_id -> ToolCallInfo for looking up tool details in ToolResults
+    tool_info: HashMap<String, ToolCallInfo>,
     /// Current run instance info (instance_number, total_instances)
     current_instance: Option<(u32, u32)>,
 }
@@ -19,7 +27,7 @@ impl ActivityStore {
             activities: VecDeque::with_capacity(capacity),
             capacity,
             run_filter: None,
-            tool_names: HashMap::new(),
+            tool_info: HashMap::new(),
             current_instance: None,
         }
     }
@@ -29,9 +37,12 @@ impl ActivityStore {
     }
 
     pub fn push(&mut self, activity: ActivityMessage) {
-        // Track tool_id -> tool_name mapping from ToolCalls
+        // Track tool_id -> tool info mapping from ToolCalls
         if let ActivityMessage::ToolCall(tc) = &activity {
-            self.tool_names.insert(tc.tool_id.clone(), tc.tool_name.clone());
+            self.tool_info.insert(tc.tool_id.clone(), ToolCallInfo {
+                tool_name: tc.tool_name.clone(),
+                input: tc.input.clone(),
+            });
         }
 
         // Update current instance info from session
@@ -47,7 +58,12 @@ impl ActivityStore {
 
     /// Look up tool name by tool_id (for ToolResults)
     pub fn get_tool_name(&self, tool_id: &str) -> Option<&str> {
-        self.tool_names.get(tool_id).map(|s| s.as_str())
+        self.tool_info.get(tool_id).map(|info| info.tool_name.as_str())
+    }
+
+    /// Look up full tool info by tool_id (for ToolResults)
+    pub fn get_tool_info(&self, tool_id: &str) -> Option<&ToolCallInfo> {
+        self.tool_info.get(tool_id)
     }
 
     /// Get current run instance info
@@ -91,7 +107,7 @@ impl ActivityStore {
 
     pub fn clear(&mut self) {
         self.activities.clear();
-        self.tool_names.clear();
+        self.tool_info.clear();
         self.current_instance = None;
     }
 

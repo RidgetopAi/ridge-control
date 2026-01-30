@@ -132,11 +132,17 @@ impl SirkButton {
 
     pub fn is_enabled(&self, status: RunStatus) -> bool {
         match (self, status) {
+            // Start: available when idle or after any terminal state
             (SirkButton::Start, RunStatus::Idle) => true,
             (SirkButton::Start, RunStatus::Completed) => true,
             (SirkButton::Start, RunStatus::Failed) => true,
+            (SirkButton::Start, RunStatus::Paused) => true,
+            // Stop: available when running
             (SirkButton::Stop, RunStatus::Running) => true,
+            // Resume: available when paused
             (SirkButton::Resume, RunStatus::Paused) => true,
+            // Reset: available after any non-idle terminal state (including paused)
+            (SirkButton::Reset, RunStatus::Paused) => true,
             (SirkButton::Reset, RunStatus::Completed) => true,
             (SirkButton::Reset, RunStatus::Failed) => true,
             _ => false,
@@ -702,14 +708,19 @@ impl SirkPanel {
                 if y == button_y {
                     let x = mouse.column;
                     let inner_x = self.panel_area.x + 2;
-                    
-                    // Rough button positions: Start at col 2, Stop at col 12, Resume at col 20
-                    if x >= inner_x + 2 && x < inner_x + 10 {
-                        self.selected_index = SirkField::ALL.len(); // Start button
-                    } else if x >= inner_x + 12 && x < inner_x + 18 {
-                        self.selected_index = SirkField::ALL.len() + 1; // Stop button
-                    } else if x >= inner_x + 20 && x < inner_x + 30 {
-                        self.selected_index = SirkField::ALL.len() + 2; // Resume button
+
+                    // Button positions based on render:
+                    // "  [Start]  [Stop]  [Resume]  [Reset]"
+                    //  0  2     9  11   17 19     27 29
+                    let button_start = SirkField::ALL.len();
+                    if x >= inner_x + 2 && x < inner_x + 9 {
+                        self.selected_index = button_start; // Start button
+                    } else if x >= inner_x + 11 && x < inner_x + 17 {
+                        self.selected_index = button_start + 1; // Stop button
+                    } else if x >= inner_x + 19 && x < inner_x + 27 {
+                        self.selected_index = button_start + 2; // Resume button
+                    } else if x >= inner_x + 29 && x < inner_x + 36 {
+                        self.selected_index = button_start + 3; // Reset button
                     }
                 }
                 None

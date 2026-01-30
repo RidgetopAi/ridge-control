@@ -87,8 +87,9 @@ impl App {
         }
 
         // Activity Stream handles events when visible, but only if it recognizes the key
+        // Skip in PtyRaw mode - character keys should pass through to the terminal
         // (fall through for unhandled keys like Ctrl+C)
-        if self.ui.activity_stream_visible {
+        if self.ui.activity_stream_visible && !matches!(self.ui.input_mode, InputMode::PtyRaw) {
             if let Some(ref mut activity_stream) = self.activity_stream {
                 if let Some(action) = activity_stream.handle_event(&CrosstermEvent::Key(key)) {
                     return Some(action);
