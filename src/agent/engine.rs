@@ -8,7 +8,7 @@ use crate::llm::types::{ContentBlock, Message, Role, StopReason, StreamChunk, To
 use crate::llm::{LLMEvent, LLMManager};
 
 use super::context::{BuildContextParams, ContextManager, ContextSegment, SegmentKind};
-use super::prompt::SystemPromptBuilder;
+use super::prompt::{SystemPromptBuilder, PlatformInfo};
 use super::thread::{AgentThread, ThreadStore};
 use super::tools::AgentToolOrchestrator;
 
@@ -429,15 +429,37 @@ impl<S: ThreadStore> AgentEngine<S> {
         };
 
         // Build context with truncation
-        tracing::info!("AgentEngine: config.tools.len() = {}", self.config.tools.len());
-        for tool in &self.config.tools {
+        // For local models (ollama), limit tool set and swap system prompt
+        let is_local = self.llm.current_provider() == "ollama";
+        let tools = if is_local {
+            const LOCAL_MODEL_TOOLS: &[&str] = &[
+                "file_read", "file_write", "list_directory", "grep", "glob",
+                "tree", "bash_execute", "edit", "ask_user",
+            ];
+            let filtered: Vec<_> = self.config.tools.iter()
+                .filter(|t| LOCAL_MODEL_TOOLS.contains(&t.name.as_str()))
+                .cloned()
+                .collect();
+            tracing::info!("AgentEngine: filtered tools for ollama: {} -> {}", self.config.tools.len(), filtered.len());
+            filtered
+        } else {
+            self.config.tools.clone()
+        };
+        tracing::info!("AgentEngine: tools.len() = {}", tools.len());
+        for tool in &tools {
             tracing::debug!("  Tool: {}", tool.name);
         }
+        let active_prompt = if is_local {
+            SystemPromptBuilder::local_model()
+                .with_platform(PlatformInfo::gather())
+        } else {
+            self.prompt_builder.clone()
+        };
         let params = BuildContextParams {
             model: thread.model.clone(),
-            system_prompt: Some(self.prompt_builder.build()),
-            short_system_prompt: Some(self.prompt_builder.build_short()),
-            tools: self.config.tools.clone(),
+            system_prompt: Some(active_prompt.build()),
+            short_system_prompt: Some(active_prompt.build_short()),
+            tools,
             segments: thread.segments.clone(),
             max_output_tokens: None,
         };
@@ -492,7 +514,20 @@ impl<S: ThreadStore> AgentEngine<S> {
             }
         }
 
-        self.llm.continue_after_tool(built.request.system, self.config.tools.clone());
+        // Use filtered tools for local models (same filter as prepare_and_send)
+        let tools = if self.llm.current_provider() == "ollama" {
+            const LOCAL_MODEL_TOOLS: &[&str] = &[
+                "file_read", "file_write", "list_directory", "grep", "glob",
+                "tree", "bash_execute", "edit", "ask_user",
+            ];
+            self.config.tools.iter()
+                .filter(|t| LOCAL_MODEL_TOOLS.contains(&t.name.as_str()))
+                .cloned()
+                .collect()
+        } else {
+            self.config.tools.clone()
+        };
+        self.llm.continue_after_tool(built.request.system, tools);
         self.transition(AgentState::StreamingResponse);
     }
 

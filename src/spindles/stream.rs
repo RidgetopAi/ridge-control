@@ -202,10 +202,12 @@ impl SpindlesStream {
         event_tx: mpsc::UnboundedSender<SpindlesEvent>,
         mut shutdown_rx: mpsc::Receiver<()>,
     ) {
+        tracing::info!("Spindles: Attempting WebSocket connection to {}", url);
         let connect_result = connect_async(&url).await;
 
         match connect_result {
             Ok((ws_stream, _response)) => {
+                tracing::info!("Spindles: WebSocket connected successfully!");
                 let _ = event_tx.send(SpindlesEvent::StateChanged(SpindlesConnectionState::Connected));
                 let _ = event_tx.send(SpindlesEvent::Connected);
 
@@ -219,6 +221,7 @@ impl SpindlesStream {
                         msg_opt = read.next() => {
                             match msg_opt {
                                 Some(Ok(msg)) => {
+                                    tracing::debug!("Spindles: Received WebSocket message");
                                     Self::handle_message(msg, &store, &event_tx);
                                 }
                                 Some(Err(e)) => {
@@ -238,6 +241,7 @@ impl SpindlesStream {
                 let _ = event_tx.send(SpindlesEvent::StateChanged(SpindlesConnectionState::Disconnected));
             }
             Err(e) => {
+                tracing::error!("Spindles: WebSocket connection FAILED: {}", e);
                 let _ = event_tx.send(SpindlesEvent::StateChanged(SpindlesConnectionState::Failed));
                 let _ = event_tx.send(SpindlesEvent::Error(e.to_string()));
             }

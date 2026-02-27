@@ -16,6 +16,9 @@ pub struct ForgeConfig {
     /// If true, attempt to resume an existing run from saved state
     #[serde(default)]
     pub resume: bool,
+    /// If true, instances self-assign their number from Mandrel handoffs (for continuous runs)
+    #[serde(default)]
+    pub self_assign_instance: bool,
 }
 
 fn default_spindles_proxy_url() -> String {
@@ -41,6 +44,7 @@ impl Default for ForgeConfig {
             mandrel_url: default_mandrel_url(),
             timeout_minutes: default_timeout_minutes(),
             resume: false,
+            self_assign_instance: false,
         }
     }
 }

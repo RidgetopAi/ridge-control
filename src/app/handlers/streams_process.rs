@@ -305,6 +305,10 @@ impl App {
                 if let Some(ref mut panel) = self.sirk_panel {
                     panel.reset();
                 }
+                // Clear activity stream
+                if let Some(ref mut stream) = self.activity_stream {
+                    stream.clear();
+                }
                 // Set pending reset for controller (processed async in event loop)
                 self.forge_reset_pending = true;
                 self.ui.notification_manager.info("SIRK panel reset");

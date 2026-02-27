@@ -56,6 +56,12 @@ impl Default for LLMConfig {
                 default_model: "llama-3.3-70b-versatile".to_string(),
             },
         );
+        providers.insert(
+            "ollama".to_string(),
+            ProviderConfig {
+                default_model: "qwen3:8b".to_string(),
+            },
+        );
 
         Self {
             defaults: LLMDefaults::default(),

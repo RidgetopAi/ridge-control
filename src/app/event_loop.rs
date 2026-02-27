@@ -195,6 +195,23 @@ impl App {
             self.forge_reset_pending = false;
             self.forge_controller.reset().await;
             self.forge_event_rx = None;
+            // Delete state file so next Start is truly fresh
+            if let Some(ref panel) = self.sirk_panel {
+                let run_name = panel.run_name();
+                if !run_name.is_empty() {
+                    let state_path = dirs::home_dir()
+                        .unwrap_or_default()
+                        .join(".forge")
+                        .join("runs")
+                        .join(run_name)
+                        .join("state.json");
+                    if let Err(e) = tokio::fs::remove_file(&state_path).await {
+                        if e.kind() != std::io::ErrorKind::NotFound {
+                            tracing::warn!("Failed to delete state file: {}", e);
+                        }
+                    }
+                }
+            }
             self.mark_dirty();
         }
     }

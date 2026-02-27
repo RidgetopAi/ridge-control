@@ -306,6 +306,18 @@ impl ModelCatalog {
         self.register(
             ModelInfo::new("gemma2-9b-it", 8_192, 4_096, TokenizerKind::GptLike, "groq")
         );
+
+        // ─────────────────────────────────────────────────────────────────────
+        // Ollama Local Models
+        // ─────────────────────────────────────────────────────────────────────
+        self.register(
+            ModelInfo::new("qwen3:8b", 32_768, 8_192, TokenizerKind::Heuristic, "ollama")
+                .with_thinking()
+        );
+        self.register(
+            ModelInfo::new("qwen3:4b", 32_768, 8_192, TokenizerKind::Heuristic, "ollama")
+                .with_thinking()
+        );
     }
 }
 

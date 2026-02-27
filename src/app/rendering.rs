@@ -411,8 +411,8 @@ impl App {
                 // Rendered AFTER Activity Stream so it's always on top
                 if show_sirk_panel {
                     if let Some(ref sirk_panel) = self.sirk_panel {
-                        // Calculate centered dialog size (50% width, fixed height for form)
-                        let dialog_width = (size.width * 50 / 100).clamp(45, 70);
+                        // Calculate centered dialog size (80% width, fixed height for form)
+                        let dialog_width = (size.width * 80 / 100).clamp(60, 120);
                         let dialog_height = 14u16; // Fixed height for form fields
                         let dialog_x = (size.width.saturating_sub(dialog_width)) / 2;
                         let dialog_y = (size.height.saturating_sub(dialog_height)) / 2;

@@ -167,6 +167,48 @@ impl SystemPromptBuilder {
         )
     }
 
+    /// System prompt optimized for local/small models (Ollama)
+    ///
+    /// Designed for Qwen3:8b and similar small models. Key principles:
+    /// - Maximize tool-calling confidence (they tend to describe instead of call)
+    /// - Prevent hallucination (they fabricate when "close enough" instead of one more call)
+    /// - Minimize token waste (tight prompt, discourage over-thinking)
+    /// - No mention of tools they don't have
+    pub fn local_model() -> Self {
+        Self::new(
+            "You are Ridge Control, a coding assistant with filesystem tools. \
+             Rules: (1) ALWAYS call tools — never describe what you would do. \
+             (2) NEVER guess or fabricate file contents, code, values, or names. \
+             If you have not read it with a tool, you do not know it. \
+             (3) Keep thinking brief. Act fast."
+        )
+        .add_tool_instruction(
+            "Tools: \
+             `list_directory(path)` list files. \
+             `glob(pattern, path)` find files by name pattern. \
+             `grep(pattern, path)` search file contents — USE THIS to find specific values. \
+             `file_read(path)` read a file. For large files, prefer grep first. \
+             `tree(path)` directory tree. \
+             `file_write(path, content)` write file. \
+             `edit(path, old_text, new_text)` edit file. \
+             `bash_execute(command)` run shell command. \
+             `ask_user(question)` ask the user."
+        )
+        .add_tool_instruction(
+            "Search strategy: To find a specific value, use grep. \
+             To explore a directory, use list_directory or tree. \
+             To find a file by name, use glob. \
+             Always follow up by reading the actual file — do not guess what is inside."
+        )
+        .add_tool_instruction(
+            "If file_read is truncated, check the partial result — the answer may already be there. \
+             If not, use grep to find the specific line instead of re-reading."
+        )
+        .add_tool_instruction(
+            "After getting results, give a short direct answer. Do not parrot raw output."
+        )
+    }
+
     #[allow(dead_code)]
     pub fn with_platform(mut self, platform: PlatformInfo) -> Self {
         self.platform = Some(platform);

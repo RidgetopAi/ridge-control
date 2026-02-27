@@ -5,6 +5,7 @@ pub mod openai;
 pub mod gemini;
 pub mod grok;
 pub mod groq;
+pub mod ollama;
 pub mod manager;
 pub mod tools;
 pub mod shell_session;

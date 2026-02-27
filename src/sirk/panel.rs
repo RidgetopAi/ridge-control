@@ -71,6 +71,7 @@ pub enum SirkField {
     SeedPath,
     InstanceCount,
     Project,
+    SelfAssign,
 }
 
 impl SirkField {
@@ -79,6 +80,7 @@ impl SirkField {
         SirkField::SeedPath,
         SirkField::InstanceCount,
         SirkField::Project,
+        SirkField::SelfAssign,
     ];
 
     pub fn label(&self) -> &'static str {
@@ -87,6 +89,7 @@ impl SirkField {
             SirkField::SeedPath => "Seed Document",
             SirkField::InstanceCount => "Instances",
             SirkField::Project => "Project",
+            SirkField::SelfAssign => "Self-Assign #",
         }
     }
 
@@ -96,7 +99,12 @@ impl SirkField {
             SirkField::SeedPath => "Path to seed markdown file",
             SirkField::InstanceCount => "Number of parallel instances (1-100)",
             SirkField::Project => "Mandrel project name",
+            SirkField::SelfAssign => "Instances determine own number from Mandrel",
         }
+    }
+
+    pub fn is_toggle(&self) -> bool {
+        matches!(self, SirkField::SelfAssign)
     }
 }
 
@@ -152,7 +160,7 @@ impl SirkButton {
 
 /// SIRK Panel component
 pub struct SirkPanel {
-    /// Currently selected field (0-3 for fields, 4+ for buttons)
+    /// Currently selected field (0-4 for fields, 5+ for buttons)
     selected_index: usize,
     /// Current input mode
     input_mode: SirkInputMode,
@@ -164,6 +172,8 @@ pub struct SirkPanel {
     instance_count: u32,
     /// Mandrel project name
     project: String,
+    /// Self-assign instance numbers (for continuous runs)
+    self_assign_instance: bool,
     /// Current run status
     status: RunStatus,
     /// Current instance number (0 if not running)
@@ -193,6 +203,7 @@ impl SirkPanel {
             seed_path: String::new(),
             instance_count: 1,
             project: String::new(),
+            self_assign_instance: false,
             status: RunStatus::Idle,
             current_instance: 0,
             total_instances: 0,
@@ -225,6 +236,10 @@ impl SirkPanel {
         }
     }
 
+    pub fn run_name(&self) -> &str {
+        &self.run_name
+    }
+
     pub fn set_run_name(&mut self, name: String) {
         self.run_name = name;
     }
@@ -239,6 +254,14 @@ impl SirkPanel {
 
     pub fn set_project(&mut self, project: String) {
         self.project = project;
+    }
+
+    pub fn set_self_assign_instance(&mut self, value: bool) {
+        self.self_assign_instance = value;
+    }
+
+    pub fn toggle_self_assign_instance(&mut self) {
+        self.self_assign_instance = !self.self_assign_instance;
     }
 
     pub fn run_started(&mut self, total_instances: u32) {
@@ -298,6 +321,7 @@ impl SirkPanel {
             total_instances: self.instance_count,
             project: self.project.clone(),
             seed_path: self.seed_path.clone(),
+            self_assign_instance: self.self_assign_instance,
             ..Default::default()
         }
     }
@@ -352,6 +376,7 @@ impl SirkPanel {
             SirkField::SeedPath => self.seed_path.clone(),
             SirkField::InstanceCount => self.instance_count.to_string(),
             SirkField::Project => self.project.clone(),
+            SirkField::SelfAssign => if self.self_assign_instance { "Yes".to_string() } else { "No".to_string() },
         }
     }
 
@@ -365,6 +390,9 @@ impl SirkPanel {
                 }
             }
             SirkField::Project => self.project = value,
+            SirkField::SelfAssign => {
+                self.self_assign_instance = value.to_lowercase() == "yes" || value == "1" || value.to_lowercase() == "true";
+            }
         }
     }
 
@@ -399,8 +427,13 @@ impl SirkPanel {
             }
             KeyCode::Enter => {
                 if let Some(field) = self.selected_field() {
-                    self.start_editing(field);
-                    None
+                    if field.is_toggle() {
+                        self.toggle_self_assign_instance();
+                        None
+                    } else {
+                        self.start_editing(field);
+                        None
+                    }
                 } else if let Some(button) = self.selected_button() {
                     if button.is_enabled(self.status) {
                         match button {
@@ -626,6 +659,7 @@ impl Component for SirkPanel {
                 Constraint::Length(1), // Seed Path
                 Constraint::Length(1), // Instance Count
                 Constraint::Length(1), // Project
+                Constraint::Length(1), // Self-Assign
                 Constraint::Length(1), // Separator
                 Constraint::Length(1), // Buttons
                 Constraint::Min(0),    // Remaining
@@ -653,7 +687,7 @@ impl Component for SirkPanel {
         f.render_widget(
             Paragraph::new("─".repeat(inner.width as usize))
                 .style(Style::default().fg(theme.colors.muted.to_color())),
-            chunks[6],
+            chunks[7],
         );
 
         // Buttons
@@ -667,18 +701,18 @@ impl Component for SirkPanel {
             Span::raw("  "),
             self.render_button(SirkButton::Reset, theme),
         ]);
-        f.render_widget(Paragraph::new(buttons_line), chunks[7]);
+        f.render_widget(Paragraph::new(buttons_line), chunks[8]);
 
         // Hint line
-        if inner.height > 9 {
+        if inner.height > 10 {
             let hint = if matches!(self.input_mode, SirkInputMode::Editing { .. }) {
                 "↵ confirm  Esc cancel"
             } else {
-                "j/k navigate  ↵ edit/activate  q close"
+                "j/k navigate  ↵ edit/toggle  q close"
             };
             f.render_widget(
                 Paragraph::new(hint).style(Style::default().fg(theme.colors.muted.to_color())),
-                chunks[8],
+                chunks[9],
             );
         }
     }

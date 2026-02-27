@@ -14,6 +14,7 @@ use super::anthropic::AnthropicProvider;
 use super::gemini::GeminiProvider;
 use super::grok::GrokProvider;
 use super::groq::GroqProvider;
+use super::ollama::OllamaProvider;
 use super::openai::OpenAIProvider;
 use super::provider::{Provider, ProviderRegistry};
 use super::types::{LLMError, LLMRequest, Message, StreamChunk, StreamDelta, BlockType, ToolUse, ContentBlock, ToolResult, ToolDefinition};
@@ -203,6 +204,20 @@ impl LLMManager {
         }
     }
 
+    /// Register Ollama local provider (no API key needed)
+    pub fn register_ollama(&mut self, base_url: Option<String>) {
+        let provider = Arc::new(OllamaProvider::new(base_url));
+        let default_model = provider.default_model().to_string();
+        let name = provider.name().to_string();
+
+        self.registry.register(provider);
+
+        if self.current_provider.is_empty() {
+            self.current_provider = name;
+            self.current_model = default_model;
+        }
+    }
+
     /// Register all providers from a KeyStore
     /// Returns a list of successfully registered provider names
     pub fn register_from_keystore(&mut self, keystore: &KeyStore) -> Vec<String> {
@@ -239,6 +254,27 @@ impl LLMManager {
                     tracing::warn!("Error checking keystore for {}: {}", name, e);
                 }
             }
+        }
+
+        // Auto-register Ollama if running locally (no API key needed)
+        // Use a blocking probe on a short timeout to avoid slowing startup
+        let ollama_available = std::thread::spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok();
+            rt.map(|rt| rt.block_on(OllamaProvider::is_available(None)))
+                .unwrap_or(false)
+        })
+        .join()
+        .unwrap_or(false);
+
+        if ollama_available {
+            self.register_ollama(None);
+            registered.push("ollama".to_string());
+            tracing::info!("Registered Ollama provider (local, no key required)");
+        } else {
+            tracing::debug!("Ollama not detected at localhost:11434");
         }
 
         tracing::info!("Keystore registration complete. Registered providers: {:?}", registered);
@@ -635,6 +671,11 @@ pub async fn test_api_key(provider_name: &str, api_key: &str) -> Result<(), LLME
         }
         "groq" => {
             let provider = GroqProvider::new(api_key);
+            provider.test_key().await
+        }
+        "ollama" => {
+            // Ollama doesn't use API keys - just check if server is reachable
+            let provider = OllamaProvider::new(None);
             provider.test_key().await
         }
         _ => Err(LLMError::ProviderError {

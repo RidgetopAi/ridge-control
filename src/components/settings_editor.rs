@@ -137,6 +137,7 @@ impl SettingsEditor {
                 "gemini".to_string(),
                 "grok".to_string(),
                 "groq".to_string(),
+                "ollama".to_string(),
             ],
             available_models: Vec::new(),
             config: LLMConfig::default(),
@@ -316,6 +317,10 @@ impl SettingsEditor {
                 "llama-3.3-70b-versatile".to_string(),
                 "llama-3.1-8b-instant".to_string(),
                 "mixtral-8x7b-32768".to_string(),
+            ],
+            "ollama" => vec![
+                "qwen3:8b".to_string(),
+                "qwen3:4b".to_string(),
             ],
             _ => Vec::new(),
         };
