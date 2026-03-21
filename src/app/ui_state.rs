@@ -17,11 +17,15 @@ use crate::components::spinner_manager::SpinnerManager;
 use crate::input::focus::FocusManager;
 use crate::input::mode::InputMode;
 
+/// Minimum interval between renders (33ms = ~30 FPS).
+pub const MIN_RENDER_INTERVAL_MS: u64 = 33;
+
 pub struct UiState {
     // Core UI mode/state
     pub input_mode: InputMode,
     pub focus: FocusManager,
     pub needs_redraw: bool,
+    pub last_render: Instant,
     pub last_activity: Instant,
     pub last_esc_press: Option<Instant>,
 
@@ -57,6 +61,7 @@ impl UiState {
             input_mode: InputMode::Normal,
             focus: FocusManager::new(),
             needs_redraw: true,
+            last_render: now - std::time::Duration::from_millis(MIN_RENDER_INTERVAL_MS + 1),
             last_activity: now,
             last_esc_press: None,
             menu,

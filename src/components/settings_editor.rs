@@ -284,6 +284,8 @@ impl SettingsEditor {
                 "claude-3-haiku-20240307".to_string(),
             ],
             "openai" => vec![
+                "gpt-5.4-2026-03-05".to_string(),
+                "gpt-5.4-pro-2026-03-05".to_string(),
                 "gpt-5.2-2025-12-11".to_string(),
                 "gpt-5.2-pro-2025-12-11".to_string(),
                 "gpt-5-mini-2025-08-07".to_string(),
@@ -1019,7 +1021,9 @@ impl SettingsEditor {
             "claude-3-opus-20240229" => "3 Opus - Legacy, deep reasoning",
             "claude-3-haiku-20240307" => "3 Haiku - Legacy, fastest responses",
             // OpenAI GPT-5 models (latest)
-            "gpt-5.2-2025-12-11" => "GPT-5.2 - Latest flagship model",
+            "gpt-5.4-2026-03-05" => "GPT-5.4 - Latest flagship model",
+            "gpt-5.4-pro-2026-03-05" => "GPT-5.4 Pro - Deep reasoning",
+            "gpt-5.2-2025-12-11" => "GPT-5.2 - Previous flagship",
             "gpt-5.2-pro-2025-12-11" => "GPT-5.2 Pro - Deep reasoning",
             "gpt-5-mini-2025-08-07" => "GPT-5 Mini - Fast & efficient",
             // OpenAI GPT-4 models

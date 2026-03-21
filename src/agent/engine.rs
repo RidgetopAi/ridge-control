@@ -527,7 +527,7 @@ impl<S: ThreadStore> AgentEngine<S> {
         } else {
             self.config.tools.clone()
         };
-        self.llm.continue_after_tool(built.request.system, tools);
+        self.llm.continue_after_tool(built.request.system, tools, built.request.max_tokens);
         self.transition(AgentState::StreamingResponse);
     }
 

@@ -547,8 +547,17 @@ impl App {
                 | MouseEventKind::Up(MouseButton::Left) => {
                     // Use active tab's terminal widget (TRC-005)
                     if let Some(session) = self.pty.tab_manager.active_pty_session_mut() {
-                        session.terminal_mut()
-                            .handle_event(&CrosstermEvent::Mouse(mouse))
+                        let action = session.terminal_mut()
+                            .handle_event(&CrosstermEvent::Mouse(mouse));
+                        // Selection events (Down/Drag) return None but modify grid state.
+                        // Force redraw so selection highlight is visible during drag.
+                        if matches!(mouse.kind,
+                            MouseEventKind::Down(MouseButton::Left) |
+                            MouseEventKind::Drag(MouseButton::Left)
+                        ) {
+                            self.mark_dirty();
+                        }
+                        action
                     } else {
                         None
                     }

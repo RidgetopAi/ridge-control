@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::mpsc as std_mpsc;
 use std::time::Instant;
 
 use crossterm::event::{Event, KeyCode, MouseButton, MouseEventKind};
@@ -62,6 +63,12 @@ enum ConfirmState {
     AwaitingKillConfirm(i32),
 }
 
+/// Result from a background process scan
+struct ProcScanResult {
+    processes: Vec<ProcessInfo>,
+    prev_stats: HashMap<i32, u64>,
+}
+
 pub struct ProcessMonitor {
     processes: Vec<ProcessInfo>,
     prev_stats: HashMap<i32, u64>,
@@ -77,13 +84,17 @@ pub struct ProcessMonitor {
     gpu_monitor: GpuMonitor,
     /// Manually tracked scroll offset (ratatui's TableState.offset() is unreliable between renders)
     scroll_offset: usize,
+    /// Channel for receiving background proc scan results
+    scan_rx: Option<std_mpsc::Receiver<ProcScanResult>>,
+    /// Whether a background scan is in flight
+    scan_in_flight: bool,
 }
 
 impl ProcessMonitor {
     pub fn new() -> Self {
         let ticks = procfs::ticks_per_second();
         let page = procfs::page_size();
-        
+
         let mut monitor = Self {
             processes: Vec::new(),
             prev_stats: HashMap::new(),
@@ -98,8 +109,11 @@ impl ProcessMonitor {
             inner_area: Rect::default(),
             gpu_monitor: GpuMonitor::new(),
             scroll_offset: 0,
+            scan_rx: None,
+            scan_in_flight: false,
         };
-        
+
+        // Initial scan is synchronous (app isn't interactive yet)
         monitor.refresh_processes();
         monitor
     }
@@ -112,10 +126,76 @@ impl ProcessMonitor {
         }
     }
 
+    /// Synchronous proc scan (used for initial load and manual refresh).
     pub fn refresh_processes(&mut self) {
-        let elapsed_secs = self.last_refresh.elapsed().as_secs_f64().max(0.1);
+        let result = Self::scan_processes(
+            self.ticks_per_second,
+            self.page_size,
+            self.last_refresh.elapsed().as_secs_f64().max(0.1),
+            &self.prev_stats,
+        );
+        self.last_refresh = Instant::now();
+        self.prev_stats = result.prev_stats;
+        self.processes = result.processes;
+        self.sort_processes();
+    }
+
+    /// Launch a background thread to scan /proc without blocking the event loop.
+    fn start_background_refresh(&mut self) {
+        if self.scan_in_flight {
+            return; // Don't stack up scans
+        }
+
+        let (tx, rx) = std_mpsc::channel();
+        let ticks = self.ticks_per_second;
+        let page = self.page_size;
+        let elapsed = self.last_refresh.elapsed().as_secs_f64().max(0.1);
+        let prev_stats = self.prev_stats.clone();
+
+        self.scan_rx = Some(rx);
+        self.scan_in_flight = true;
         self.last_refresh = Instant::now();
 
+        std::thread::spawn(move || {
+            let result = Self::scan_processes(ticks, page, elapsed, &prev_stats);
+            let _ = tx.send(result);
+        });
+    }
+
+    /// Check if a background scan completed and apply results.
+    /// Returns true if new data was applied.
+    fn poll_background_refresh(&mut self) -> bool {
+        if let Some(ref rx) = self.scan_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.prev_stats = result.prev_stats;
+                    self.processes = result.processes;
+                    self.sort_processes();
+                    self.scan_in_flight = false;
+                    self.scan_rx = None;
+                    return true;
+                }
+                Err(std_mpsc::TryRecvError::Empty) => {
+                    // Still running
+                }
+                Err(std_mpsc::TryRecvError::Disconnected) => {
+                    // Thread panicked or dropped
+                    self.scan_in_flight = false;
+                    self.scan_rx = None;
+                }
+            }
+        }
+        false
+    }
+
+    /// Pure function: scan /proc and compute process info.
+    /// Runs on a background thread — no &self access.
+    fn scan_processes(
+        ticks_per_second: u64,
+        page_size: u64,
+        elapsed_secs: f64,
+        prev_stats: &HashMap<i32, u64>,
+    ) -> ProcScanResult {
         let mut new_processes = Vec::new();
 
         if let Ok(all_procs) = procfs::process::all_processes() {
@@ -124,15 +204,15 @@ impl ProcessMonitor {
                     let pid = process.pid;
                     let current_ticks = stat.utime + stat.stime;
 
-                    let cpu_percent = if let Some(&prev_ticks) = self.prev_stats.get(&pid) {
+                    let cpu_percent = if let Some(&prev_ticks) = prev_stats.get(&pid) {
                         let delta = current_ticks.saturating_sub(prev_ticks);
-                        let cpu_secs = delta as f64 / self.ticks_per_second as f64;
+                        let cpu_secs = delta as f64 / ticks_per_second as f64;
                         (cpu_secs / elapsed_secs) * 100.0
                     } else {
                         0.0
                     };
 
-                    let memory_kb = (stat.rss * self.page_size) / 1024;
+                    let memory_kb = (stat.rss * page_size) / 1024;
 
                     new_processes.push(ProcessInfo {
                         pid,
@@ -146,13 +226,15 @@ impl ProcessMonitor {
             }
         }
 
-        self.prev_stats = new_processes
+        let prev_stats = new_processes
             .iter()
             .map(|p| (p.pid, p.prev_cpu_ticks))
             .collect();
 
-        self.processes = new_processes;
-        self.sort_processes();
+        ProcScanResult {
+            processes: new_processes,
+            prev_stats,
+        }
     }
 
     fn sort_processes(&mut self) {
@@ -449,11 +531,16 @@ impl Component for ProcessMonitor {
                 self.sort_processes();
             }
             Action::Tick => {
+                // Poll for completed background scan results (non-blocking)
+                self.poll_background_refresh();
+                // Launch new background scan if enough time has passed
                 if self.last_refresh.elapsed().as_secs() >= 2 {
-                    self.refresh_processes();
+                    self.start_background_refresh();
                 }
+                // GPU: poll for completed background results, launch new scan if due
+                self.gpu_monitor.poll_background_refresh();
                 if self.gpu_monitor.should_refresh() {
-                    self.gpu_monitor.refresh();
+                    self.gpu_monitor.start_background_refresh();
                 }
             }
             _ => {}

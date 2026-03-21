@@ -5,6 +5,8 @@
 //! - Displaying run status and progress
 //! - Starting, stopping, and resuming Forge runs
 
+#![allow(dead_code)]
+
 use std::time::{Duration, Instant};
 
 use crossterm::event::{Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind};

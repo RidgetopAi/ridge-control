@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use crossterm::event;
+use crossterm::event::{self, Event as CrosstermEvent, MouseEventKind};
 use tokio::sync::mpsc;
 
 use super::{App, TICK_INTERVAL_MS};
@@ -74,16 +74,30 @@ impl App {
         Ok(())
     }
 
-    /// Handle user input event
+    /// Handle user input event.
+    /// Only marks dirty when the event actually produces an action,
+    /// avoiding unnecessary redraws for unhandled mouse events.
+    /// Overlays (command palette, confirm dialog, etc.) consume input
+    /// without returning an Action, so they always need a redraw.
     fn handle_input_event(&mut self, event: crossterm::event::Event) -> Result<()> {
-        self.mark_dirty();
+        let overlay_active = matches!(self.ui.input_mode, InputMode::CommandPalette | InputMode::Confirm { .. })
+            || self.ui.ask_user_dialog.is_visible();
 
         if let Some(action) = self.handle_event(event) {
+            // PtyInput just writes bytes to the PTY — no visual change until the
+            // shell echoes back (handled by handle_pty_event). Skipping mark_dirty
+            // here avoids a premature render that would push the echo render into
+            // the throttle window, adding up to MIN_RENDER_INTERVAL_MS latency.
+            if !matches!(action, Action::PtyInput(_)) {
+                self.mark_dirty();
+            }
             let was_in_palette = matches!(self.ui.input_mode, InputMode::CommandPalette);
             self.dispatch(action)?;
             if was_in_palette && matches!(self.ui.input_mode, InputMode::CommandPalette) {
                 self.ui.input_mode = InputMode::Normal;
             }
+        } else if overlay_active {
+            self.mark_dirty();
         }
         Ok(())
     }
@@ -267,18 +281,21 @@ impl App {
     }
 
     /// Spawn the input reader thread that forwards crossterm events to a tokio channel.
-    /// Uses adaptive poll rate: 16ms when active, 100ms when idle.
+    /// Uses adaptive poll rate: 16ms when active, 33ms when idle (after 2s).
+    /// Filters out high-frequency mouse motion events that flood TMUX multiplexers.
     fn spawn_input_reader(&self) -> mpsc::UnboundedReceiver<crossterm::event::Event> {
         let (tx, rx) = mpsc::unbounded_channel();
+        let in_tmux = std::env::var("TMUX").is_ok();
 
         std::thread::spawn(move || {
             let mut last_activity = Instant::now();
 
             loop {
-                // Adaptive poll rate
-                let idle = last_activity.elapsed() > Duration::from_millis(500);
+                // Adaptive poll rate: 16ms active, 33ms idle.
+                // Idle threshold at 2s so normal typing pauses stay in active mode.
+                let idle = last_activity.elapsed() > Duration::from_millis(2000);
                 let poll_timeout = if idle {
-                    Duration::from_millis(100)
+                    Duration::from_millis(33)
                 } else {
                     Duration::from_millis(16)
                 };
@@ -287,6 +304,18 @@ impl App {
                     Ok(true) => {
                         match event::read() {
                             Ok(ev) => {
+                                // In TMUX, drop pure mouse-move events (no button held).
+                                // These are the highest-volume events and flood the
+                                // multiplexer's escape sequence pipeline, causing typing lag.
+                                // Clicks, scrolls, and button-held drags still pass through.
+                                if in_tmux {
+                                    if let CrosstermEvent::Mouse(ref mouse) = ev {
+                                        if matches!(mouse.kind, MouseEventKind::Moved) {
+                                            continue;
+                                        }
+                                    }
+                                }
+
                                 last_activity = Instant::now();
                                 if tx.send(ev).is_err() {
                                     break; // App dropped, exit thread
@@ -337,6 +366,8 @@ impl App {
     /// Main event loop using tokio::select! for true event-driven processing.
     /// Order 9: Replaces polling-based loop with async event handling.
     pub async fn run(&mut self) -> Result<()> {
+        let throttle_ms = crate::app::ui_state::MIN_RENDER_INTERVAL_MS;
+
         // Take ownership of event receivers
         let mut stream_rx = self.stream_manager.take_event_rx();
         
@@ -370,10 +401,24 @@ impl App {
             // Calculate next tick deadline
             let tick_deadline = self.last_tick + Duration::from_millis(TICK_INTERVAL_MS);
             let now = Instant::now();
-            let tick_duration = if tick_deadline > now {
+            let tick_remaining = if tick_deadline > now {
                 tick_deadline - now
             } else {
                 Duration::ZERO
+            };
+
+            // When a render is pending but throttled, wake up after the throttle
+            // expires instead of waiting up to 500ms for the next tick.
+            let timer_duration = if self.ui.needs_redraw {
+                let render_deadline = self.ui.last_render + Duration::from_millis(throttle_ms);
+                let render_remaining = if render_deadline > now {
+                    render_deadline - now
+                } else {
+                    Duration::ZERO
+                };
+                render_remaining.min(tick_remaining)
+            } else {
+                tick_remaining
             };
 
             // Spawn forwarders for any new PTY receivers (from new tabs)
@@ -414,8 +459,13 @@ impl App {
                 biased;  // Prioritize in order listed
 
                 // 1. User input (highest priority for responsiveness)
+                // Drain all buffered input events to batch rapid typing
                 Some(event) = input_rx.recv() => {
                     self.handle_input_event(event)?;
+                    // Drain all buffered input events to batch rapid typing
+                    while let Ok(ev) = input_rx.try_recv() {
+                        self.handle_input_event(ev)?;
+                    }
                 }
 
                 // 2. PTY events
@@ -535,11 +585,52 @@ impl App {
                     }
                 }
 
-                // 9. Tick timer
-                _ = tokio::time::sleep(tick_duration) => {
-                    self.dispatch(Action::Tick)?;
-                    self.last_tick = Instant::now();
+                // 9. Spindles activity events (WebSocket from spindles-proxy)
+                Some(spindles_event) = async {
+                    if let Some(ref mut rx) = self.spindles_event_rx {
+                        rx.recv().await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    // Drain all buffered spindles events
+                    if let Some(ref mut rx) = self.spindles_event_rx {
+                        while let Ok(_ev) = rx.try_recv() {
+                            // Events already stored in activity_store by the WebSocket handler
+                        }
+                    }
+                    // Update connection state from events
+                    use crate::spindles::SpindlesEvent;
+                    match spindles_event {
+                        SpindlesEvent::Connected => {
+                            self.spindles_stream.set_state(crate::spindles::SpindlesConnectionState::Connected);
+                        }
+                        SpindlesEvent::Disconnected(_) => {
+                            self.spindles_stream.set_state(crate::spindles::SpindlesConnectionState::Disconnected);
+                        }
+                        SpindlesEvent::StateChanged(state) => {
+                            self.spindles_stream.set_state(state);
+                        }
+                        _ => {}
+                    }
+                    // Auto-scroll activity stream on new data
+                    if let Some(ref mut activity_stream) = self.activity_stream {
+                        activity_stream.scroll_to_bottom();
+                    }
                     self.mark_dirty();
+                }
+
+                // 10. Timer: fires for pending render deadline or tick, whichever is sooner
+                _ = tokio::time::sleep(timer_duration) => {
+                    // Only dispatch tick when actually due
+                    if self.last_tick.elapsed() >= Duration::from_millis(TICK_INTERVAL_MS) {
+                        self.dispatch(Action::Tick)?;
+                        self.last_tick = Instant::now();
+                        if self.ui.spinner_manager.active_count() > 0 {
+                            self.mark_dirty();
+                        }
+                    }
+                    // Pending render will be handled by the render check below
                 }
             }
 
@@ -548,10 +639,17 @@ impl App {
                 break;
             }
 
-            // Draw once if anything changed
+            // Draw once if anything changed, throttled to prevent
+            // escape sequence floods that cause TMUX lag.
+            // Draw once if anything changed, throttled to ~30 FPS to prevent
+            // escape sequence floods that cause TMUX lag.
             if self.ui.needs_redraw {
-                self.draw()?;
-                self.ui.needs_redraw = false;
+                let since_last_render = Instant::now().duration_since(self.ui.last_render);
+                if since_last_render >= Duration::from_millis(throttle_ms) {
+                    self.draw()?;
+                    self.ui.needs_redraw = false;
+                    self.ui.last_render = Instant::now();
+                }
             }
         }
 

@@ -3,6 +3,8 @@
 //! Spawns and controls the Forge subprocess, parsing stdout JSONL events
 //! and providing control methods for stop/kill.
 
+#![allow(dead_code)]
+
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
@@ -176,7 +178,6 @@ impl ForgeController {
         // Set up process group on Unix
         #[cfg(unix)]
         {
-            use std::os::unix::process::CommandExt;
             // SAFETY: setpgid is async-signal-safe
             unsafe {
                 cmd.pre_exec(|| {

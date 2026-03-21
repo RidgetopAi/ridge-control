@@ -191,6 +191,13 @@ impl ModelCatalog {
         // ─────────────────────────────────────────────────────────────────────
         // GPT-5 series (latest)
         self.register(
+            ModelInfo::new("gpt-5.4-2026-03-05", 256_000, 32_768, TokenizerKind::GptLike, "openai")
+        );
+        self.register(
+            ModelInfo::new("gpt-5.4-pro-2026-03-05", 256_000, 32_768, TokenizerKind::GptLike, "openai")
+                .with_thinking()
+        );
+        self.register(
             ModelInfo::new("gpt-5.2-2025-12-11", 256_000, 32_768, TokenizerKind::GptLike, "openai")
         );
         self.register(

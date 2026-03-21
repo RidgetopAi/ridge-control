@@ -173,19 +173,34 @@ struct GridPerformer {
     saved_screen: Option<SavedScreen>,
     /// Mouse tracking modes enabled by nested application
     mouse_mode: MouseMode,
+    /// Saved cursor position (DECSC / CSI s)
+    saved_cursor_x: usize,
+    saved_cursor_y: usize,
+    /// Scroll region top/bottom (DECSTBM, CSI r). 0-indexed, inclusive.
+    scroll_top: usize,
+    scroll_bottom: usize,
 }
 
 impl GridPerformer {
     fn scroll_up(&mut self) {
-        if !self.cells.is_empty() {
-            let top_line = self.cells.remove(0);
-            // Only push to scrollback when NOT in alternate screen mode
-            // Alternate screen content should not pollute main scrollback
-            if !self.alternate_screen {
+        if self.cells.is_empty() {
+            return;
+        }
+        // Scroll within the scroll region
+        if self.scroll_top < self.cells.len() {
+            let top_line = self.cells.remove(self.scroll_top);
+            // Only push to scrollback when scrolling the full screen (not a sub-region)
+            // and NOT in alternate screen mode
+            if self.scroll_top == 0 && !self.alternate_screen {
                 self.scrollback.push(top_line);
             }
         }
-        self.cells.push(vec![Cell::empty(); self.cols]);
+        let insert_at = self.scroll_bottom.min(self.cells.len());
+        self.cells.insert(insert_at, vec![Cell::empty(); self.cols]);
+        // Keep cell count consistent with rows
+        while self.cells.len() > self.rows {
+            self.cells.pop();
+        }
     }
 
     /// Enter alternate screen mode - save main screen and clear for TUI
@@ -234,7 +249,11 @@ impl GridPerformer {
 
     fn newline(&mut self) {
         self.cursor_x = 0;
-        if self.cursor_y + 1 >= self.rows {
+        if self.cursor_y >= self.scroll_bottom {
+            // At bottom of scroll region — scroll up within the region
+            self.scroll_up();
+        } else if self.cursor_y + 1 >= self.rows {
+            // At bottom of screen (outside scroll region) — scroll anyway
             self.scroll_up();
         } else {
             self.cursor_y += 1;
@@ -601,9 +620,26 @@ impl Perform for GridPerformer {
                     i += 1;
                 }
             }
-            's' => {
+            's' if !is_private_mode => {
+                // SCP - Save Cursor Position
+                self.saved_cursor_x = self.cursor_x;
+                self.saved_cursor_y = self.cursor_y;
             }
-            'u' => {
+            'u' if !is_private_mode => {
+                // RCP - Restore Cursor Position
+                self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
+                self.cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
+            }
+            'r' if !is_private_mode => {
+                // DECSTBM - Set Scrolling Region
+                let top = params.first().copied().unwrap_or(1).saturating_sub(1) as usize;
+                let bottom = params.get(1).copied().map(|b| (b as usize).saturating_sub(1))
+                    .unwrap_or(self.rows.saturating_sub(1));
+                self.scroll_top = top.min(self.rows.saturating_sub(1));
+                self.scroll_bottom = bottom.min(self.rows.saturating_sub(1));
+                // DECSTBM also homes the cursor
+                self.cursor_x = 0;
+                self.cursor_y = 0;
             }
             // DECSET - Set private mode
             'h' if is_private_mode => {
@@ -661,7 +697,33 @@ impl Perform for GridPerformer {
         }
     }
 
-    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, _byte: u8) {}
+    fn esc_dispatch(&mut self, _intermediates: &[u8], _ignore: bool, byte: u8) {
+        match byte {
+            b'7' => {
+                // DECSC - Save Cursor
+                self.saved_cursor_x = self.cursor_x;
+                self.saved_cursor_y = self.cursor_y;
+            }
+            b'8' => {
+                // DECRC - Restore Cursor
+                self.cursor_x = self.saved_cursor_x.min(self.cols.saturating_sub(1));
+                self.cursor_y = self.saved_cursor_y.min(self.rows.saturating_sub(1));
+            }
+            b'M' => {
+                // RI - Reverse Index: move cursor up, scroll down if at top of scroll region
+                if self.cursor_y == self.scroll_top {
+                    // At top of scroll region — scroll down within the region
+                    if self.scroll_bottom < self.cells.len() {
+                        self.cells.remove(self.scroll_bottom);
+                        self.cells.insert(self.scroll_top, vec![Cell::empty(); self.cols]);
+                    }
+                } else if self.cursor_y > 0 {
+                    self.cursor_y -= 1;
+                }
+            }
+            _ => {}
+        }
+    }
 }
 
 pub struct Grid {
@@ -692,6 +754,10 @@ impl Grid {
                 alternate_screen: false,
                 saved_screen: None,
                 mouse_mode: MouseMode::default(),
+                saved_cursor_x: 0,
+                saved_cursor_y: 0,
+                scroll_top: 0,
+                scroll_bottom: rows.saturating_sub(1),
             },
             parser: Parser::new(),
             scroll_offset: 0,
@@ -708,6 +774,9 @@ impl Grid {
         }
         self.performer.cursor_x = self.performer.cursor_x.min(cols.saturating_sub(1));
         self.performer.cursor_y = self.performer.cursor_y.min(rows.saturating_sub(1));
+        // Reset scroll region to full screen on resize
+        self.performer.scroll_top = 0;
+        self.performer.scroll_bottom = rows.saturating_sub(1);
         self.scroll_offset = 0;
 
         // Also resize the saved screen if we're in alternate mode

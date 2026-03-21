@@ -112,6 +112,8 @@ pub struct App {
     sirk_panel: Option<crate::sirk::SirkPanel>,
     // SIRK/Forge: ForgeController for subprocess management
     forge_controller: ForgeController,
+    // SIRK/Forge: Event receiver for SpindlesEvents from WebSocket
+    spindles_event_rx: Option<mpsc::UnboundedReceiver<crate::spindles::SpindlesEvent>>,
     // SIRK/Forge: Event receiver for ForgeEvents from subprocess
     forge_event_rx: Option<mpsc::UnboundedReceiver<ForgeEvent>>,
     // SIRK/Forge: Pending spawn request (set by sync handler, processed by async event loop)
@@ -137,7 +139,16 @@ impl App {
         // Initialize PtyState (handles raw mode, alternate screen, terminal, tab_manager)
         let pty = PtyState::new(term_cols, term_rows)?;
 
-        let clipboard = Clipboard::new().ok();
+        let clipboard = match Clipboard::new() {
+            Ok(cb) => {
+                tracing::info!("Clipboard: available (arboard)");
+                Some(cb)
+            }
+            Err(e) => {
+                tracing::warn!("Clipboard: UNAVAILABLE - {} (mouse copy/paste will not work)", e);
+                None
+            }
+        };
 
         let streams_config = StreamsConfig::load();
         let mut stream_manager = StreamManager::new();
@@ -199,6 +210,7 @@ impl App {
         let activity_store = new_shared_store(1000);
         let mut spindles_stream = SpindlesStream::new(activity_store.clone());
         spindles_stream.connect();
+        let spindles_event_rx = spindles_stream.take_event_rx();
         tracing::info!("Spindles stream connecting to ws://localhost:8083/spindles");
 
         // Set up config watcher if enabled
@@ -333,6 +345,7 @@ impl App {
             activity_store: activity_store.clone(),
             activity_stream: Some(ActivityStream::new(activity_store.clone())),
             spindles_stream,
+            spindles_event_rx,
             sirk_panel: Some(crate::sirk::SirkPanel::new()),
             forge_controller: ForgeController::new(),
             forge_event_rx: None,

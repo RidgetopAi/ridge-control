@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::time::Duration;
 use futures::StreamExt;
 use tokio::sync::mpsc;

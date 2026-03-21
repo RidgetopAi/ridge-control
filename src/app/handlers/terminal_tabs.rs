@@ -64,8 +64,22 @@ impl App {
                 // Copy from active tab's terminal (TRC-005)
                 if let Some(session) = self.pty.tab_manager.active_pty_session_mut() {
                     if let Some(text) = session.terminal().get_selected_text() {
+                        let mut copied = false;
+                        // Try arboard clipboard first
                         if let Some(ref mut clipboard) = self.ui.clipboard {
-                            let _ = clipboard.set_text(text);
+                            if clipboard.set_text(text.clone()).is_ok() {
+                                copied = true;
+                            }
+                        }
+                        // Fallback: OSC 52 escape sequence (works in most terminals,
+                        // through tmux/SSH, and on WSL2 without display server)
+                        if !copied {
+                            use std::io::Write;
+                            let encoded = simple_base64_encode(text.as_bytes());
+                            let osc52 = format!("\x1b]52;c;{}\x07", encoded);
+                            let _ = std::io::stdout().write_all(osc52.as_bytes());
+                            let _ = std::io::stdout().flush();
+                            tracing::debug!("Copy via OSC 52 ({} chars)", text.len());
                         }
                     }
                     session.terminal_mut().clear_selection();
@@ -214,5 +228,31 @@ impl App {
         }
         Ok(())
     }
+}
+
+/// Simple base64 encoder for OSC 52 clipboard escape sequences.
+/// Avoids adding a crate dependency for a single use.
+fn simple_base64_encode(data: &[u8]) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        result.push(ALPHABET[((triple >> 18) & 0x3F) as usize] as char);
+        result.push(ALPHABET[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            result.push(ALPHABET[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+        if chunk.len() > 2 {
+            result.push(ALPHABET[(triple & 0x3F) as usize] as char);
+        } else {
+            result.push('=');
+        }
+    }
+    result
 }
 

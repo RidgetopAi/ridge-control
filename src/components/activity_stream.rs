@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use crossterm::event::{Event, KeyCode, KeyEvent, MouseEvent, MouseEventKind};
 use ratatui::{
     layout::Rect,

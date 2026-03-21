@@ -1,6 +1,8 @@
-// TRC-019: GPU monitor - some fields for future display
+// TRC-019: GPU monitor - runs nvidia-smi/rocm-smi on background threads
+// to avoid blocking the event loop (~830ms per call on WSL2)
 
 use std::process::Command;
+use std::sync::mpsc as std_mpsc;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone, Default)]
@@ -38,13 +40,21 @@ pub enum GpuVendor {
     Unknown,
 }
 
-#[derive(Debug, Clone)]
+/// Result from a background GPU query
+struct GpuScanResult {
+    gpus: Vec<GpuInfo>,
+}
+
 pub struct GpuMonitor {
     gpus: Vec<GpuInfo>,
     vendor: GpuVendor,
     last_refresh: Instant,
     refresh_interval: Duration,
     available: bool,
+    /// Channel for receiving background scan results
+    scan_rx: Option<std_mpsc::Receiver<GpuScanResult>>,
+    /// Whether a background scan is in flight
+    scan_in_flight: bool,
 }
 
 impl Default for GpuMonitor {
@@ -56,39 +66,44 @@ impl Default for GpuMonitor {
 #[allow(dead_code)]
 impl GpuMonitor {
     pub fn new() -> Self {
+        // Detect vendor on a background thread to avoid blocking startup
+        // (~830ms nvidia-smi --version on WSL2)
+        let vendor = Self::detect_vendor_sync();
+
         let mut monitor = Self {
             gpus: Vec::new(),
-            vendor: GpuVendor::Unknown,
+            vendor,
             last_refresh: Instant::now() - Duration::from_secs(10),
             refresh_interval: Duration::from_secs(2),
-            available: false,
+            available: vendor != GpuVendor::Unknown,
+            scan_rx: None,
+            scan_in_flight: false,
         };
-        
-        monitor.detect_vendor();
-        monitor.refresh();
+
+        // Kick off first refresh in background
+        monitor.start_background_refresh();
         monitor
     }
 
-    fn detect_vendor(&mut self) {
+    /// Detect GPU vendor synchronously (called once at startup).
+    /// This still blocks but only during app init before the event loop starts.
+    fn detect_vendor_sync() -> GpuVendor {
         if Command::new("nvidia-smi")
             .arg("--version")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
-            self.vendor = GpuVendor::Nvidia;
-            self.available = true;
+            GpuVendor::Nvidia
         } else if Command::new("rocm-smi")
             .arg("--version")
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
         {
-            self.vendor = GpuVendor::Amd;
-            self.available = true;
+            GpuVendor::Amd
         } else {
-            self.vendor = GpuVendor::Unknown;
-            self.available = false;
+            GpuVendor::Unknown
         }
     }
 
@@ -112,21 +127,56 @@ impl GpuMonitor {
         self.last_refresh.elapsed() >= self.refresh_interval
     }
 
-    pub fn refresh(&mut self) {
-        if !self.available {
+    /// Launch a background thread to query GPU stats without blocking the event loop.
+    pub fn start_background_refresh(&mut self) {
+        if !self.available || self.scan_in_flight {
             return;
         }
 
+        let (tx, rx) = std_mpsc::channel();
+        let vendor = self.vendor;
+
+        self.scan_rx = Some(rx);
+        self.scan_in_flight = true;
         self.last_refresh = Instant::now();
 
-        match self.vendor {
-            GpuVendor::Nvidia => self.refresh_nvidia(),
-            GpuVendor::Amd => self.refresh_amd(),
-            GpuVendor::Unknown => {}
-        }
+        std::thread::spawn(move || {
+            let gpus = match vendor {
+                GpuVendor::Nvidia => Self::query_nvidia(),
+                GpuVendor::Amd => Self::query_amd(),
+                GpuVendor::Unknown => Vec::new(),
+            };
+            let _ = tx.send(GpuScanResult { gpus });
+        });
     }
 
-    fn refresh_nvidia(&mut self) {
+    /// Check if a background scan completed and apply results.
+    /// Returns true if new data was applied.
+    pub fn poll_background_refresh(&mut self) -> bool {
+        if let Some(ref rx) = self.scan_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.gpus = result.gpus;
+                    self.scan_in_flight = false;
+                    self.scan_rx = None;
+                    return true;
+                }
+                Err(std_mpsc::TryRecvError::Empty) => {
+                    // Still running
+                }
+                Err(std_mpsc::TryRecvError::Disconnected) => {
+                    // Thread panicked or dropped
+                    self.scan_in_flight = false;
+                    self.scan_rx = None;
+                }
+            }
+        }
+        false
+    }
+
+    /// Pure function: query nvidia-smi and parse results.
+    /// Runs on a background thread — no &self access.
+    fn query_nvidia() -> Vec<GpuInfo> {
         let output = Command::new("nvidia-smi")
             .args([
                 "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw",
@@ -135,20 +185,18 @@ impl GpuMonitor {
             .output();
 
         let Ok(output) = output else {
-            self.gpus.clear();
-            return;
+            return Vec::new();
         };
 
         if !output.status.success() {
-            self.gpus.clear();
-            return;
+            return Vec::new();
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        self.gpus = stdout
+        stdout
             .lines()
             .filter_map(Self::parse_nvidia_line)
-            .collect();
+            .collect()
     }
 
     fn parse_nvidia_line(line: &str) -> Option<GpuInfo> {
@@ -174,29 +222,29 @@ impl GpuMonitor {
         })
     }
 
-    fn refresh_amd(&mut self) {
+    /// Pure function: query rocm-smi and parse results.
+    /// Runs on a background thread — no &self access.
+    fn query_amd() -> Vec<GpuInfo> {
         let output = Command::new("rocm-smi")
             .args(["--showuse", "--showmeminfo", "vram", "--showtemp", "--csv"])
             .output();
 
         let Ok(output) = output else {
-            self.gpus.clear();
-            return;
+            return Vec::new();
         };
 
         if !output.status.success() {
-            self.gpus.clear();
-            return;
+            return Vec::new();
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        self.gpus = Self::parse_amd_output(&stdout);
+        Self::parse_amd_output(&stdout)
     }
 
     fn parse_amd_output(output: &str) -> Vec<GpuInfo> {
         let mut gpus = Vec::new();
         let lines: Vec<&str> = output.lines().collect();
-        
+
         if lines.len() < 2 {
             return gpus;
         }
@@ -262,7 +310,7 @@ mod tests {
     fn test_parse_nvidia_line() {
         let line = "NVIDIA GeForce RTX 4060 Ti, 39, 1173, 16380, 45, 21.42";
         let gpu = GpuMonitor::parse_nvidia_line(line).unwrap();
-        
+
         assert_eq!(gpu.name, "NVIDIA GeForce RTX 4060 Ti");
         assert!((gpu.utilization - 39.0).abs() < 0.01);
         assert_eq!(gpu.memory_used_mb, 1173);
@@ -291,8 +339,17 @@ mod tests {
         let mut monitor = GpuMonitor::new();
         monitor.last_refresh = Instant::now() - Duration::from_secs(5);
         assert!(monitor.should_refresh());
-        
+
         monitor.last_refresh = Instant::now();
         assert!(!monitor.should_refresh());
+    }
+
+    #[test]
+    fn test_gpu_monitor_background_refresh() {
+        let mut monitor = GpuMonitor::new();
+        // Should be able to start a background refresh without panic
+        monitor.start_background_refresh();
+        // Poll should not panic even if no result yet
+        let _ = monitor.poll_background_refresh();
     }
 }

@@ -392,9 +392,9 @@ impl LLMManager {
     }
     
     /// Continue the conversation after a tool result (re-send to get LLM response)
-    pub fn continue_after_tool(&mut self, system_prompt: Option<String>, tools: Vec<ToolDefinition>) {
-        tracing::debug!("continue_after_tool called with {} messages in conversation", self.conversation.len());
-        
+    pub fn continue_after_tool(&mut self, system_prompt: Option<String>, tools: Vec<ToolDefinition>, max_tokens: Option<u32>) {
+        tracing::debug!("continue_after_tool called with {} messages in conversation, max_tokens={:?}", self.conversation.len(), max_tokens);
+
         let provider = match self.registry.get(&self.current_provider) {
             Some(p) => p,
             None => {
@@ -414,6 +414,7 @@ impl LLMManager {
             messages: self.conversation.clone(),
             tools,
             stream: true,
+            max_tokens,
             ..Default::default()
         };
 
@@ -461,6 +462,14 @@ impl LLMManager {
                 }
             }
         });
+    }
+
+    /// Get the max output tokens for the current model from provider info
+    fn current_model_max_output(&self) -> Option<u32> {
+        let provider = self.registry.get(&self.current_provider)?;
+        provider.models().iter()
+            .find(|m| m.id == self.current_model)
+            .map(|m| m.max_output_tokens)
     }
 
     pub fn is_configured(&self) -> bool {
@@ -567,20 +576,23 @@ impl LLMManager {
             "Building LLM request - current_model='{}', will use this in API call",
             self.current_model
         );
+        let max_tokens = self.current_model_max_output();
         let request = LLMRequest {
             model: self.current_model.clone(),
             system: system_prompt,
             messages: self.conversation.clone(),
             tools,
             stream: true,
+            max_tokens,
             ..Default::default()
         };
         tracing::info!(
-            "Request built: model='{}', messages={}, tools={}, stream={}",
+            "Request built: model='{}', messages={}, tools={}, stream={}, max_tokens={:?}",
             request.model,
             request.messages.len(),
             request.tools.len(),
-            request.stream
+            request.stream,
+            request.max_tokens
         );
 
         let event_tx = self.event_tx.clone();
