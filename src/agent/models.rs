@@ -118,6 +118,84 @@ impl ModelCatalog {
         self.models.insert(info.name.clone(), info);
     }
 
+    /// Sync Ollama models by querying the local Ollama API.
+    /// Removes stale hardcoded Ollama entries and adds all installed models.
+    pub fn sync_ollama_models(&mut self) {
+        // Remove existing hardcoded ollama models
+        self.models.retain(|_, m| m.provider != "ollama");
+
+        // Query Ollama API (blocking — called during init before tokio runtime is needed)
+        let result = std::thread::spawn(|| {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .ok();
+            rt.and_then(|rt| {
+                rt.block_on(async {
+                    let client = reqwest::Client::builder()
+                        .timeout(std::time::Duration::from_secs(3))
+                        .build()
+                        .ok()?;
+                    let resp = client
+                        .get("http://localhost:11434/api/tags")
+                        .send()
+                        .await
+                        .ok()?;
+                    let json: serde_json::Value = resp.json().await.ok()?;
+                    let models = json["models"].as_array()?.clone();
+                    Some(models)
+                })
+            })
+        })
+        .join()
+        .unwrap_or(None);
+
+        let Some(models) = result else {
+            tracing::debug!("Ollama not available for model catalog sync");
+            return;
+        };
+
+        for model in models {
+            let name = match model["name"].as_str() {
+                Some(n) => n,
+                None => continue,
+            };
+            let family = model["details"]["family"].as_str().unwrap_or("");
+            let param_size_str = model["details"]["parameter_size"].as_str().unwrap_or("");
+
+            // Skip embedding models
+            if family.contains("bert") || name.contains("embed") {
+                continue;
+            }
+
+            // Determine context window from model metadata
+            // Qwen3.5 supports 262K, Qwen3 supports 32K, others default to 32K
+            let context_window = if family.contains("qwen35") {
+                262_144
+            } else if family.contains("qwen3") {
+                32_768
+            } else {
+                32_768
+            };
+
+            let has_thinking = family.contains("qwen3");
+
+            let mut info = ModelInfo::new(
+                name,
+                context_window,
+                8_192,
+                TokenizerKind::Heuristic,
+                "ollama",
+            );
+            if has_thinking {
+                info = info.with_thinking();
+            }
+
+            tracing::info!("Catalog: registered Ollama model {} ({}, {})", name, family, param_size_str);
+            self.register(info);
+        }
+    }
+
     /// List all known model names
     #[allow(dead_code)]
     pub fn list(&self) -> Vec<&str> {

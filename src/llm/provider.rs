@@ -146,6 +146,10 @@ impl ProviderRegistry {
         self.providers.keys().map(|s| s.as_str()).collect()
     }
 
+    pub fn unregister(&mut self, name: &str) {
+        self.providers.remove(name);
+    }
+
     pub fn is_empty(&self) -> bool {
         self.providers.is_empty()
     }

@@ -231,7 +231,9 @@ impl App {
         };
         
         // Phase 3: Initialize token counting infrastructure
-        let model_catalog = std::sync::Arc::new(ModelCatalog::new());
+        let mut model_catalog = ModelCatalog::new();
+        model_catalog.sync_ollama_models();
+        let model_catalog = std::sync::Arc::new(model_catalog);
         let token_counter: std::sync::Arc<dyn TokenCounter> = std::sync::Arc::new(DefaultTokenCounter::new(model_catalog.clone()));
 
         // Phase 2: Initialize AgentEngine (TP2-002-04)

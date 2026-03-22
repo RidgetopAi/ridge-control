@@ -122,6 +122,7 @@ pub struct LLMManager {
     event_tx: mpsc::UnboundedSender<LLMEvent>,
     event_rx: Option<mpsc::UnboundedReceiver<LLMEvent>>,
     cancel_tx: Option<mpsc::Sender<()>>,
+    ollama_detected: bool,
 }
 
 impl LLMManager {
@@ -135,6 +136,7 @@ impl LLMManager {
             conversation: Vec::new(),
             event_tx,
             event_rx: Some(event_rx),
+            ollama_detected: false,
             cancel_tx: None,
         }
     }
@@ -218,6 +220,29 @@ impl LLMManager {
         }
     }
 
+    /// Register Ollama with auto-discovery of installed models
+    pub async fn register_ollama_with_discovery(&mut self, base_url: Option<String>) {
+        let mut provider = OllamaProvider::new(base_url);
+        if let Err(e) = provider.discover_models().await {
+            tracing::warn!("Ollama model discovery failed: {}", e);
+        } else {
+            tracing::info!(
+                "Ollama discovered {} models: {:?}",
+                provider.models().len(),
+                provider.models().iter().map(|m| &m.id).collect::<Vec<_>>()
+            );
+        }
+        let default_model = provider.default_model().to_string();
+        let name = provider.name().to_string();
+
+        self.registry.register(Arc::new(provider));
+
+        if self.current_provider.is_empty() {
+            self.current_provider = name;
+            self.current_model = default_model;
+        }
+    }
+
     /// Register all providers from a KeyStore
     /// Returns a list of successfully registered provider names
     pub fn register_from_keystore(&mut self, keystore: &KeyStore) -> Vec<String> {
@@ -258,6 +283,8 @@ impl LLMManager {
 
         // Auto-register Ollama if running locally (no API key needed)
         // Use a blocking probe on a short timeout to avoid slowing startup
+        // Note: This registers with static defaults only. Call
+        // discover_ollama_models() after this to auto-detect installed models.
         let ollama_available = std::thread::spawn(|| {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
@@ -270,7 +297,48 @@ impl LLMManager {
         .unwrap_or(false);
 
         if ollama_available {
-            self.register_ollama(None);
+            // Discover actual installed models instead of using static defaults
+            let discovered_provider = std::thread::spawn(|| {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .ok();
+                rt.and_then(|rt| {
+                    rt.block_on(async {
+                        let mut provider = OllamaProvider::new(None);
+                        match provider.discover_models().await {
+                            Ok(()) => {
+                                tracing::info!(
+                                    "Ollama discovered {} models: {:?}",
+                                    provider.models().len(),
+                                    provider.models().iter().map(|m| &m.id).collect::<Vec<_>>()
+                                );
+                                Some(provider)
+                            }
+                            Err(e) => {
+                                tracing::warn!("Ollama model discovery failed: {}", e);
+                                None
+                            }
+                        }
+                    })
+                })
+            })
+            .join()
+            .unwrap_or(None);
+
+            if let Some(provider) = discovered_provider {
+                let default_model = provider.default_model().to_string();
+                let name = provider.name().to_string();
+                self.registry.register(Arc::new(provider));
+                if self.current_provider.is_empty() {
+                    self.current_provider = name;
+                    self.current_model = default_model;
+                }
+            } else {
+                // Fallback to static defaults if discovery failed
+                self.register_ollama(None);
+            }
+            self.ollama_detected = true;
             registered.push("ollama".to_string());
             tracing::info!("Registered Ollama provider (local, no key required)");
         } else {
@@ -279,6 +347,17 @@ impl LLMManager {
 
         tracing::info!("Keystore registration complete. Registered providers: {:?}", registered);
         registered
+    }
+
+    /// Re-register Ollama with model discovery if it was detected during keystore registration.
+    /// Call this after `register_from_keystore` in an async context.
+    pub async fn discover_ollama_models(&mut self) {
+        if !self.ollama_detected {
+            return;
+        }
+        // Remove the static registration and replace with discovered models
+        self.registry.unregister("ollama");
+        self.register_ollama_with_discovery(None).await;
     }
 
     /// Check if a specific provider is registered
