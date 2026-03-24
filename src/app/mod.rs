@@ -232,7 +232,11 @@ impl App {
         
         // Phase 3: Initialize token counting infrastructure
         let mut model_catalog = ModelCatalog::new();
-        model_catalog.sync_ollama_models();
+        let ollama_base_url = config_manager.llm_config()
+            .providers.get("ollama")
+            .and_then(|p| p.base_url.as_deref())
+            .map(|s| s.to_string());
+        model_catalog.sync_ollama_models_with_url(ollama_base_url.as_deref());
         let model_catalog = std::sync::Arc::new(model_catalog);
         let token_counter: std::sync::Arc<dyn TokenCounter> = std::sync::Arc::new(DefaultTokenCounter::new(model_catalog.clone()));
 
@@ -255,7 +259,7 @@ impl App {
         let llm_config = config_manager.llm_config();
         let mut agent_llm_manager = LLMManager::new();
         if let Some(ref ks) = keystore {
-            agent_llm_manager.register_from_keystore(ks);
+            agent_llm_manager.register_from_keystore_with_config(ks, Some(&llm_config));
         }
         // Apply same provider/model settings
         agent_llm_manager.set_provider(&llm_config.defaults.provider);

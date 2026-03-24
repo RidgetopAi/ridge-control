@@ -6,7 +6,7 @@ use std::sync::Arc;
 use futures::StreamExt;
 use tokio::sync::mpsc;
 
-use crate::config::{KeyId, KeyStore};
+use crate::config::{KeyId, KeyStore, LLMConfig};
 
 use std::collections::HashMap;
 
@@ -246,6 +246,11 @@ impl LLMManager {
     /// Register all providers from a KeyStore
     /// Returns a list of successfully registered provider names
     pub fn register_from_keystore(&mut self, keystore: &KeyStore) -> Vec<String> {
+        self.register_from_keystore_with_config(keystore, None)
+    }
+
+    /// Register all providers from a KeyStore, with optional LLM config for base URLs
+    pub fn register_from_keystore_with_config(&mut self, keystore: &KeyStore, llm_config: Option<&LLMConfig>) -> Vec<String> {
         let mut registered = Vec::new();
 
         // Try to get each known provider's key
@@ -281,16 +286,19 @@ impl LLMManager {
             }
         }
 
-        // Auto-register Ollama if running locally (no API key needed)
-        // Use a blocking probe on a short timeout to avoid slowing startup
-        // Note: This registers with static defaults only. Call
-        // discover_ollama_models() after this to auto-detect installed models.
-        let ollama_available = std::thread::spawn(|| {
+        // Auto-register local LLM server (Ollama or llama-server)
+        // Use configured base_url if available, otherwise probe defaults
+        let ollama_base_url = llm_config
+            .and_then(|c| c.providers.get("ollama"))
+            .and_then(|p| p.base_url.clone());
+
+        let probe_url = ollama_base_url.clone();
+        let ollama_available = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
                 .ok();
-            rt.map(|rt| rt.block_on(OllamaProvider::is_available(None)))
+            rt.map(|rt| rt.block_on(OllamaProvider::is_available(probe_url.as_deref())))
                 .unwrap_or(false)
         })
         .join()
@@ -298,25 +306,27 @@ impl LLMManager {
 
         if ollama_available {
             // Discover actual installed models instead of using static defaults
-            let discovered_provider = std::thread::spawn(|| {
+            let discover_url = ollama_base_url.clone();
+            let discovered_provider = std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread()
                     .enable_all()
                     .build()
                     .ok();
                 rt.and_then(|rt| {
                     rt.block_on(async {
-                        let mut provider = OllamaProvider::new(None);
+                        let mut provider = OllamaProvider::new(discover_url);
                         match provider.discover_models().await {
                             Ok(()) => {
                                 tracing::info!(
-                                    "Ollama discovered {} models: {:?}",
+                                    "Local LLM ({:?}) discovered {} models: {:?}",
+                                    provider.server_kind(),
                                     provider.models().len(),
                                     provider.models().iter().map(|m| &m.id).collect::<Vec<_>>()
                                 );
                                 Some(provider)
                             }
                             Err(e) => {
-                                tracing::warn!("Ollama model discovery failed: {}", e);
+                                tracing::warn!("Local model discovery failed: {}", e);
                                 None
                             }
                         }
@@ -336,13 +346,13 @@ impl LLMManager {
                 }
             } else {
                 // Fallback to static defaults if discovery failed
-                self.register_ollama(None);
+                self.register_ollama(ollama_base_url);
             }
             self.ollama_detected = true;
             registered.push("ollama".to_string());
-            tracing::info!("Registered Ollama provider (local, no key required)");
+            tracing::info!("Registered local LLM provider (no key required)");
         } else {
-            tracing::debug!("Ollama not detected at localhost:11434");
+            tracing::debug!("No local LLM server detected");
         }
 
         tracing::info!("Keystore registration complete. Registered providers: {:?}", registered);

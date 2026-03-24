@@ -118,14 +118,23 @@ impl ModelCatalog {
         self.models.insert(info.name.clone(), info);
     }
 
-    /// Sync Ollama models by querying the local Ollama API.
-    /// Removes stale hardcoded Ollama entries and adds all installed models.
+    /// Sync local models with default URL probing
+    #[allow(dead_code)]
     pub fn sync_ollama_models(&mut self) {
+        self.sync_ollama_models_with_url(None);
+    }
+
+    /// Sync local models by querying Ollama or llama-server.
+    /// Removes stale hardcoded entries and adds all discovered models.
+    /// If `base_url` is provided, probes that URL first.
+    pub fn sync_ollama_models_with_url(&mut self, base_url: Option<&str>) {
         // Remove existing hardcoded ollama models
         self.models.retain(|_, m| m.provider != "ollama");
 
-        // Query Ollama API (blocking — called during init before tokio runtime is needed)
-        let result = std::thread::spawn(|| {
+        let base_url_owned = base_url.map(|s| s.to_string());
+
+        // Try configured URL first, then defaults (blocking — called during init)
+        let result = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -136,63 +145,113 @@ impl ModelCatalog {
                         .timeout(std::time::Duration::from_secs(3))
                         .build()
                         .ok()?;
-                    let resp = client
-                        .get("http://localhost:11434/api/tags")
-                        .send()
-                        .await
-                        .ok()?;
-                    let json: serde_json::Value = resp.json().await.ok()?;
-                    let models = json["models"].as_array()?.clone();
-                    Some(models)
+
+                    // Build list of URLs to try: configured URL first, then defaults
+                    let mut urls_to_try: Vec<String> = Vec::new();
+                    if let Some(ref url) = base_url_owned {
+                        urls_to_try.push(url.clone());
+                    }
+                    urls_to_try.push("http://localhost:11434".to_string());
+                    urls_to_try.push("http://localhost:8090".to_string());
+                    urls_to_try.push("http://localhost:8080".to_string());
+                    urls_to_try.dedup();
+
+                    for url in &urls_to_try {
+                        // Try /api/tags (works for both Ollama and llama-server)
+                        if let Ok(resp) = client.get(format!("{}/api/tags", url)).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                    if let Some(models) = json["models"].as_array() {
+                                        if !models.is_empty() {
+                                            return Some(("ollama", serde_json::Value::Array(models.clone())));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Try /v1/models (OpenAI-compatible)
+                        if let Ok(resp) = client.get(format!("{}/v1/models", url)).send().await {
+                            if resp.status().is_success() {
+                                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                                    if json["data"].is_array() {
+                                        return Some(("llama-server", json));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    None
                 })
             })
         })
         .join()
         .unwrap_or(None);
 
-        let Some(models) = result else {
-            tracing::debug!("Ollama not available for model catalog sync");
+        let Some((server_type, data)) = result else {
+            tracing::debug!("No local LLM server available for model catalog sync");
             return;
         };
 
-        for model in models {
-            let name = match model["name"].as_str() {
-                Some(n) => n,
-                None => continue,
-            };
-            let family = model["details"]["family"].as_str().unwrap_or("");
-            let param_size_str = model["details"]["parameter_size"].as_str().unwrap_or("");
+        match server_type {
+            "ollama" => {
+                let models = data.as_array().unwrap_or(&Vec::new()).clone();
+                for model in models {
+                    let name = match model["name"].as_str() {
+                        Some(n) => n,
+                        None => continue,
+                    };
+                    let family = model["details"]["family"].as_str().unwrap_or("");
+                    let param_size_str = model["details"]["parameter_size"].as_str().unwrap_or("");
 
-            // Skip embedding models
-            if family.contains("bert") || name.contains("embed") {
-                continue;
+                    if family.contains("bert") || name.contains("embed") {
+                        continue;
+                    }
+
+                    let context_window = if family.contains("qwen35") {
+                        262_144
+                    } else {
+                        32_768
+                    };
+                    let has_thinking = family.contains("qwen3");
+
+                    let mut info = ModelInfo::new(name, context_window, 8_192, TokenizerKind::Heuristic, "ollama");
+                    if has_thinking {
+                        info = info.with_thinking();
+                    }
+                    tracing::info!("Catalog: registered Ollama model {} ({}, {})", name, family, param_size_str);
+                    self.register(info);
+                }
             }
+            "llama-server" => {
+                let models = data["data"].as_array().unwrap_or(&Vec::new()).clone();
+                for model in models {
+                    let id = match model["id"].as_str() {
+                        Some(n) => n,
+                        None => continue,
+                    };
+                    let lower = id.to_lowercase();
+                    if lower.contains("embed") {
+                        continue;
+                    }
 
-            // Determine context window from model metadata
-            // Qwen3.5 supports 262K, Qwen3 supports 32K, others default to 32K
-            let context_window = if family.contains("qwen35") {
-                262_144
-            } else if family.contains("qwen3") {
-                32_768
-            } else {
-                32_768
-            };
+                    let context_window = if lower.contains("qwen3.5") || lower.contains("qwen35") {
+                        262_144
+                    } else {
+                        32_768
+                    };
+                    let has_thinking = lower.contains("qwen3") || lower.contains("deepseek");
 
-            let has_thinking = family.contains("qwen3");
-
-            let mut info = ModelInfo::new(
-                name,
-                context_window,
-                8_192,
-                TokenizerKind::Heuristic,
-                "ollama",
-            );
-            if has_thinking {
-                info = info.with_thinking();
+                    let mut info = ModelInfo::new(id, context_window, 8_192, TokenizerKind::Heuristic, "ollama");
+                    if has_thinking {
+                        info = info.with_thinking();
+                    }
+                    tracing::info!("Catalog: registered llama-server model {}", id);
+                    self.register(info);
+                }
             }
-
-            tracing::info!("Catalog: registered Ollama model {} ({}, {})", name, family, param_size_str);
-            self.register(info);
+            _ => {}
         }
     }
 

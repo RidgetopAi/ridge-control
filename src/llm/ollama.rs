@@ -17,18 +17,31 @@ use super::types::{
 
 const DEFAULT_OLLAMA_URL: &str = "http://localhost:11434";
 
-/// Ollama local LLM provider
+/// What kind of local server we're talking to
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LocalServerKind {
+    /// Ollama - uses /api/tags for discovery
+    Ollama,
+    /// llama-server (llama.cpp) - uses /v1/models and /health
+    LlamaServer,
+}
+
+/// Ollama / llama-server local LLM provider
 pub struct OllamaProvider {
     base_url: String,
     http_client: Client,
     models: Vec<ModelInfo>,
     default_model: String,
+    server_kind: LocalServerKind,
 }
 
 impl OllamaProvider {
     pub fn new(base_url: Option<String>) -> Self {
         let base_url = base_url.unwrap_or_else(|| DEFAULT_OLLAMA_URL.to_string());
-        let http_client = Client::new();
+        let http_client = Client::builder()
+            .timeout(std::time::Duration::from_secs(120))
+            .build()
+            .unwrap_or_default();
 
         // Default model list - auto-discovery can update this
         let models = vec![
@@ -47,15 +60,40 @@ impl OllamaProvider {
             http_client,
             models,
             default_model: "qwen3:8b".to_string(),
+            server_kind: LocalServerKind::Ollama,
         }
     }
 
-    /// Discover models from the running Ollama instance and update the model list
+    /// Discover models from a local server and update the model list.
+    /// Tries Ollama's /api/tags first, then falls back to llama-server's /v1/models.
     pub async fn discover_models(&mut self) -> Result<(), LLMError> {
+        // Try Ollama first
+        if let Ok(()) = self.discover_ollama_models().await {
+            self.server_kind = LocalServerKind::Ollama;
+            return Ok(());
+        }
+
+        // Fall back to llama-server /v1/models
+        if let Ok(()) = self.discover_llama_server_models().await {
+            self.server_kind = LocalServerKind::LlamaServer;
+            return Ok(());
+        }
+
+        Err(LLMError::NetworkError {
+            message: format!(
+                "No local LLM server found at {} (tried Ollama /api/tags and llama-server /v1/models)",
+                self.base_url
+            ),
+        })
+    }
+
+    /// Discover models via Ollama's /api/tags endpoint
+    async fn discover_ollama_models(&mut self) -> Result<(), LLMError> {
         let url = format!("{}/api/tags", self.base_url);
         let response = self
             .http_client
             .get(&url)
+            .timeout(std::time::Duration::from_secs(3))
             .send()
             .await
             .map_err(|e| LLMError::NetworkError {
@@ -81,10 +119,8 @@ impl OllamaProvider {
                 !m.details.family.contains("bert") && !m.name.contains("embed")
             })
             .map(|m| {
-                let has_thinking = m.details.family.contains("qwen3");
-                let param_size = parse_param_size(&m.details.parameter_size);
-                // Rough context window estimate from parameter size
-                let ctx = if param_size >= 8.0 { 32_768 } else { 32_768 };
+                let has_thinking = m.details.family.contains("qwen3") || m.details.family.contains("qwen35");
+                let ctx = if m.details.family.contains("qwen35") { 262_144 } else { 32_768 };
                 let mut info = ModelInfo::new(&m.name, &m.name)
                     .with_context_window(ctx)
                     .with_max_output(8_192);
@@ -95,20 +131,79 @@ impl OllamaProvider {
             })
             .collect();
 
+        self.apply_discovered(discovered);
+        Ok(())
+    }
+
+    /// Discover models via llama-server's /v1/models endpoint (OpenAI-compatible)
+    async fn discover_llama_server_models(&mut self) -> Result<(), LLMError> {
+        let url = format!("{}/v1/models", self.base_url);
+        let response = self
+            .http_client
+            .get(&url)
+            .timeout(std::time::Duration::from_secs(3))
+            .send()
+            .await
+            .map_err(|e| LLMError::NetworkError {
+                message: format!("Failed to reach llama-server at {}: {}", self.base_url, e),
+            })?;
+
+        if !response.status().is_success() {
+            return Err(LLMError::ProviderError {
+                status: response.status().as_u16(),
+                message: "Failed to list llama-server models".to_string(),
+            });
+        }
+
+        let body: serde_json::Value = response.json().await.map_err(|e| LLMError::ParseError {
+            message: e.to_string(),
+        })?;
+
+        let discovered: Vec<ModelInfo> = body["data"]
+            .as_array()
+            .unwrap_or(&Vec::new())
+            .iter()
+            .filter_map(|m| {
+                let id = m["id"].as_str()?;
+                // llama-server model IDs are often the filename — extract useful info
+                let name = id.to_string();
+                let lower = name.to_lowercase();
+
+                // Detect capabilities from model name
+                let has_thinking = lower.contains("qwen3") || lower.contains("deepseek");
+                let ctx = if lower.contains("qwen3.5") || lower.contains("qwen35") {
+                    262_144
+                } else {
+                    32_768
+                };
+
+                let mut info = ModelInfo::new(&name, &name)
+                    .with_context_window(ctx)
+                    .with_max_output(8_192);
+                if has_thinking {
+                    info = info.with_thinking();
+                }
+                Some(info)
+            })
+            .collect();
+
+        self.apply_discovered(discovered);
+        tracing::info!("Discovered {} models from llama-server", self.models.len());
+        Ok(())
+    }
+
+    /// Apply discovered models to the provider state
+    fn apply_discovered(&mut self, discovered: Vec<ModelInfo>) {
         if !discovered.is_empty() {
-            // Check if our default model is in the discovered list
             let has_default = discovered.iter().any(|m| m.id == self.default_model);
             if !has_default {
-                // Use first discovered model as default
                 self.default_model = discovered[0].id.clone();
             }
             self.models = discovered;
         }
-
-        Ok(())
     }
 
-    /// Check if Ollama is reachable (non-blocking probe)
+    /// Check if a local LLM server is reachable (tries Ollama then llama-server)
     pub async fn is_available(base_url: Option<&str>) -> bool {
         let url = base_url.unwrap_or(DEFAULT_OLLAMA_URL);
         let client = Client::builder()
@@ -116,12 +211,29 @@ impl OllamaProvider {
             .build()
             .unwrap_or_default();
 
-        client
+        // Try Ollama /api/tags
+        if client
             .get(format!("{}/api/tags", url))
             .send()
             .await
             .map(|r| r.status().is_success())
             .unwrap_or(false)
+        {
+            return true;
+        }
+
+        // Try llama-server /v1/models
+        client
+            .get(format!("{}/v1/models", url))
+            .send()
+            .await
+            .map(|r| r.status().is_success())
+            .unwrap_or(false)
+    }
+
+    /// Get the detected server kind
+    pub fn server_kind(&self) -> LocalServerKind {
+        self.server_kind
     }
 
     fn api_url(&self) -> String {
@@ -362,8 +474,11 @@ impl Provider for OllamaProvider {
     }
 
     async fn test_key(&self) -> Result<(), LLMError> {
-        // No API key for Ollama - just check if the server is reachable
-        let url = format!("{}/api/tags", self.base_url);
+        // No API key for local servers - just check reachability
+        let url = match self.server_kind {
+            LocalServerKind::Ollama => format!("{}/api/tags", self.base_url),
+            LocalServerKind::LlamaServer => format!("{}/health", self.base_url),
+        };
         let response = self
             .http_client
             .get(&url)
@@ -371,7 +486,7 @@ impl Provider for OllamaProvider {
             .send()
             .await
             .map_err(|e| LLMError::NetworkError {
-                message: format!("Ollama not reachable at {}: {}", self.base_url, e),
+                message: format!("Local server not reachable at {}: {}", self.base_url, e),
             })?;
 
         if response.status().is_success() {
@@ -379,7 +494,7 @@ impl Provider for OllamaProvider {
         } else {
             Err(LLMError::ProviderError {
                 status: response.status().as_u16(),
-                message: "Ollama server returned error".to_string(),
+                message: format!("Local server ({:?}) returned error", self.server_kind),
             })
         }
     }
@@ -476,8 +591,11 @@ fn parse_sse_data(
         for choice in choices {
             let delta = &choice["delta"];
 
-            // Handle reasoning/thinking content (Qwen3 via Ollama)
-            if let Some(reasoning) = delta["reasoning"].as_str() {
+            // Handle reasoning/thinking content (Qwen3 via Ollama uses "reasoning",
+            // llama-server uses "reasoning_content")
+            let reasoning_value = delta["reasoning"].as_str()
+                .or_else(|| delta["reasoning_content"].as_str());
+            if let Some(reasoning) = reasoning_value {
                 if !reasoning.is_empty() {
                     if !*in_thinking_block {
                         // Start thinking block
@@ -653,8 +771,9 @@ fn convert_response(resp: OllamaResponse) -> LLMResponse {
     let choice = resp.choices.into_iter().next().unwrap_or_default();
     let mut content: Vec<ContentBlock> = Vec::new();
 
-    // Add thinking/reasoning content
-    if let Some(reasoning) = choice.message.reasoning {
+    // Add thinking/reasoning content (Ollama: "reasoning", llama-server: "reasoning_content")
+    let reasoning = choice.message.reasoning.or(choice.message.reasoning_content);
+    if let Some(reasoning) = reasoning {
         if !reasoning.is_empty() {
             content.push(ContentBlock::Thinking(reasoning));
         }
@@ -750,7 +869,9 @@ struct OllamaChoice {
 #[derive(Debug, Deserialize, Default)]
 struct OllamaMessage {
     content: Option<String>,
+    /// Ollama uses "reasoning", llama-server uses "reasoning_content"
     reasoning: Option<String>,
+    reasoning_content: Option<String>,
     tool_calls: Option<Vec<OllamaToolCall>>,
 }
 

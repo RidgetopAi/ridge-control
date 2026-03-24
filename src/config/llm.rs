@@ -29,36 +29,42 @@ impl Default for LLMConfig {
         providers.insert(
             "anthropic".to_string(),
             ProviderConfig {
+                base_url: None,
                 default_model: "claude-sonnet-4-20250514".to_string(),
             },
         );
         providers.insert(
             "openai".to_string(),
             ProviderConfig {
+                base_url: None,
                 default_model: "gpt-5.2-2025-12-11".to_string(),
             },
         );
         providers.insert(
             "gemini".to_string(),
             ProviderConfig {
+                base_url: None,
                 default_model: "gemini-2.5-flash".to_string(),
             },
         );
         providers.insert(
             "grok".to_string(),
             ProviderConfig {
+                base_url: None,
                 default_model: "grok-4-fast-non-reasoning".to_string(),
             },
         );
         providers.insert(
             "groq".to_string(),
             ProviderConfig {
+                base_url: None,
                 default_model: "llama-3.3-70b-versatile".to_string(),
             },
         );
         providers.insert(
             "ollama".to_string(),
             ProviderConfig {
+                base_url: None,
                 default_model: "qwen3:8b".to_string(),
             },
         );
@@ -115,6 +121,9 @@ impl Default for LLMParameters {
 pub struct ProviderConfig {
     /// Default model for this provider
     pub default_model: String,
+    /// Base URL for local providers (ollama, llama-server)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
 }
 
 impl LLMConfig {
